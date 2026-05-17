@@ -13,15 +13,25 @@ const helmet = require('helmet');
 
 const app = express();
 
-// SECURITY FIX: Use env var for base URL with localhost fallback
-const BASE_URL = process.env.BASE_URL || 'http://localhost:3000';
 const PORT = process.env.PORT || 3000;
 
-// SECURITY FIX: Restrict CORS to your frontend in production, fallback to permissive for dev
-app.use(helmet());
+// SECURITY FIX: Dynamic base URL that works with tunnels (localtunnel, ngrok, cloudflare)
+// Uses request headers to detect the public URL, falls back to env var or localhost
+function getBaseUrl(req) {
+  const forwardedProto = req.headers['x-forwarded-proto'];
+  const forwardedHost = req.headers['x-forwarded-host'];
+  
+  if (forwardedProto && forwardedHost) {
+    return `${forwardedProto}://${forwardedHost}`;
+  }
+  
+  return process.env.BASE_URL || `http://localhost:${PORT}`;
+}
+
+// SECURITY FIX: Allow all origins for temporary tunnel testing
 app.use(cors({
- origin: process.env.FRONTEND_URL || true,
- credentials: true
+  origin: ['https://market-bridge-baug.onrender.com', 'http://localhost:3000'],
+  credentials: true
 }));
 app.use(express.json({ limit: '10mb' }));
 app.use('/uploads', express.static('uploads'));
@@ -470,8 +480,8 @@ app.post('/api/auth/register', async (req, res) => {
  }
  await client.query('COMMIT');
 
- // SECURITY FIX: Use BASE_URL env var instead of hardcoded localhost
- const verifyUrl = `${BASE_URL}/api/auth/verify-email?token=${verifyToken}`;
+ // FIX: Use dynamic getBaseUrl(req) instead of hardcoded BASE_URL for tunnel support
+ const verifyUrl = `${getBaseUrl(req)}/api/auth/verify-email?token=${verifyToken}`;
  const texts = emailTexts[lang];
 
  try {
@@ -529,7 +539,8 @@ app.post('/api/auth/resend-verification', async (req, res) => {
  const verifyToken = crypto.randomBytes(32).toString('hex');
  await pool.query('UPDATE users SET verification_token=$1 WHERE id=$2', [verifyToken, user.id]);
 
- const verifyUrl = `${BASE_URL}/api/auth/verify-email?token=${verifyToken}`;
+ // FIX: Use dynamic getBaseUrl(req) instead of hardcoded BASE_URL
+ const verifyUrl = `${getBaseUrl(req)}/api/auth/verify-email?token=${verifyToken}`;
  const texts = emailTexts[lang];
 
  try {
@@ -1011,8 +1022,8 @@ app.post('/api/products', authenticateToken, upload.single('image'), async (req,
  const storeId = storeResult.rows[0].id;
  const { name, price, quantity, description, barcode } = req.body;
 
- // SECURITY FIX: Use BASE_URL instead of hardcoded localhost
- const imageUrl = req.file ? `${BASE_URL}/uploads/${req.file.filename}` : null;
+ // FIX: Use dynamic getBaseUrl(req) instead of hardcoded BASE_URL
+ const imageUrl = req.file ? `${getBaseUrl(req)}/uploads/${req.file.filename}` : null;
  const result = await pool.query(
  'INSERT INTO products (store_id, name, price, quantity, description, barcode, image_url) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *',
  [storeId, name, price, quantity || 0, description, barcode, imageUrl]
@@ -1033,8 +1044,8 @@ app.put('/api/products/:id', authenticateToken, upload.single('image'), async (r
  const existing = await pool.query('SELECT * FROM products WHERE id=$1 AND store_id=$2', [req.params.id, storeId]);
  if (existing.rows.length === 0) return res.status(404).json({ error: 'Product not found' });
 
- // SECURITY FIX: Use BASE_URL instead of hardcoded localhost
- const imageUrl = req.file ? `${BASE_URL}/uploads/${req.file.filename}` : existing.rows[0].image_url;
+ // FIX: Use dynamic getBaseUrl(req) instead of hardcoded BASE_URL
+ const imageUrl = req.file ? `${getBaseUrl(req)}/uploads/${req.file.filename}` : existing.rows[0].image_url;
  const result = await pool.query(
  'UPDATE products SET name=$1, price=$2, quantity=$3, description=$4, barcode=$5, image_url=$6, updated_at=NOW() WHERE id=$7 RETURNING *',
  [name, price, quantity, description, barcode, imageUrl, req.params.id]
@@ -1061,8 +1072,8 @@ app.delete('/api/products/:id', authenticateToken, async (req, res) => {
 app.post('/api/upload', authenticateToken, upload.single('image'), (req, res) => {
  if (!req.file) return res.status(400).json({ error: 'No image uploaded' });
 
- // SECURITY FIX: Use BASE_URL instead of hardcoded localhost
- res.json({ url: `${BASE_URL}/uploads/${req.file.filename}` });
+ // FIX: Use dynamic getBaseUrl(req) instead of hardcoded BASE_URL
+ res.json({ url: `${getBaseUrl(req)}/uploads/${req.file.filename}` });
 });
 
 // UPDATE PREFERRED LANGUAGE
@@ -1112,7 +1123,8 @@ app.put('/api/my-store', authenticateToken, upload.single('image'), async (req, 
  const phone = req.body.phone !== undefined ? sanitizeString(req.body.phone, 50) : existing.phone;
  const lat = req.body.lat !== undefined ? parseFloat(req.body.lat) : existing.lat;
  const lng = req.body.lng !== undefined ? parseFloat(req.body.lng) : existing.lng;
- const imageUrl = req.file ? `${BASE_URL}/uploads/${req.file.filename}` : existing.image_url;
+ // FIX: Use dynamic getBaseUrl(req) instead of hardcoded BASE_URL
+ const imageUrl = req.file ? `${getBaseUrl(req)}/uploads/${req.file.filename}` : existing.image_url;
 
  const result = await pool.query(
  `UPDATE stores SET name=$1, city=$2, village=$3, country=$4, phone=$5, lat=$6, lng=$7, image_url=$8, updated_at=NOW() WHERE id=$9 RETURNING *`,
@@ -1210,4 +1222,4 @@ app.use((err, req, res, next) => {
  next(err);
 });
 
-app.listen(PORT, () => console.log(`Server on ${BASE_URL} (port ${PORT})`));
+app.listen(PORT, '0.0.0.0', () => console.log(`Server on ${getBaseUrl({ headers: {} })} (port ${PORT})`));

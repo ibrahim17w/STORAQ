@@ -5,8 +5,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 class ApiService {
   static String get baseUrl {
-    if (Platform.isAndroid) return 'http://10.0.2.2:3000';
-    return 'http://localhost:3000';
+    // Production Render deployment
+    return 'https://market-bridge-baug.onrender.com';
   }
 
   static final Map<String, dynamic> _cache = {};
@@ -193,7 +193,10 @@ class ApiService {
       if (token != null) await setToken(token);
       return data;
     }
-    throw Exception(data['error']?.toString() ?? 'Login failed');
+    // FIX: Show actual server response body for debugging instead of generic "Login failed"
+    throw Exception(
+      data['error']?.toString() ?? data['message']?.toString() ?? response.body,
+    );
   }
 
   static Future<void> logout() async => clearToken();
