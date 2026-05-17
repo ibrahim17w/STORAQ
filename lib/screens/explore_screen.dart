@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import '../services/api_service.dart';
 import '../lang/translations.dart';
 import 'store_products_screen.dart';
-import 'Store_map_screen.dart';
+import 'store_map_screen.dart';
 import 'package:latlong2/latlong.dart';
 
 class ExploreScreen extends StatefulWidget {
@@ -107,7 +107,7 @@ class _ExploreScreenState extends State<ExploreScreen> {
                               onPressed: () => Navigator.push(
                                 context,
                                 MaterialPageRoute(
-                                  builder: (_) => StoreMapScreen(
+                                  builder: (_) => StoreLocationView(
                                     target: LatLng(lat, lng),
                                     targetStoreId: store['id'], // CHANGED
                                     targetName: store['name']

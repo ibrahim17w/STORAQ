@@ -58,7 +58,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
     if (pwd.contains(RegExp(r'[A-Z]'))) score += 1;
     if (pwd.contains(RegExp(r'[a-z]'))) score += 1;
     if (pwd.contains(RegExp(r'[0-9]'))) score += 1;
-    if (pwd.contains(RegExp(r'[!@#\$%^&*()_+\-=\[\]{}|;:,.<>?]'))) score += 1;
+    if (pwd.contains(RegExp(r'[!@#\$%^&*()_+\-=\[\]{}|;:,.<?]'))) score += 1;
 
     final lowerPwd = pwd.toLowerCase();
     final seqNums = [
@@ -162,7 +162,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
     const lower = 'abcdefghijklmnopqrstuvwxyz';
     const upper = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
     const numbers = '0123456789';
-    const symbols = '!@#\$%^&*()_+-=[]{}|;:,.<>?';
+    const symbols = '!@#\$%^&*()_+-=[]{}|;:,.<?';
     const all = lower + upper + numbers + symbols;
     final random = Random.secure();
     final buffer = StringBuffer();

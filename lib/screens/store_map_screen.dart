@@ -8,14 +8,14 @@ import '../lang/translations.dart';
 import '../widgets/cached_tile_provider.dart';
 import 'store_products_screen.dart';
 
-class StoreMapScreen extends StatefulWidget {
+class StoreLocationView extends StatefulWidget {
   final LatLng? target;
   final int? targetStoreId;
   final String? targetName;
   final String? targetImageUrl;
   final List<dynamic> stores;
 
-  const StoreMapScreen({
+  const StoreLocationView({
     super.key,
     this.target,
     this.targetStoreId,
@@ -25,10 +25,10 @@ class StoreMapScreen extends StatefulWidget {
   });
 
   @override
-  State<StoreMapScreen> createState() => _StoreMapScreenState();
+  State<StoreLocationView> createState() => _StoreLocationViewState();
 }
 
-class _StoreMapScreenState extends State<StoreMapScreen> {
+class _StoreLocationViewState extends State<StoreLocationView> {
   final MapController _mapController = MapController();
   List<dynamic> _stores = [];
   LatLng? _userLocation;
@@ -39,15 +39,14 @@ class _StoreMapScreenState extends State<StoreMapScreen> {
   void initState() {
     super.initState();
 
-    // Use passed stores immediately
     _stores = widget.stores
         .where((s) => s['lat'] != null && s['lng'] != null)
         .toList();
 
-    if (widget.target == null) {
-      _moveToCurrentLocation();
-    } else {
-      setState(() => _locating = false);
+    _moveToCurrentLocation();
+
+    if (widget.target != null) {
+      if (mounted) setState(() => _locating = false);
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted && widget.target != null) {
           _mapController.move(widget.target!, 16);
@@ -60,7 +59,7 @@ class _StoreMapScreenState extends State<StoreMapScreen> {
     try {
       bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
       if (!serviceEnabled) {
-        setState(() => _locating = false);
+        if (mounted) setState(() => _locating = false);
         return;
       }
 
@@ -68,56 +67,80 @@ class _StoreMapScreenState extends State<StoreMapScreen> {
       if (permission == LocationPermission.denied) {
         permission = await Geolocator.requestPermission();
         if (permission == LocationPermission.denied) {
-          setState(() => _locating = false);
+          if (mounted) setState(() => _locating = false);
           return;
         }
       }
 
       if (permission == LocationPermission.deniedForever) {
-        setState(() => _locating = false);
+        if (mounted) setState(() => _locating = false);
         return;
       }
 
       final position = await Geolocator.getCurrentPosition();
       final latLng = LatLng(position.latitude, position.longitude);
 
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _mapController.move(latLng, 14);
-      });
+      if (widget.target == null) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _mapController.move(latLng, 14);
+        });
+      }
 
-      setState(() {
-        _userLocation = latLng;
-        _userAccuracy = position.accuracy;
-        _locating = false;
-      });
+      if (mounted) {
+        setState(() {
+          _userLocation = latLng;
+          _userAccuracy = position.accuracy;
+          _locating = false;
+        });
+      }
     } catch (e) {
-      setState(() => _locating = false);
+      if (mounted) setState(() => _locating = false);
     }
+  }
+
+  Future<void> _goToUserLocation() async {
+    if (_userLocation == null) {
+      if (mounted) setState(() => _locating = true);
+      await _moveToCurrentLocation();
+    }
+    if (_userLocation != null && mounted) {
+      _mapController.move(_userLocation!, 16);
+    }
+  }
+
+  void _zoomIn() {
+    final currentZoom = _mapController.camera.zoom;
+    _mapController.move(
+      _mapController.camera.center,
+      (currentZoom + 1).clamp(2, 20),
+    );
+  }
+
+  void _zoomOut() {
+    final currentZoom = _mapController.camera.zoom;
+    _mapController.move(
+      _mapController.camera.center,
+      (currentZoom - 1).clamp(2, 20),
+    );
   }
 
   dynamic _findTargetStore() {
     if (widget.target == null && widget.targetStoreId == null) return null;
 
     for (final store in _stores) {
-      // Match by ID
       if (widget.targetStoreId != null) {
         final rawId = store['id'];
         final sid = rawId is int ? rawId : int.tryParse(rawId.toString());
-        if (sid == widget.targetStoreId) {
-          return store;
-        }
+        if (sid == widget.targetStoreId) return store;
       }
 
-      // Match by coordinates (0.001° tolerance ≈ 111m)
       if (widget.target != null) {
         final lat = double.tryParse(store['lat'].toString());
         final lng = double.tryParse(store['lng'].toString());
         if (lat != null && lng != null) {
           final latDiff = (lat - widget.target!.latitude).abs();
           final lngDiff = (lng - widget.target!.longitude).abs();
-          if (latDiff <= 0.001 && lngDiff <= 0.001) {
-            return store;
-          }
+          if (latDiff <= 0.001 && lngDiff <= 0.001) return store;
         }
       }
     }
@@ -180,9 +203,9 @@ class _StoreMapScreenState extends State<StoreMapScreen> {
         ? matchedStore['image_url'].toString()
         : widget.targetImageUrl;
 
-    print(
-      '>>> StoreMapScreen BUILD: displayName="$displayName", matchedStore=${matchedStore != null}, targetStoreId=${widget.targetStoreId}, target=${widget.target}, storesCount=${_stores.length}',
-    );
+    final String? targetDistance = matchedStore != null
+        ? _getDistance(matchedStore)
+        : null;
 
     return PopScope(
       canPop: isPushedForStore,
@@ -208,7 +231,24 @@ class _StoreMapScreenState extends State<StoreMapScreen> {
                     color: Colors.white,
                   ),
                 ),
+              )
+            else ...[
+              IconButton(
+                icon: const Icon(Icons.add),
+                tooltip: 'Zoom in',
+                onPressed: _zoomIn,
               ),
+              IconButton(
+                icon: const Icon(Icons.remove),
+                tooltip: 'Zoom out',
+                onPressed: _zoomOut,
+              ),
+              IconButton(
+                icon: const Icon(Icons.my_location),
+                tooltip: 'My location',
+                onPressed: _goToUserLocation,
+              ),
+            ],
           ],
         ),
         body: FlutterMap(
@@ -283,6 +323,7 @@ class _StoreMapScreenState extends State<StoreMapScreen> {
               ),
 
             MarkerLayer(
+              key: ValueKey(_userLocation?.toString() ?? 'no-user'),
               markers: _stores
                   .where((store) {
                     if (widget.targetStoreId != null &&
@@ -442,15 +483,28 @@ class _StoreMapScreenState extends State<StoreMapScreen> {
                               ),
                             ],
                           ),
-                          child: Text(
-                            displayName,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              fontSize: 11,
-                              fontWeight: FontWeight.bold,
-                              color: Colors.white,
-                            ),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                displayName,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.white,
+                                ),
+                              ),
+                              if (targetDistance != null)
+                                Text(
+                                  targetDistance,
+                                  style: const TextStyle(
+                                    fontSize: 9,
+                                    color: Colors.white70,
+                                  ),
+                                ),
+                            ],
                           ),
                         ),
                         const SizedBox(height: 4),
@@ -501,41 +555,7 @@ class _StoreMapScreenState extends State<StoreMapScreen> {
               ),
           ],
         ),
-        floatingActionButton: widget.target == null
-            ? Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (_userLocation != null)
-                    FloatingActionButton.small(
-                      heroTag: 'center_user',
-                      onPressed: () {
-                        if (_userLocation != null) {
-                          _mapController.move(_userLocation!, 16);
-                        }
-                      },
-                      child: const Icon(Icons.my_location),
-                    ),
-                  const SizedBox(height: 8),
-                  FloatingActionButton.small(
-                    heroTag: 'refresh_gps',
-                    onPressed: () {
-                      setState(() => _locating = true);
-                      _moveToCurrentLocation();
-                    },
-                    child: _locating
-                        ? const SizedBox(
-                            width: 18,
-                            height: 18,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: Colors.white,
-                            ),
-                          )
-                        : const Icon(Icons.gps_fixed),
-                  ),
-                ],
-              )
-            : null,
+        floatingActionButton: null,
       ),
     );
   }

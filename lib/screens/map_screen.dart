@@ -117,6 +117,32 @@ class _MapScreenState extends State<MapScreen> {
     }
   }
 
+  Future<void> _goToUserLocation() async {
+    if (_userLocation == null) {
+      if (mounted) setState(() => _locating = true);
+      await _moveToCurrentLocation();
+    }
+    if (_userLocation != null && mounted) {
+      _mapController.move(_userLocation!, 16);
+    }
+  }
+
+  void _zoomIn() {
+    final currentZoom = _mapController.camera.zoom;
+    _mapController.move(
+      _mapController.camera.center,
+      (currentZoom + 1).clamp(2, 20),
+    );
+  }
+
+  void _zoomOut() {
+    final currentZoom = _mapController.camera.zoom;
+    _mapController.move(
+      _mapController.camera.center,
+      (currentZoom - 1).clamp(2, 20),
+    );
+  }
+
   // CHANGED: search the loaded list for the store we want to display
   dynamic _findTargetStore() {
     if (widget.target == null && widget.targetStoreId == null) return null;
@@ -201,6 +227,10 @@ class _MapScreenState extends State<MapScreen> {
         ? matchedStore['image_url'].toString()
         : widget.targetImageUrl;
 
+    final String? targetDistance = matchedStore != null
+        ? _getDistance(matchedStore)
+        : null;
+
     print(
       '>>> MapScreen BUILD: displayName="$displayName", matchedStore=${matchedStore != null}, storesCount=${_stores.length}',
     );
@@ -229,7 +259,24 @@ class _MapScreenState extends State<MapScreen> {
                     color: Colors.white,
                   ),
                 ),
+              )
+            else ...[
+              IconButton(
+                icon: const Icon(Icons.add),
+                tooltip: 'Zoom in',
+                onPressed: _zoomIn,
               ),
+              IconButton(
+                icon: const Icon(Icons.remove),
+                tooltip: 'Zoom out',
+                onPressed: _zoomOut,
+              ),
+              IconButton(
+                icon: const Icon(Icons.my_location),
+                tooltip: 'My location',
+                onPressed: _goToUserLocation,
+              ),
+            ],
           ],
         ),
         body: FlutterMap(
@@ -463,15 +510,28 @@ class _MapScreenState extends State<MapScreen> {
                               ),
                             ],
                           ),
-                          child: Text(
-                            displayName,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              fontSize: 11,
-                              fontWeight: FontWeight.bold,
-                              color: Colors.white,
-                            ),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                displayName,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.white,
+                                ),
+                              ),
+                              if (targetDistance != null)
+                                Text(
+                                  targetDistance,
+                                  style: const TextStyle(
+                                    fontSize: 9,
+                                    color: Colors.white70,
+                                  ),
+                                ),
+                            ],
                           ),
                         ),
                         const SizedBox(height: 4),
@@ -522,41 +582,7 @@ class _MapScreenState extends State<MapScreen> {
               ),
           ],
         ),
-        floatingActionButton: widget.target == null
-            ? Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (_userLocation != null)
-                    FloatingActionButton.small(
-                      heroTag: 'center_user',
-                      onPressed: () {
-                        if (_userLocation != null) {
-                          _mapController.move(_userLocation!, 16);
-                        }
-                      },
-                      child: const Icon(Icons.my_location),
-                    ),
-                  const SizedBox(height: 8),
-                  FloatingActionButton.small(
-                    heroTag: 'refresh_gps',
-                    onPressed: () {
-                      setState(() => _locating = true);
-                      _moveToCurrentLocation();
-                    },
-                    child: _locating
-                        ? const SizedBox(
-                            width: 18,
-                            height: 18,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: Colors.white,
-                            ),
-                          )
-                        : const Icon(Icons.gps_fixed),
-                  ),
-                ],
-              )
-            : null,
+        floatingActionButton: null,
       ),
     );
   }

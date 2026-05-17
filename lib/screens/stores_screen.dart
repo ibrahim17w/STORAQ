@@ -152,7 +152,7 @@ class _StoresScreenState extends State<StoresScreen> {
                           Navigator.push(
                             context,
                             MaterialPageRoute(
-                              builder: (context) => StoreMapScreen(
+                              builder: (context) => StoreLocationView(
                                 target: target,
                                 targetStoreId: storeId,
                                 targetName: storeName,

@@ -57,7 +57,7 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => StoreMapScreen(
+        builder: (_) => StoreLocationView(
           target: LatLng(lat, lng),
           targetStoreId: widget.product['shop_id'],
           targetName: _storeData?['name'],

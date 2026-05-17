@@ -57,11 +57,11 @@ class _StoreProductsScreenState extends State<StoreProductsScreen> {
       ).showSnackBar(const SnackBar(content: Text('Location not available')));
       return;
     }
-    // CHANGED: StoreMapScreen + pass store data + all stores list
+    // CHANGED: StoreLocationView + pass store data + all stores list
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => StoreMapScreen(
+        builder: (_) => StoreLocationView(
           target: LatLng(lat, lng),
           targetStoreId: widget.storeId,
           targetName: _displayName.isNotEmpty

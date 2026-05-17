@@ -564,6 +564,25 @@ class ApiService {
     } catch (_) {}
     return [];
   }
+
+  // NEW: Server-side geo filter for nearby products
+  static Future<List<dynamic>> fetchNearbyProducts({
+    required double lat,
+    required double lng,
+    double radiusKm = 15,
+  }) async {
+    try {
+      final response = await _getWithTimeout(
+        '$baseUrl/api/marketplace/nearby?lat=$lat&lng=$lng&radius=$radiusKm',
+        headers: publicHeaders,
+        timeout: const Duration(seconds: 8),
+      );
+      if (response.statusCode == 200) {
+        return jsonDecode(response.body) as List<dynamic>;
+      }
+    } catch (_) {}
+    return [];
+  }
 }
 
 // FIX: Renamed to avoid conflict with dart:async TimeoutException

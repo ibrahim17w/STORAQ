@@ -15,6 +15,7 @@ const app = express();
 
 // SECURITY FIX: Use env var for base URL with localhost fallback
 const BASE_URL = process.env.BASE_URL || 'http://localhost:3000';
+const PORT = process.env.PORT || 3000;
 
 // SECURITY FIX: Restrict CORS to your frontend in production, fallback to permissive for dev
 app.use(helmet());
@@ -455,7 +456,16 @@ app.post('/api/auth/register', async (req, res) => {
  if (userRole === 'store_owner' && store) {
  await client.query(
  'INSERT INTO stores (name, city, village, country, lat, lng, phone, owner_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)',
- [store.name, store.city, store.village, store.country || 'Syria', store.lat, store.lng, store.phone, userResult.rows[0].id]
+ [
+   sanitizeString(store.name, 100),
+   sanitizeString(store.city, 100),
+   sanitizeString(store.village, 100),
+   sanitizeString(store.country, 100) || 'Syria',
+   store.lat,
+   store.lng,
+   sanitizeString(store.phone, 50),
+   userResult.rows[0].id
+ ]
  );
  }
  await client.query('COMMIT');
@@ -720,13 +730,19 @@ app.put('/api/me', authenticateToken, async (req, res) => {
 });
 
 // CHANGE PASSWORD
-// FIX: Validate fields exist before hashing
+// FIX: Validate fields exist before hashing + enforce strength
 app.put('/api/me/password', authenticateToken, async (req, res) => {
  try {
  const { current_password, new_password } = req.body;
  if (!current_password || !new_password) {
  return res.status(400).json({ error: 'Current password and new password are required.' });
  }
+
+ const strength = validatePasswordStrength(new_password);
+ if (!strength.valid) {
+ return res.status(400).json({ error: strength.error });
+ }
+
  const user = await pool.query('SELECT password_hash FROM users WHERE id=$1', [req.user.userId]);
  if (!await bcrypt.compare(current_password, user.rows[0].password_hash)) {
  return res.status(400).json({ error: 'Current password is incorrect' });
@@ -847,7 +863,7 @@ app.get('/api/products/trending', async (req, res) => {
  try {
  const result = await pool.query(
  `SELECT p.id, p.name, p.price, p.quantity, p.description, p.image_url, p.view_count,
- s.id as shop_id, s.name as shop_name, s.city, s.country
+ s.id as shop_id, s.name as shop_name, s.city, s.country, s.lat, s.lng
  FROM products p
  JOIN stores s ON p.store_id = s.id
  WHERE p.quantity > 0
@@ -947,7 +963,7 @@ app.get('/api/recommendations', authenticateToken, async (req, res) => {
  if (result.rows.length === 0) {
  const fallback = await pool.query(
  `SELECT p.id, p.name, p.price, p.quantity, p.description, p.image_url,
- s.id as shop_id, s.name as shop_name, s.city, s.country
+ s.id as shop_id, s.name as shop_name, s.city, s.country, s.lat, s.lng
  FROM products p
  JOIN stores s ON p.store_id = s.id
  WHERE p.quantity > 0
@@ -1109,6 +1125,47 @@ app.put('/api/my-store', authenticateToken, upload.single('image'), async (req, 
  }
 });
 
+
+// ==================== NEARBY PRODUCTS (GEO FILTER) ====================
+app.get('/api/marketplace/nearby', async (req, res) => {
+ try {
+ const lat = parseFloat(req.query.lat);
+ const lng = parseFloat(req.query.lng);
+ const radiusKm = parseFloat(req.query.radius) || 15;
+
+ if (isNaN(lat) || isNaN(lng)) {
+ return res.status(400).json({ error: 'lat and lng query params are required' });
+ }
+
+ // Haversine formula in SQL (Earth radius ≈ 6371 km)
+ const result = await pool.query(
+ `SELECT p.id, p.name, p.price, p.quantity, p.description, p.image_url, p.created_at,
+ s.id as shop_id, s.name as shop_name, s.city, s.country, s.lat, s.lng,
+ (6371 * acos(
+ cos(radians($1)) * cos(radians(s.lat)) *
+ cos(radians(s.lng) - radians($2)) +
+ sin(radians($1)) * sin(radians(s.lat))
+ )) AS distance_km
+ FROM products p
+ JOIN stores s ON p.store_id = s.id
+ WHERE p.quantity > 0
+ AND s.lat IS NOT NULL AND s.lng IS NOT NULL
+ HAVING (6371 * acos(
+ cos(radians($1)) * cos(radians(s.lat)) *
+ cos(radians(s.lng) - radians($2)) +
+ sin(radians($1)) * sin(radians(s.lat))
+ )) <= $3
+ ORDER BY distance_km ASC
+ LIMIT 50`,
+ [lat, lng, radiusKm]
+ );
+ res.json(result.rows);
+ } catch (err) {
+ console.error('Nearby error:', err);
+ res.status(500).json({ error: 'Something went wrong. Please try again later.' });
+ }
+});
+
 // ==================== NEW: ANALYTICS & HOME SCREEN ENDPOINTS ====================
 
 // ADMIN: Set store as sponsored (protected endpoint)
@@ -1153,4 +1210,4 @@ app.use((err, req, res, next) => {
  next(err);
 });
 
-app.listen(process.env.PORT, () => console.log(`Server on ${BASE_URL}`));
+app.listen(PORT, () => console.log(`Server on ${BASE_URL} (port ${PORT})`));
