@@ -2,10 +2,18 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter/foundation.dart' show kDebugMode;
 
 class ApiService {
   static String get baseUrl {
-    // Production Render deployment
+    const envUrl = String.fromEnvironment('API_BASE_URL');
+    if (envUrl.isNotEmpty) return envUrl;
+
+    if (kDebugMode) {
+      if (Platform.isAndroid) return 'http://10.0.2.2:3000';
+      if (Platform.isIOS) return 'http://localhost:3000';
+      return 'http://localhost:3000';
+    }
     return 'https://market-bridge-baug.onrender.com';
   }
 
