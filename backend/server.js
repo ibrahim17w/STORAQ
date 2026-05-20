@@ -4,7 +4,7 @@ const { Pool } = require('pg');
 const cors = require('cors');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const nodemailer = require('nodemailer');
+const { Resend } = require('resend');
 const crypto = require('crypto');
 const multer = require('multer');
 const path = require('path');
@@ -15,8 +15,10 @@ const app = express();
 
 const PORT = process.env.PORT || 3000;
 
+// Initialize Resend
+const resend = new Resend(process.env.RESEND_API_KEY);
+
 // SECURITY FIX: Dynamic base URL that works with tunnels (localtunnel, ngrok, cloudflare)
-// Uses request headers to detect the public URL, falls back to env var or localhost
 function getBaseUrl(req) {
   const forwardedProto = req.headers['x-forwarded-proto'];
   const forwardedHost = req.headers['x-forwarded-host'];
@@ -62,16 +64,17 @@ const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
 });
-const transporter = nodemailer.createTransport({
- host: process.env.SMTP_HOST,
- port: process.env.SMTP_PORT,
- secure: process.env.SMTP_SECURE === 'true',
- auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
-});
 
-transporter.verify((err) => {
- if (err) console.error('❌ SMTP Failed:', err.message);
- else console.log('✅ SMTP Ready');
+// Verify Resend is working
+resend.emails.send({
+  from: process.env.FROM_EMAIL || 'Market Bridge <onboarding@resend.dev>',
+  to: 'delivered@resend.dev',
+  subject: 'Test',
+  html: '<p>Test</p>'
+}).then(() => {
+  console.log('✅ Resend Ready');
+}).catch((err) => {
+  console.error('❌ Resend Failed:', err.message);
 });
 
 const authenticateToken = (req, res, next) => {
@@ -86,7 +89,6 @@ const authenticateToken = (req, res, next) => {
 };
 
 // ==================== HELPERS ====================
-// SECURITY FIX: Input sanitization to prevent injection and DB bloat
 function sanitizeString(str, maxLen = 255) {
  if (typeof str !== 'string') return '';
  return str.trim().substring(0, maxLen);
@@ -96,7 +98,7 @@ function isValidEmail(email) {
  return /^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$/.test(email);
 }
 
-// ==================== SERVER TIME (DB / Internet Clock) ====================
+// ==================== SERVER TIME ====================
 async function serverNow() {
  const result = await pool.query('SELECT NOW() as now');
  return new Date(result.rows[0].now);
@@ -186,8 +188,7 @@ async function clearLoginAttempts(email) {
  await pool.query('DELETE FROM failed_logins WHERE email = $1', [email]);
 }
 
-// ==================== RESET PASSWORD RATE LIMITING (DB-based) ====================
-// SECURITY FIX: Eliminated SQL injection by using make_interval() instead of string interpolation
+// ==================== RESET PASSWORD RATE LIMITING ====================
 async function checkResetRateLimit(email, maxAttempts = 3, windowHours = 1, cooldownSeconds = 60) {
  const result = await pool.query(
  `SELECT COUNT(*) as c, MAX(created_at) as last
@@ -397,7 +398,6 @@ function getLang(userLang) {
 }
 
 // Multer
-// SECURITY FIX: Added file type validation so only images can be uploaded
 const storage = multer.diskStorage({
  destination: (req, file, cb) => cb(null, 'uploads/'),
  filename: (req, file, cb) => {
@@ -413,8 +413,6 @@ const upload = multer({
  const allowedExts = ['.jpg', '.jpeg', '.png', '.webp', '.gif'];
  const ext = path.extname(file.originalname).toLowerCase();
 
- // FIX: Flutter sometimes sends application/octet-stream instead of the real mimetype.
- // Trust the file extension as a fallback.
  const isAllowedType = allowedTypes.includes(file.mimetype);
  const isAllowedExt = allowedExts.includes(ext);
  const isOctetStream = file.mimetype === 'application/octet-stream';
@@ -435,7 +433,6 @@ app.post('/api/auth/register', async (req, res) => {
  try {
  await client.query('BEGIN');
 
- // SECURITY FIX: Sanitize all user inputs
  const full_name = sanitizeString(req.body.full_name, 100);
  const email = sanitizeString(req.body.email, 255).toLowerCase();
  const phone = sanitizeString(req.body.phone, 50);
@@ -476,16 +473,15 @@ app.post('/api/auth/register', async (req, res) => {
  }
  await client.query('COMMIT');
 
- // FIX: Use dynamic getBaseUrl(req) instead of hardcoded BASE_URL for tunnel support
  const verifyUrl = `${getBaseUrl(req)}/api/auth/verify-email?token=${verifyToken}`;
  const texts = emailTexts[lang];
 
  try {
- await transporter.sendMail({
- from: `"Market Bridge" <${process.env.SMTP_FROM || 'noreply@marketbridge.com'}>`,
- to: email,
- subject: texts.verifySubject,
- html: emailHtml({ title: 'Market Bridge', subtitle: texts.verifySubtitle, bodyContent: texts.verifyBody(verifyUrl), btnText: texts.verifyBtn, btnUrl: verifyUrl, lang }),
+ await resend.emails.send({
+   from: process.env.FROM_EMAIL || 'Market Bridge <onboarding@resend.dev>',
+   to: email,
+   subject: texts.verifySubject,
+   html: emailHtml({ title: 'Market Bridge', subtitle: texts.verifySubtitle, bodyContent: texts.verifyBody(verifyUrl), btnText: texts.verifyBtn, btnUrl: verifyUrl, lang }),
  });
  } catch (e) {
  console.error('Email failed:', e.message);
@@ -504,7 +500,6 @@ app.post('/api/auth/register', async (req, res) => {
 });
 
 // VERIFY EMAIL
-// SECURITY FIX: Validate token format before hitting the database
 app.get('/api/auth/verify-email', async (req, res) => {
  const { token } = req.query;
  if (!token || typeof token !== 'string' || !/^[a-f0-9]{64}$/.test(token)) {
@@ -515,13 +510,12 @@ app.get('/api/auth/verify-email', async (req, res) => {
  res.send('<h2>✅ Verified! You can now log in.</h2>');
 });
 
-// SECURITY FIX: Added missing resend-verification endpoint that your Flutter app calls
+// RESEND VERIFICATION
 app.post('/api/auth/resend-verification', async (req, res) => {
  try {
  const email = sanitizeString(req.body.email, 255).toLowerCase();
  const result = await pool.query('SELECT * FROM users WHERE email=$1', [email]);
 
- // Opaque response: same message whether email exists or not
  if (result.rows.length === 0) {
  return res.json({ message: 'If this email is registered, a verification email will be sent.' });
  }
@@ -535,16 +529,15 @@ app.post('/api/auth/resend-verification', async (req, res) => {
  const verifyToken = crypto.randomBytes(32).toString('hex');
  await pool.query('UPDATE users SET verification_token=$1 WHERE id=$2', [verifyToken, user.id]);
 
- // FIX: Use dynamic getBaseUrl(req) instead of hardcoded BASE_URL
  const verifyUrl = `${getBaseUrl(req)}/api/auth/verify-email?token=${verifyToken}`;
  const texts = emailTexts[lang];
 
  try {
- await transporter.sendMail({
- from: `"Market Bridge" <${process.env.SMTP_FROM || 'noreply@marketbridge.com'}>`,
- to: email,
- subject: texts.verifySubject,
- html: emailHtml({ title: 'Market Bridge', subtitle: texts.verifySubtitle, bodyContent: texts.verifyBody(verifyUrl), btnText: texts.verifyBtn, btnUrl: verifyUrl, lang }),
+ await resend.emails.send({
+   from: process.env.FROM_EMAIL || 'Market Bridge <onboarding@resend.dev>',
+   to: email,
+   subject: texts.verifySubject,
+   html: emailHtml({ title: 'Market Bridge', subtitle: texts.verifySubtitle, bodyContent: texts.verifyBody(verifyUrl), btnText: texts.verifyBtn, btnUrl: verifyUrl, lang }),
  });
  } catch (e) {
  console.error('Email failed:', e.message);
@@ -556,8 +549,7 @@ app.post('/api/auth/resend-verification', async (req, res) => {
  }
 });
 
-// LOGIN — DB-persisted brute force + IP limiter
-// SECURITY FIX: Reordered checks to prevent email enumeration
+// LOGIN
 app.post('/api/auth/login', loginIpLimiter, async (req, res) => {
  try {
  const email = sanitizeString(req.body.email, 255).toLowerCase();
@@ -572,13 +564,11 @@ app.post('/api/auth/login', loginIpLimiter, async (req, res) => {
 
  const result = await pool.query('SELECT * FROM users WHERE email=$1', [email]);
  if (result.rows.length === 0) {
- // SECURITY FIX: Do NOT record failed login for non-existent emails (prevents DB bloat / DoS)
  return res.status(400).json({ error: 'Email or password is incorrect. Please try again.' });
  }
 
  const user = result.rows[0];
 
- // SECURITY FIX: Check password BEFORE email_verified to prevent enumeration
  const validPassword = await bcrypt.compare(password, user.password_hash);
  if (!validPassword) {
  const attempts = await recordFailedLogin(email);
@@ -592,7 +582,6 @@ app.post('/api/auth/login', loginIpLimiter, async (req, res) => {
  return res.status(400).json({ error: 'Email or password is incorrect. Please try again.' });
  }
 
- // Only reached if password was correct
  if (!user.email_verified) {
  return res.status(403).json({ error: 'Please verify your email before logging in. Check your inbox for the verification link.' });
  }
@@ -618,13 +607,12 @@ app.post('/api/auth/login', loginIpLimiter, async (req, res) => {
  }
 });
 
-// FORGOT PASSWORD — DB rate limiting + 10 min expiry
+// FORGOT PASSWORD
 app.post('/api/auth/forgot-password', async (req, res) => {
  try {
  const email = sanitizeString(req.body.email, 255).toLowerCase();
  const result = await pool.query('SELECT * FROM users WHERE email=$1', [email]);
 
- // SECURITY FIX: Return opaque 200 for non-existent emails to prevent enumeration
  if (result.rows.length === 0) {
  return res.json({ message: 'If this email is registered, a reset code will be sent.' });
  }
@@ -641,7 +629,6 @@ app.post('/api/auth/forgot-password', async (req, res) => {
  const user = result.rows[0];
  const lang = getLang(user.preferred_language);
 
- // SECURITY FIX: Cryptographically secure 6-digit code
  const code = crypto.randomInt(100000, 999999).toString();
  const now = await serverNow();
  const expires = new Date(now.getTime() + 10 * 60 * 1000);
@@ -653,11 +640,11 @@ app.post('/api/auth/forgot-password', async (req, res) => {
 
  const texts = emailTexts[lang];
  try {
- await transporter.sendMail({
- from: `"Market Bridge" <${process.env.SMTP_FROM || 'noreply@marketbridge.com'}>`,
- to: email,
- subject: texts.resetSubject,
- html: emailHtml({ title: 'Market Bridge', subtitle: texts.resetSubtitle, bodyContent: texts.resetBody, btnText: null, btnUrl: null, code, lang }),
+ await resend.emails.send({
+   from: process.env.FROM_EMAIL || 'Market Bridge <onboarding@resend.dev>',
+   to: email,
+   subject: texts.resetSubject,
+   html: emailHtml({ title: 'Market Bridge', subtitle: texts.resetSubtitle, bodyContent: texts.resetBody, btnText: null, btnUrl: null, code, lang }),
  });
  } catch (e) {
  console.error('❌ Reset email failed:', e.message);
@@ -673,8 +660,7 @@ app.post('/api/auth/forgot-password', async (req, res) => {
  }
 });
 
-// RESET PASSWORD — strength check + 10 min expiry validation
-// CHANGE: Added check to prevent reusing the same old password
+// RESET PASSWORD
 app.post('/api/auth/reset-password', async (req, res) => {
  try {
  const email = sanitizeString(req.body.email, 255).toLowerCase();
@@ -695,7 +681,6 @@ app.post('/api/auth/reset-password', async (req, res) => {
  return res.status(400).json({ error: 'This code is invalid or has expired. Please request a new one.' });
  }
 
- // CHANGE: Prevent password reuse — compare new password against current hash
  const userResult = await pool.query('SELECT password_hash FROM users WHERE email=$1', [email]);
  if (userResult.rows.length > 0) {
  const isSamePassword = await bcrypt.compare(new_password, userResult.rows[0].password_hash);
@@ -725,7 +710,6 @@ app.get('/api/me', authenticateToken, async (req, res) => {
 });
 
 // UPDATE PROFILE
-// FIX: Return only safe fields (exclude password_hash)
 app.put('/api/me', authenticateToken, async (req, res) => {
  const full_name = sanitizeString(req.body.full_name, 100);
  const phone = sanitizeString(req.body.phone, 50);
@@ -737,7 +721,6 @@ app.put('/api/me', authenticateToken, async (req, res) => {
 });
 
 // CHANGE PASSWORD
-// FIX: Validate fields exist before hashing + enforce strength
 app.put('/api/me/password', authenticateToken, async (req, res) => {
  try {
  const { current_password, new_password } = req.body;
@@ -763,22 +746,18 @@ app.put('/api/me/password', authenticateToken, async (req, res) => {
 });
 
 // DELETE ACCOUNT
-// SECURITY FIX: Clean up all related data instead of orphaning it
 app.delete('/api/me', authenticateToken, async (req, res) => {
  const client = await pool.connect();
  try {
  await client.query('BEGIN');
 
- // Delete user's products first (via their store)
  const storeResult = await client.query('SELECT id FROM stores WHERE owner_id=$1', [req.user.userId]);
  for (const row of storeResult.rows) {
  await client.query('DELETE FROM products WHERE store_id=$1', [row.id]);
  }
 
- // Delete user's store
  await client.query('DELETE FROM stores WHERE owner_id=$1', [req.user.userId]);
 
- // Clean up auth artifacts and tracking tables
  const userResult = await client.query('SELECT email FROM users WHERE id=$1', [req.user.userId]);
  if (userResult.rows.length > 0) {
  const email = userResult.rows[0].email;
@@ -788,7 +767,6 @@ app.delete('/api/me', authenticateToken, async (req, res) => {
  await client.query('DELETE FROM product_views WHERE user_id=$1', [req.user.userId]);
  await client.query('DELETE FROM search_queries WHERE user_id=$1', [req.user.userId]);
 
- // Delete user
  await client.query('DELETE FROM users WHERE id=$1', [req.user.userId]);
  await client.query('COMMIT');
  res.json({ message: 'Account deleted successfully' });
@@ -806,13 +784,11 @@ app.post('/api/products/:id/view', async (req, res) => {
  const productId = parseInt(req.params.id);
  if (isNaN(productId)) return res.status(400).json({ error: 'Invalid product ID' });
 
- // Increment view count
  await pool.query(
  'UPDATE products SET view_count = COALESCE(view_count, 0) + 1 WHERE id = $1',
  [productId]
  );
 
- // Log view if user is authenticated
  const authHeader = req.headers['authorization'];
  if (authHeader) {
  const token = authHeader.split(' ')[1];
@@ -822,9 +798,7 @@ app.post('/api/products/:id/view', async (req, res) => {
  'INSERT INTO product_views (product_id, user_id, viewed_at) VALUES ($1, $2, NOW())',
  [productId, decoded.userId]
  );
- } catch (_) {
- // Invalid token, just count the view
- }
+ } catch (_) {}
  }
 
  res.json({ message: 'View tracked' });
@@ -842,7 +816,6 @@ app.post('/api/search/track', async (req, res) => {
  return res.status(400).json({ error: 'Query too short' });
  }
 
- // Log search query
  const authHeader = req.headers['authorization'];
  let userId = null;
  if (authHeader) {
@@ -865,7 +838,7 @@ app.post('/api/search/track', async (req, res) => {
  }
 });
 
-// GET TRENDING PRODUCTS (most viewed)
+// GET TRENDING PRODUCTS
 app.get('/api/products/trending', async (req, res) => {
  try {
  const result = await pool.query(
@@ -904,14 +877,13 @@ app.get('/api/stores/sponsored', async (req, res) => {
  }
 });
 
-// GET PERSONALIZED RECOMMENDATIONS (requires auth)
+// GET PERSONALIZED RECOMMENDATIONS
 app.get('/api/recommendations', authenticateToken, async (req, res) => {
  try {
  const userId = req.user.userId;
  const now = await serverNow();
  const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
 
- // Get user's recent views and searches
  const viewsResult = await pool.query(
  `SELECT DISTINCT p.name, p.store_id
  FROM product_views pv
@@ -928,7 +900,6 @@ app.get('/api/recommendations', authenticateToken, async (req, res) => {
  [userId, sevenDaysAgo]
  );
 
- // Build recommendation query based on user behavior
  let query = `
  SELECT p.id, p.name, p.price, p.quantity, p.description, p.image_url,
  s.id as shop_id, s.name as shop_name, s.city, s.country
@@ -940,7 +911,6 @@ app.get('/api/recommendations', authenticateToken, async (req, res) => {
  const params = [];
  const conditions = [];
 
- // Add conditions based on viewed products (same store)
  if (viewsResult.rows.length > 0) {
  const storeIds = [...new Set(viewsResult.rows.map(r => r.store_id).filter(Boolean))];
  if (storeIds.length > 0) {
@@ -949,7 +919,6 @@ app.get('/api/recommendations', authenticateToken, async (req, res) => {
  }
  }
 
- // Add conditions based on search queries
  if (searchesResult.rows.length > 0) {
  const searchTerms = searchesResult.rows.map(r => r.query);
  for (const term of searchTerms) {
@@ -966,7 +935,6 @@ app.get('/api/recommendations', authenticateToken, async (req, res) => {
 
  const result = await pool.query(query, params);
 
- // If no personalized results, return popular items
  if (result.rows.length === 0) {
  const fallback = await pool.query(
  `SELECT p.id, p.name, p.price, p.quantity, p.description, p.image_url,
@@ -1018,7 +986,6 @@ app.post('/api/products', authenticateToken, upload.single('image'), async (req,
  const storeId = storeResult.rows[0].id;
  const { name, price, quantity, description, barcode } = req.body;
 
- // FIX: Use dynamic getBaseUrl(req) instead of hardcoded BASE_URL
  const imageUrl = req.file ? `${getBaseUrl(req)}/uploads/${req.file.filename}` : null;
  const result = await pool.query(
  'INSERT INTO products (store_id, name, price, quantity, description, barcode, image_url) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *',
@@ -1040,7 +1007,6 @@ app.put('/api/products/:id', authenticateToken, upload.single('image'), async (r
  const existing = await pool.query('SELECT * FROM products WHERE id=$1 AND store_id=$2', [req.params.id, storeId]);
  if (existing.rows.length === 0) return res.status(404).json({ error: 'Product not found' });
 
- // FIX: Use dynamic getBaseUrl(req) instead of hardcoded BASE_URL
  const imageUrl = req.file ? `${getBaseUrl(req)}/uploads/${req.file.filename}` : existing.rows[0].image_url;
  const result = await pool.query(
  'UPDATE products SET name=$1, price=$2, quantity=$3, description=$4, barcode=$5, image_url=$6, updated_at=NOW() WHERE id=$7 RETURNING *',
@@ -1068,7 +1034,6 @@ app.delete('/api/products/:id', authenticateToken, async (req, res) => {
 app.post('/api/upload', authenticateToken, upload.single('image'), (req, res) => {
  if (!req.file) return res.status(400).json({ error: 'No image uploaded' });
 
- // FIX: Use dynamic getBaseUrl(req) instead of hardcoded BASE_URL
  res.json({ url: `${getBaseUrl(req)}/uploads/${req.file.filename}` });
 });
 
@@ -1086,7 +1051,7 @@ app.put('/api/me/language', authenticateToken, async (req, res) => {
  }
 });
 
-// ==================== MARKETPLACE FEED ====================
+// MARKETPLACE FEED
 app.get('/api/marketplace/feed', async (req, res) => {
  try {
  const result = await pool.query(
@@ -1119,7 +1084,6 @@ app.put('/api/my-store', authenticateToken, upload.single('image'), async (req, 
  const phone = req.body.phone !== undefined ? sanitizeString(req.body.phone, 50) : existing.phone;
  const lat = req.body.lat !== undefined ? parseFloat(req.body.lat) : existing.lat;
  const lng = req.body.lng !== undefined ? parseFloat(req.body.lng) : existing.lng;
- // FIX: Use dynamic getBaseUrl(req) instead of hardcoded BASE_URL
  const imageUrl = req.file ? `${getBaseUrl(req)}/uploads/${req.file.filename}` : existing.image_url;
 
  const result = await pool.query(
@@ -1133,8 +1097,7 @@ app.put('/api/my-store', authenticateToken, upload.single('image'), async (req, 
  }
 });
 
-
-// ==================== NEARBY PRODUCTS (GEO FILTER) ====================
+// NEARBY PRODUCTS
 app.get('/api/marketplace/nearby', async (req, res) => {
  try {
  const lat = parseFloat(req.query.lat);
@@ -1145,7 +1108,6 @@ app.get('/api/marketplace/nearby', async (req, res) => {
  return res.status(400).json({ error: 'lat and lng query params are required' });
  }
 
- // Haversine formula in SQL (Earth radius ≈ 6371 km)
  const result = await pool.query(
  `SELECT p.id, p.name, p.price, p.quantity, p.description, p.image_url, p.created_at,
  s.id as shop_id, s.name as shop_name, s.city, s.country, s.lat, s.lng,
@@ -1174,12 +1136,9 @@ app.get('/api/marketplace/nearby', async (req, res) => {
  }
 });
 
-// ==================== NEW: ANALYTICS & HOME SCREEN ENDPOINTS ====================
-
-// ADMIN: Set store as sponsored (protected endpoint)
+// ADMIN: Set store as sponsored
 app.put('/api/admin/stores/:id/sponsor', authenticateToken, async (req, res) => {
  try {
- // Check if user is admin
  const userResult = await pool.query('SELECT role FROM users WHERE id = $1', [req.user.userId]);
  if (userResult.rows.length === 0 || userResult.rows[0].role !== 'admin') {
  return res.status(403).json({ error: 'Admin access required' });
@@ -1204,7 +1163,7 @@ app.put('/api/admin/stores/:id/sponsor', authenticateToken, async (req, res) => 
  }
 });
 
-// FIX: Multer error handler — file rejections return 400 instead of crashing with 500
+// Multer error handler
 app.use((err, req, res, next) => {
  if (err instanceof multer.MulterError) {
  if (err.code === 'LIMIT_FILE_SIZE') {
