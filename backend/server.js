@@ -59,13 +59,9 @@ const loginIpLimiter = rateLimit({
 });
 
 const pool = new Pool({
- user: process.env.DB_USER,
- host: process.env.DB_HOST,
- database: process.env.DB_NAME,
- password: process.env.DB_PASSWORD,
- port: process.env.DB_PORT,
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
 });
-
 const transporter = nodemailer.createTransport({
  host: process.env.SMTP_HOST,
  port: process.env.SMTP_PORT,
