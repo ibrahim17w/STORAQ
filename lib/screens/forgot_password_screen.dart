@@ -1,3 +1,4 @@
+//forgot_password_screen.dart
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../services/api_service.dart';
@@ -50,13 +51,107 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
     });
   }
 
+  /// Converts backend OTP/reset errors into human-friendly text.
+  String _getFriendlyError(dynamic error) {
+    final raw = error.toString();
+    final isAr = localeNotifier.value.languageCode == 'ar';
+
+    String msg(String en, String ar) => isAr ? ar : en;
+
+    final jsonMatch = RegExp(r'"error"\s*:\s*"([^"]+)"').firstMatch(raw);
+    final serverMsg = jsonMatch?.group(1)?.toLowerCase() ?? raw.toLowerCase();
+
+    if (serverMsg.contains('too many failed attempts') ||
+        serverMsg.contains('locked')) {
+      return msg(
+        'Too many failed attempts. This code has been locked for your security. Please request a new reset code.',
+        'لقد تجاوزت الحد المسموح من المحاولات. تم إلغاء هذا الرمز لحماية حسابك. يرجى طلب رمز جديد.',
+      );
+    }
+
+    if (serverMsg.contains('expired') ||
+        serverMsg.contains('no longer valid')) {
+      return msg(
+        'This code has expired or is no longer valid. Please request a new one.',
+        'انتهت صلاحية هذا الرمز أو لم يعد صالحاً. يرجى طلب رمز جديد.',
+      );
+    }
+
+    if (serverMsg.contains('incorrect') ||
+        serverMsg.contains('invalid') ||
+        serverMsg.contains('wrong')) {
+      return msg(
+        'Incorrect code. Please try again.',
+        'الرمز غير صحيح. يرجى المحاولة مرة أخرى.',
+      );
+    }
+
+    if (serverMsg.contains('wait')) {
+      final waitMatch = RegExp(r'Please wait [^.]+').firstMatch(raw);
+      if (waitMatch != null) {
+        return waitMatch.group(0)!;
+      }
+      return msg(
+        'Please wait a moment before trying again.',
+        'يرجى الانتظار لحظة قبل المحاولة مرة أخرى.',
+      );
+    }
+
+    return mapBackendError(raw);
+  }
+
+  /// Live checklist that shows exactly which rules are met.
+  Widget _buildPasswordChecklist(String pwd) {
+    final requirements = [
+      ('At least 8 characters', pwd.length >= 8),
+      ('Uppercase letter (A-Z)', pwd.contains(RegExp(r'[A-Z]'))),
+      ('Lowercase letter (a-z)', pwd.contains(RegExp(r'[a-z]'))),
+      ('Number (0-9)', pwd.contains(RegExp(r'[0-9]'))),
+      ('Special character (!@#\$%^&*)', pwd.contains(RegExp(r'[^A-Za-z0-9]'))),
+    ];
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 8, bottom: 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: requirements.map((req) {
+          final met = req.$2;
+          return Padding(
+            padding: const EdgeInsets.symmetric(vertical: 2),
+            child: Row(
+              children: [
+                Icon(
+                  met ? Icons.check_circle : Icons.cancel,
+                  size: 14,
+                  color: met ? Colors.green.shade600 : Colors.red.shade300,
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  req.$1,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: met ? Colors.green.shade700 : Colors.grey.shade600,
+                    fontWeight: met ? FontWeight.w600 : FontWeight.normal,
+                  ),
+                ),
+              ],
+            ),
+          );
+        }).toList(),
+      ),
+    );
+  }
+
   Future<void> _sendCode() async {
     if (_cooldown > 0) return;
     if (!_formKey.currentState!.validate()) return;
 
     setState(() => _isLoading = true);
     try {
-      await ApiService.forgotPassword(_emailCtrl.text.trim());
+      await ApiService.forgotPassword(_emailCtrl.text.trim()).timeout(
+        const Duration(seconds: 10),
+        onTimeout: () => throw TimeoutException(t('request_timeout')),
+      );
       setState(() => _codeSent = true);
       _startCooldown();
       showAppNotification(
@@ -64,10 +159,16 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
         message: t('reset_code_sent'),
         isSuccess: true,
       );
+    } on TimeoutException catch (_) {
+      showAppNotification(
+        context,
+        message: t('request_timeout'),
+        isError: true,
+      );
     } catch (e) {
       showAppNotification(
         context,
-        message: mapBackendError(e.toString()),
+        message: _getFriendlyError(e),
         isError: true,
       );
     } finally {
@@ -93,6 +194,9 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
         email: _emailCtrl.text.trim(),
         code: _codeCtrl.text.trim(),
         newPassword: _newPassCtrl.text,
+      ).timeout(
+        const Duration(seconds: 10),
+        onTimeout: () => throw TimeoutException(t('request_timeout')),
       );
       showAppNotification(
         context,
@@ -100,10 +204,16 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
         isSuccess: true,
       );
       Navigator.pop(context);
+    } on TimeoutException catch (_) {
+      showAppNotification(
+        context,
+        message: t('request_timeout'),
+        isError: true,
+      );
     } catch (e) {
       showAppNotification(
         context,
-        message: mapBackendError(e.toString()),
+        message: _getFriendlyError(e),
         isError: true,
       );
     } finally {
@@ -258,6 +368,10 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
                                               border:
                                                   const OutlineInputBorder(),
                                             ),
+                                          ),
+                                          // Live password requirement checklist
+                                          _buildPasswordChecklist(
+                                            _newPassCtrl.text,
                                           ),
                                           const SizedBox(height: 24),
                                           MouseRegion(

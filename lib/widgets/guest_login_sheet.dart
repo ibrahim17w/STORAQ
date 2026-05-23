@@ -1,9 +1,13 @@
+//guest_login_screen.dart
 import 'package:flutter/material.dart';
+import '../services/api_service.dart';
 import '../lang/translations.dart';
 import '../widgets/gradient_button.dart';
 import '../screens/login_screen.dart';
 import '../screens/register_screen.dart';
 
+/// Shows a bottom sheet prompting the guest user to log in or register
+/// when they try to access a restricted feature.
 void showGuestSheet(BuildContext context) {
   showModalBottomSheet(
     context: context,
@@ -60,4 +64,18 @@ void showGuestSheet(BuildContext context) {
       ),
     ),
   );
+}
+
+/// Helper to check if user can perform an action.
+/// If guest, shows the login sheet and returns false.
+/// If logged in, returns true.
+Future<bool> requireAuth(BuildContext context) async {
+  final isGuest = await ApiService.isGuest();
+  final isLoggedIn = await ApiService.isLoggedIn();
+
+  if (isGuest && !isLoggedIn) {
+    showGuestSheet(context);
+    return false;
+  }
+  return true;
 }

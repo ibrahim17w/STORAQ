@@ -1,3 +1,5 @@
+//login_screen.dart
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../services/api_service.dart';
@@ -57,41 +59,7 @@ class _LoginScreenState extends State<LoginScreen> {
       if (mounted) {
         if (isVerifyError) {
           showAppNotification(context, message: msg, isError: true);
-          showDialog(
-            context: context,
-            builder: (_) => AlertDialog(
-              title: Text(t('error')),
-              content: Text(msg),
-              actions: [
-                TextButton(
-                  onPressed: () async {
-                    Navigator.pop(context);
-                    try {
-                      await ApiService.resendVerification(
-                        _emailCtrl.text.trim(),
-                      );
-                      showAppNotification(
-                        context,
-                        message: t('verification_email_sent'),
-                        isSuccess: true,
-                      );
-                    } catch (e2) {
-                      showAppNotification(
-                        context,
-                        message: mapBackendError(e2.toString()),
-                        isError: true,
-                      );
-                    }
-                  },
-                  child: Text(t('resend')),
-                ),
-                TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: Text(t('ok')),
-                ),
-              ],
-            ),
-          );
+          _showOtpDialog(_emailCtrl.text.trim());
         } else {
           showAppNotification(context, message: msg, isError: true);
         }
@@ -269,6 +237,36 @@ class _LoginScreenState extends State<LoginScreen> {
                                             child: Text(t('dont_have_account')),
                                           ),
                                         ),
+                                        const SizedBox(height: 8),
+                                        MouseRegion(
+                                          cursor: SystemMouseCursors.click,
+                                          child: OutlinedButton.icon(
+                                            onPressed: () async {
+                                              await ApiService.setGuest(true);
+                                              if (mounted) {
+                                                Navigator.pushAndRemoveUntil(
+                                                  context,
+                                                  MaterialPageRoute(
+                                                    builder: (_) =>
+                                                        const MainNavScreen(),
+                                                  ),
+                                                  (route) => false,
+                                                );
+                                              }
+                                            },
+                                            icon: const Icon(
+                                              Icons.person_outline,
+                                            ),
+                                            label: Text(t('continue_as_guest')),
+                                            style: OutlinedButton.styleFrom(
+                                              minimumSize: const Size(
+                                                double.infinity,
+                                                48,
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                        const SizedBox(height: 8),
                                       ],
                                     ),
                                   ),
@@ -313,6 +311,143 @@ class _LoginScreenState extends State<LoginScreen> {
             );
           },
         ),
+      ),
+    );
+  }
+
+  void _showOtpDialog(String email) {
+    final otpCtrl = TextEditingController();
+    bool verifying = false;
+    int cooldown = 0;
+    Timer? timer;
+
+    void startCooldown() {
+      cooldown = 60;
+      timer?.cancel();
+      timer = Timer.periodic(const Duration(seconds: 1), (t) {
+        if (cooldown > 0) {
+          cooldown--;
+        } else {
+          t.cancel();
+        }
+      });
+    }
+
+    Future<void> resendCode() async {
+      try {
+        await ApiService.resendVerification(email);
+        startCooldown();
+        showAppNotification(
+          context,
+          message: t('verification_email_sent'),
+          isSuccess: true,
+        );
+      } catch (e) {
+        showAppNotification(
+          context,
+          message: mapBackendError(e.toString()),
+          isError: true,
+        );
+      }
+    }
+
+    Future<void> verify() async {
+      if (otpCtrl.text.trim().length != 6) {
+        showAppNotification(context, message: t('invalid_code'), isError: true);
+        return;
+      }
+      verifying = true;
+      try {
+        await ApiService.verifyEmail(email: email, code: otpCtrl.text.trim());
+        if (mounted) {
+          Navigator.pop(context);
+          showAppNotification(
+            context,
+            message: t('email_verified'),
+            isSuccess: true,
+          );
+        }
+      } catch (e) {
+        if (mounted) {
+          showAppNotification(
+            context,
+            message: mapBackendError(e.toString()),
+            isError: true,
+          );
+        }
+      } finally {
+        verifying = false;
+      }
+    }
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDlgState) {
+          return AlertDialog(
+            title: Text(t('verify_email')),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(t('enter_6_digit_code')),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: otpCtrl,
+                  keyboardType: TextInputType.number,
+                  maxLength: 6,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    fontSize: 24,
+                    letterSpacing: 8,
+                    fontWeight: FontWeight.bold,
+                  ),
+                  decoration: const InputDecoration(
+                    counterText: '',
+                    hintText: '000000',
+                    border: OutlineInputBorder(),
+                  ),
+                  onChanged: (v) {
+                    if (v.length == 6) verify();
+                  },
+                ),
+                const SizedBox(height: 12),
+                TextButton(
+                  onPressed: cooldown > 0
+                      ? null
+                      : () {
+                          setDlgState(() {});
+                          resendCode().then((_) => setDlgState(() {}));
+                        },
+                  child: Text(
+                    cooldown > 0
+                        ? '${t('resend')} (${cooldown}s)'
+                        : t('resend'),
+                  ),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () {
+                  timer?.cancel();
+                  Navigator.pop(ctx);
+                },
+                child: Text(t('cancel')),
+              ),
+              TextButton(
+                onPressed: verifying ? null : verify,
+                child: verifying
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : Text(t('verify')),
+              ),
+            ],
+          );
+        },
       ),
     );
   }

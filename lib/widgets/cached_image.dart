@@ -1,3 +1,4 @@
+//cached_image.dart
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 
@@ -49,10 +50,7 @@ class CachedAppImage extends StatelessWidget {
     );
 
     if (borderRadius != null) {
-      return ClipRRect(
-        borderRadius: borderRadius!,
-        child: img,
-      );
+      return ClipRRect(borderRadius: borderRadius!, child: img);
     }
     return img;
   }

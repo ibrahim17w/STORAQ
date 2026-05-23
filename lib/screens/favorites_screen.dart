@@ -1,3 +1,4 @@
+//favorites_screen.dart
 import 'package:flutter/material.dart';
 import '../services/api_service.dart';
 import '../lang/translations.dart';

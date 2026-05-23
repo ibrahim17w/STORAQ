@@ -1,4 +1,6 @@
+//api_service.dart
 import 'dart:convert';
+import 'dart:typed_data';
 import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -40,8 +42,27 @@ class ApiService {
     await prefs.remove('token');
   }
 
-  static Future<bool> isLoggedIn() async => (await getToken()) != null;
+  static Future<void> setGuest(bool isGuest) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('is_guest', isGuest);
+  }
 
+  static Future<bool> isGuest() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool('is_guest') ?? false;
+  }
+
+  static Future<bool> isLoggedInOrGuest() async {
+    return (await isLoggedIn()) || (await isGuest());
+  }
+
+  static Future<void> logoutGuest() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('is_guest');
+    await prefs.remove('token');
+  }
+
+  static Future<bool> isLoggedIn() async => (await getToken()) != null;
   static Map<String, String> get headers => {
     'Content-Type': 'application/json',
   };
@@ -175,6 +196,7 @@ class ApiService {
       'preferred_language': preferredLanguage,
     };
     if (store != null) body['store'] = store;
+    // If store has lat/lng but no city_id, backend will auto-geocode
 
     final response = await _postWithTimeout(
       '$baseUrl/api/auth/register',
@@ -207,6 +229,20 @@ class ApiService {
     );
   }
 
+  static Future<Map<String, dynamic>> guestLogin() async {
+    final response = await _postWithTimeout(
+      '$baseUrl/api/auth/guest-login',
+      headers: headers,
+    );
+    final data = jsonDecode(response.body) as Map<String, dynamic>;
+    if (response.statusCode == 200) {
+      final token = data['token']?.toString();
+      if (token != null) await setToken(token);
+      return data;
+    }
+    throw Exception(data['error']?.toString() ?? 'Guest login failed');
+  }
+
   static Future<void> logout() async => clearToken();
 
   static Future<void> resendVerification(String email) async {
@@ -219,6 +255,20 @@ class ApiService {
       final data = jsonDecode(response.body) as Map<String, dynamic>;
       throw Exception(data['error']?.toString() ?? 'Failed to resend');
     }
+  }
+
+  static Future<Map<String, dynamic>> verifyEmail({
+    required String email,
+    required String code,
+  }) async {
+    final response = await _postWithTimeout(
+      '$baseUrl/api/auth/verify-email',
+      headers: headers,
+      body: jsonEncode({'email': email, 'code': code}),
+    );
+    final data = jsonDecode(response.body) as Map<String, dynamic>;
+    if (response.statusCode == 200) return data;
+    throw Exception(data['error']?.toString() ?? 'Verification failed');
   }
 
   static Future<Map<String, dynamic>> getCurrentUser() async {
@@ -441,6 +491,9 @@ class ApiService {
     String? phone,
     double? lat,
     double? lng,
+    String? cityId,
+    String? countryCode,
+    String? villageId,
     File? image,
   }) async {
     final request = http.MultipartRequest(
@@ -455,6 +508,12 @@ class ApiService {
     if (phone != null) request.fields['phone'] = phone;
     if (lat != null) request.fields['lat'] = lat.toString();
     if (lng != null) request.fields['lng'] = lng.toString();
+    if (cityId != null) request.fields['city_id'] = cityId;
+    if (countryCode != null) request.fields['country_code'] = countryCode;
+    if (villageId != null) request.fields['village_id'] = villageId;
+    if (cityId != null) request.fields['city_id'] = cityId;
+    if (countryCode != null) request.fields['country_code'] = countryCode;
+    if (villageId != null) request.fields['village_id'] = villageId;
     if (image != null) {
       request.files.add(await http.MultipartFile.fromPath('image', image.path));
     }
@@ -593,6 +652,73 @@ class ApiService {
       }
     } catch (_) {}
     return [];
+  }
+  // ============================================================
+  // GEOCODING / CANONICAL LOCATIONS
+  // ============================================================
+
+  static Future<List<dynamic>> geocodeSearch(String query, String lang) async {
+    final response = await _getWithTimeout(
+      '$baseUrl/api/geocode/search?q=${Uri.encodeComponent(query)}&lang=$lang',
+      headers: publicHeaders,
+      timeout: const Duration(seconds: 10),
+    );
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body) as List<dynamic>;
+    }
+    throw Exception('Geocode search failed');
+  }
+
+  static Future<Map<String, dynamic>> reverseGeocode(
+    double lat,
+    double lng,
+    String lang,
+  ) async {
+    final response = await _getWithTimeout(
+      '$baseUrl/api/geocode/reverse?lat=$lat&lng=$lng&lang=$lang',
+      headers: publicHeaders,
+      timeout: const Duration(seconds: 10),
+    );
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body) as Map<String, dynamic>;
+    }
+    throw Exception('Reverse geocode failed');
+  }
+
+  // ============================================================
+  // ============================================================
+  // IMAGE SEARCH (backend proxy — Gemini key never exposed)
+  // ============================================================
+
+  // FIX: Accept mimeType from caller so PNG/WebP aren't sent as JPEG
+  static Future<String?> searchByImage(
+    Uint8List imageBytes, {
+    String mimeType = 'image/jpeg',
+  }) async {
+    try {
+      final base64Image = base64Encode(imageBytes);
+      final response = await _postWithTimeout(
+        '$baseUrl/api/search/image',
+        headers: await authHeaders,
+        body: jsonEncode({'image': base64Image, 'mimeType': mimeType}),
+        timeout: const Duration(seconds: 15),
+      );
+
+      // FIX: Throw on non-200 so the UI can show the real backend message
+      if (response.statusCode != 200) {
+        final data = jsonDecode(response.body) as Map<String, dynamic>;
+        throw Exception(
+          data['error']?.toString() ??
+              'Image search failed (${response.statusCode})',
+        );
+      }
+
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+      return data['query']?.toString();
+    } catch (e) {
+      if (kDebugMode) print('Image search error: ' + e.toString());
+      rethrow; // Let the caller handle it so real errors reach the UI
+    }
   }
 }
 

@@ -1,3 +1,4 @@
+// map_picker_screen.dart
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:geolocator/geolocator.dart';
@@ -61,12 +62,67 @@ class _MapPickerScreenState extends State<MapPickerScreen> {
     }
   }
 
+  Future<void> _goToUserLocation() async {
+    if (_userLocation == null) {
+      setState(() => _locating = true);
+      await _moveToCurrentLocation();
+    }
+    if (_userLocation != null) {
+      _mapController.move(_userLocation!, 16);
+    }
+  }
+
+  void _zoomIn() {
+    final currentZoom = _mapController.camera.zoom;
+    _mapController.move(
+      _mapController.camera.center,
+      (currentZoom + 1).clamp(2, 20),
+    );
+  }
+
+  void _zoomOut() {
+    final currentZoom = _mapController.camera.zoom;
+    _mapController.move(
+      _mapController.camera.center,
+      (currentZoom - 1).clamp(2, 20),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Pick Store Location'),
         actions: [
+          if (_locating)
+            const Padding(
+              padding: EdgeInsets.all(16),
+              child: SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: Colors.white,
+                ),
+              ),
+            )
+          else ...[
+            IconButton(
+              icon: const Icon(Icons.add),
+              tooltip: 'Zoom in',
+              onPressed: _zoomIn,
+            ),
+            IconButton(
+              icon: const Icon(Icons.remove),
+              tooltip: 'Zoom out',
+              onPressed: _zoomOut,
+            ),
+            IconButton(
+              icon: const Icon(Icons.my_location),
+              tooltip: 'My location',
+              onPressed: _goToUserLocation,
+            ),
+          ],
           if (_selectedPoint != null)
             TextButton(
               onPressed: () => Navigator.pop(context, _selectedPoint),
@@ -85,9 +141,17 @@ class _MapPickerScreenState extends State<MapPickerScreen> {
         options: MapOptions(
           initialCenter: const LatLng(33.510414, 36.278336),
           initialZoom: 13,
+          minZoom: 2,
+          maxZoom: 20,
           onTap: (tapPosition, point) {
             setState(() => _selectedPoint = point);
           },
+          cameraConstraint: CameraConstraint.contain(
+            bounds: LatLngBounds(
+              const LatLng(-85.05112877980659, -180),
+              const LatLng(85.05112877980659, 180),
+            ),
+          ),
         ),
         children: [
           TileLayer(
@@ -164,39 +228,7 @@ class _MapPickerScreenState extends State<MapPickerScreen> {
             ),
         ],
       ),
-      floatingActionButton: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (_userLocation != null)
-            FloatingActionButton.small(
-              heroTag: 'center_user',
-              onPressed: () {
-                if (_userLocation != null) {
-                  _mapController.move(_userLocation!, 16);
-                }
-              },
-              child: const Icon(Icons.my_location),
-            ),
-          const SizedBox(height: 8),
-          FloatingActionButton.small(
-            heroTag: 'refresh_gps',
-            onPressed: () {
-              setState(() => _locating = true);
-              _moveToCurrentLocation();
-            },
-            child: _locating
-                ? const SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: Colors.white,
-                    ),
-                  )
-                : const Icon(Icons.gps_fixed),
-          ),
-        ],
-      ),
+      floatingActionButton: null,
     );
   }
 }

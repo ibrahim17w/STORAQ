@@ -1,3 +1,5 @@
+//register_screen.dart
+import 'dart:async';
 import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -36,6 +38,12 @@ class _RegisterScreenState extends State<RegisterScreen> {
   final _storePhoneCtrl = TextEditingController();
   final _storeLatCtrl = TextEditingController();
   final _storeLngCtrl = TextEditingController();
+
+  // ── Canonical location (NEW) ──
+  String? _selectedCityId;
+  String? _selectedCityDisplay;
+  bool _geocoding = false;
+  List<dynamic> _geocodeResults = [];
 
   bool _isLoading = false;
   bool _obscurePassword = true;
@@ -207,6 +215,74 @@ class _RegisterScreenState extends State<RegisterScreen> {
         _storeLatCtrl.text = result.latitude.toStringAsFixed(6);
         _storeLngCtrl.text = result.longitude.toStringAsFixed(6);
       });
+      // Auto-geocode to canonical city
+      await _autoGeocode(result.latitude, result.longitude);
+    }
+  }
+
+  Future<void> _autoGeocode(double lat, double lng) async {
+    setState(() => _geocoding = true);
+    try {
+      final lang = localeNotifier.value.languageCode;
+      final geo = await ApiService.reverseGeocode(lat, lng, lang);
+      if (geo != null && mounted) {
+        setState(() {
+          _selectedCityId = geo['canonical_id']?.toString();
+          _selectedCityDisplay = geo['display_name']?.toString();
+          _storeCityCtrl.text = geo['display_name']?.toString() ?? '';
+          // Extract country from canonical_id (e.g. "sy-hama-masyaf")
+          final parts = _selectedCityId?.split('-');
+          if (parts != null && parts.isNotEmpty) {
+            final cc = parts[0].toUpperCase();
+            if (countries.contains(cc)) {
+              _selectedCountry = cc;
+            }
+          }
+        });
+      }
+    } catch (e) {
+      // Silent fail — user can type manually
+    } finally {
+      if (mounted) setState(() => _geocoding = false);
+    }
+  }
+
+  Future<void> _searchCity(String query) async {
+    if (query.trim().length < 2) return;
+    setState(() => _geocoding = true);
+    try {
+      final lang = localeNotifier.value.languageCode;
+      final results = await ApiService.geocodeSearch(query, lang);
+      if (mounted) {
+        setState(() {
+          _geocodeResults = results;
+          _geocoding = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) setState(() => _geocoding = false);
+    }
+  }
+
+  void _selectGeocodeResult(dynamic result) {
+    setState(() {
+      _selectedCityId = result['canonical_id']?.toString();
+      _selectedCityDisplay = result['display_name']?.toString();
+      _storeCityCtrl.text = result['display_name']?.toString() ?? '';
+      _storeLatCtrl.text = result['lat']?.toString() ?? '';
+      _storeLngCtrl.text = result['lng']?.toString() ?? '';
+      _geocodeResults = [];
+      final cc = result['country_code']?.toString().toUpperCase();
+      if (cc != null && countries.contains(cc)) {
+        _selectedCountry = cc;
+      }
+    });
+  }
+
+  /// Auto-select first result (used by Enter key or initial tap)
+  void _autoSelectFirstResult() {
+    if (_geocodeResults.isNotEmpty) {
+      _selectGeocodeResult(_geocodeResults.first);
     }
   }
 
@@ -235,6 +311,90 @@ class _RegisterScreenState extends State<RegisterScreen> {
       case PasswordStrength.strong:
         return t('strong');
     }
+  }
+
+  /// Live checklist that shows exactly which rules are met.
+  Widget _buildPasswordChecklist(String pwd) {
+    final requirements = [
+      ('At least 8 characters', pwd.length >= 8),
+      ('Uppercase letter (A-Z)', pwd.contains(RegExp(r'[A-Z]'))),
+      ('Lowercase letter (a-z)', pwd.contains(RegExp(r'[a-z]'))),
+      ('Number (0-9)', pwd.contains(RegExp(r'[0-9]'))),
+      ('Special character (!@#\$%^&*)', pwd.contains(RegExp(r'[^A-Za-z0-9]'))),
+    ];
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 8, bottom: 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: requirements.map((req) {
+          final met = req.$2;
+          return Padding(
+            padding: const EdgeInsets.symmetric(vertical: 2),
+            child: Row(
+              children: [
+                Icon(
+                  met ? Icons.check_circle : Icons.cancel,
+                  size: 14,
+                  color: met ? Colors.green.shade600 : Colors.red.shade300,
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  req.$1,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: met ? Colors.green.shade700 : Colors.grey.shade600,
+                    fontWeight: met ? FontWeight.w600 : FontWeight.normal,
+                  ),
+                ),
+              ],
+            ),
+          );
+        }).toList(),
+      ),
+    );
+  }
+
+  /// Converts backend OTP/reset errors into human-friendly text.
+  String _getFriendlyError(dynamic error) {
+    final raw = error.toString();
+    final isAr = localeNotifier.value.languageCode == 'ar';
+    String msg(String en, String ar) => isAr ? ar : en;
+
+    final jsonMatch = RegExp(r'"error"\s*:\s*"([^"]+)"').firstMatch(raw);
+    final serverMsg = jsonMatch?.group(1)?.toLowerCase() ?? raw.toLowerCase();
+
+    if (serverMsg.contains('too many failed attempts') ||
+        serverMsg.contains('locked')) {
+      return msg(
+        'Too many failed attempts. This code has been locked for your security. Please request a new code.',
+        'لقد تجاوزت الحد المسموح من المحاولات. تم إلغاء هذا الرمز لحماية حسابك. يرجى طلب رمز جديد.',
+      );
+    }
+    if (serverMsg.contains('expired') ||
+        serverMsg.contains('no longer valid')) {
+      return msg(
+        'This code has expired or is no longer valid. Please request a new one.',
+        'انتهت صلاحية هذا الرمز أو لم يعد صالحاً. يرجى طلب رمز جديد.',
+      );
+    }
+    if (serverMsg.contains('incorrect') ||
+        serverMsg.contains('invalid') ||
+        serverMsg.contains('wrong')) {
+      return msg(
+        'Incorrect code. Please try again.',
+        'الرمز غير صحيح. يرجى المحاولة مرة أخرى.',
+      );
+    }
+    if (serverMsg.contains('wait')) {
+      final waitMatch = RegExp(r'Please wait [^.]+').firstMatch(raw);
+      if (waitMatch != null) return waitMatch.group(0)!;
+      return msg(
+        'Please wait a moment before trying again.',
+        'يرجى الانتظار لحظة قبل المحاولة مرة أخرى.',
+      );
+    }
+    return mapBackendError(raw);
   }
 
   String? _validateEmail(String? value) {
@@ -302,11 +462,18 @@ class _RegisterScreenState extends State<RegisterScreen> {
       storeData = {
         'name': _storeNameCtrl.text.trim(),
         'city': _storeCityCtrl.text.trim(),
-        'village': _storeVillageCtrl.text.trim(),
+        'location_description': _storeVillageCtrl.text.trim().isNotEmpty
+            ? _storeVillageCtrl.text.trim()
+            : null,
         'country': _selectedCountry,
         'phone': _storePhoneCtrl.text.trim(),
         'lat': double.tryParse(_storeLatCtrl.text.trim()),
         'lng': double.tryParse(_storeLngCtrl.text.trim()),
+        // NEW: canonical IDs for multilingual matching
+        'city_id': _selectedCityId,
+        'country_code': _selectedCountry != null
+            ? _selectedCountry!.toLowerCase()
+            : null,
       };
     }
 
@@ -320,41 +487,210 @@ class _RegisterScreenState extends State<RegisterScreen> {
         role: _selectedRole!,
         store: storeData,
         preferredLanguage: localeNotifier.value.languageCode,
+      ).timeout(
+        const Duration(seconds: 10),
+        onTimeout: () => throw TimeoutException(t('request_timeout')),
       );
       if (mounted) {
-        showDialog(
-          context: context,
-          barrierDismissible: false,
-          builder: (_) => AlertDialog(
-            title: Text(t('account_created')),
-            content: Text(t('check_email_verify')),
-            actions: [
-              TextButton(
-                onPressed: () {
-                  Navigator.pop(context);
-                  Navigator.pushAndRemoveUntil(
-                    context,
-                    MaterialPageRoute(builder: (_) => const LoginScreen()),
-                    (route) => false,
-                  );
-                },
-                child: Text(t('ok')),
-              ),
-            ],
-          ),
+        _showOtpDialog(_emailCtrl.text.trim());
+      }
+    } on TimeoutException catch (_) {
+      if (mounted) {
+        showAppNotification(
+          context,
+          message: t('request_timeout'),
+          isError: true,
         );
       }
     } catch (e) {
       if (mounted) {
         showAppNotification(
           context,
-          message: mapBackendError(e.toString()),
+          message: _getFriendlyError(e),
           isError: true,
         );
       }
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
+  }
+
+  void _showOtpDialog(String email) {
+    final otpCtrl = TextEditingController();
+    bool verifying = false;
+    int cooldown = 0;
+    Timer? timer;
+
+    void startCooldown() {
+      cooldown = 60;
+      timer?.cancel();
+      timer = Timer.periodic(const Duration(seconds: 1), (t) {
+        if (cooldown > 0) {
+          cooldown--;
+        } else {
+          t.cancel();
+        }
+      });
+    }
+
+    Future<void> resendCode() async {
+      try {
+        await ApiService.resendVerification(email).timeout(
+          const Duration(seconds: 10),
+          onTimeout: () => throw TimeoutException(t('request_timeout')),
+        );
+        startCooldown();
+        showAppNotification(
+          context,
+          message: t('verification_email_sent'),
+          isSuccess: true,
+        );
+      } on TimeoutException catch (_) {
+        showAppNotification(
+          context,
+          message: t('request_timeout'),
+          isError: true,
+        );
+      } catch (e) {
+        showAppNotification(
+          context,
+          message: _getFriendlyError(e),
+          isError: true,
+        );
+      }
+    }
+
+    Future<void> verify() async {
+      if (otpCtrl.text.trim().length != 6) {
+        showAppNotification(context, message: t('invalid_code'), isError: true);
+        return;
+      }
+      verifying = true;
+      try {
+        await ApiService.verifyEmail(
+          email: email,
+          code: otpCtrl.text.trim(),
+        ).timeout(
+          const Duration(seconds: 10),
+          onTimeout: () => throw TimeoutException(t('request_timeout')),
+        );
+        if (mounted) {
+          Navigator.pop(context);
+          showAppNotification(
+            context,
+            message: t('email_verified'),
+            isSuccess: true,
+          );
+          Navigator.pushAndRemoveUntil(
+            context,
+            MaterialPageRoute(builder: (_) => const LoginScreen()),
+            (route) => false,
+          );
+        }
+      } on TimeoutException catch (_) {
+        if (mounted) {
+          showAppNotification(
+            context,
+            message: t('request_timeout'),
+            isError: true,
+          );
+        }
+      } catch (e) {
+        if (mounted) {
+          showAppNotification(
+            context,
+            message: _getFriendlyError(e),
+            isError: true,
+          );
+        }
+      } finally {
+        verifying = false;
+      }
+    }
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDlgState) {
+          return AlertDialog(
+            title: Text(t('verify_email')),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(t('enter_6_digit_code')),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: otpCtrl,
+                  keyboardType: TextInputType.number,
+                  maxLength: 6,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    fontSize: 24,
+                    letterSpacing: 8,
+                    fontWeight: FontWeight.bold,
+                  ),
+                  decoration: const InputDecoration(
+                    counterText: '',
+                    hintText: '000000',
+                    border: OutlineInputBorder(),
+                  ),
+                  onChanged: (v) {
+                    if (v.length == 6) {
+                      setDlgState(() {});
+                      verify().then((_) => setDlgState(() {}));
+                    }
+                  },
+                ),
+                const SizedBox(height: 12),
+                TextButton(
+                  onPressed: cooldown > 0
+                      ? null
+                      : () {
+                          setDlgState(() {});
+                          resendCode().then((_) => setDlgState(() {}));
+                        },
+                  child: Text(
+                    cooldown > 0
+                        ? '${t('resend')} (${cooldown}s)'
+                        : t('resend'),
+                  ),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () {
+                  timer?.cancel();
+                  Navigator.pop(ctx);
+                  Navigator.pushAndRemoveUntil(
+                    context,
+                    MaterialPageRoute(builder: (_) => const LoginScreen()),
+                    (route) => false,
+                  );
+                },
+                child: Text(t('skip')),
+              ),
+              TextButton(
+                onPressed: verifying
+                    ? null
+                    : () {
+                        setDlgState(() {});
+                        verify().then((_) => setDlgState(() {}));
+                      },
+                child: verifying
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : Text(t('verify')),
+              ),
+            ],
+          );
+        },
+      ),
+    );
   }
 
   @override
@@ -517,48 +853,225 @@ class _RegisterScreenState extends State<RegisterScreen> {
                                             ),
                                           ),
                                           const SizedBox(height: 12),
+                                          // NEW: Searchable city field with geocoding + auto-select
                                           TextFormField(
                                             controller: _storeCityCtrl,
                                             textInputAction:
                                                 TextInputAction.next,
+                                            onChanged: (v) {
+                                              if (v.trim().length >= 3) {
+                                                _searchCity(v.trim());
+                                              } else if (v.trim().isEmpty) {
+                                                setState(
+                                                  () => _geocodeResults = [],
+                                                );
+                                              }
+                                            },
+                                            onEditingComplete: () {
+                                              // Auto-select first result on Enter/dismiss keyboard
+                                              _autoSelectFirstResult();
+                                              FocusScope.of(
+                                                context,
+                                              ).nextFocus();
+                                            },
                                             decoration: InputDecoration(
                                               labelText: '${t('city')} *',
                                               prefixIcon: const Icon(
                                                 Icons.location_city,
                                               ),
+                                              suffixIcon: _geocoding
+                                                  ? const SizedBox(
+                                                      width: 20,
+                                                      height: 20,
+                                                      child:
+                                                          CircularProgressIndicator(
+                                                            strokeWidth: 2,
+                                                          ),
+                                                    )
+                                                  : (_selectedCityId != null
+                                                        ? const Icon(
+                                                            Icons.check_circle,
+                                                            color: Colors.green,
+                                                          )
+                                                        : null),
                                               border:
                                                   const OutlineInputBorder(),
                                             ),
                                           ),
+                                          // Geocoding results dropdown
+                                          if (_geocodeResults.isNotEmpty)
+                                            Container(
+                                              margin: const EdgeInsets.only(
+                                                top: 4,
+                                              ),
+                                              decoration: BoxDecoration(
+                                                color: Theme.of(
+                                                  context,
+                                                ).colorScheme.surface,
+                                                borderRadius:
+                                                    BorderRadius.circular(8),
+                                                border: Border.all(
+                                                  color: Theme.of(context)
+                                                      .colorScheme
+                                                      .outline
+                                                      .withOpacity(0.3),
+                                                ),
+                                                boxShadow: [
+                                                  BoxShadow(
+                                                    color: Colors.black
+                                                        .withOpacity(0.1),
+                                                    blurRadius: 8,
+                                                    offset: const Offset(0, 4),
+                                                  ),
+                                                ],
+                                              ),
+                                              constraints: const BoxConstraints(
+                                                maxHeight: 200,
+                                              ),
+                                              child: SingleChildScrollView(
+                                                child: Column(
+                                                  mainAxisSize:
+                                                      MainAxisSize.min,
+                                                  children: [
+                                                    // Auto-select hint
+                                                    Container(
+                                                      padding:
+                                                          const EdgeInsets.symmetric(
+                                                            horizontal: 12,
+                                                            vertical: 6,
+                                                          ),
+                                                      color: Theme.of(context)
+                                                          .colorScheme
+                                                          .primaryContainer
+                                                          .withOpacity(0.3),
+                                                      child: Row(
+                                                        children: [
+                                                          Icon(
+                                                            Icons
+                                                                .keyboard_return,
+                                                            size: 14,
+                                                            color:
+                                                                Theme.of(
+                                                                      context,
+                                                                    )
+                                                                    .colorScheme
+                                                                    .primary,
+                                                          ),
+                                                          const SizedBox(
+                                                            width: 6,
+                                                          ),
+                                                          Text(
+                                                            t(
+                                                                  'press_enter_auto',
+                                                                ) ??
+                                                                'Press Enter to select first',
+                                                            style: TextStyle(
+                                                              fontSize: 11,
+                                                              color:
+                                                                  Theme.of(
+                                                                        context,
+                                                                      )
+                                                                      .colorScheme
+                                                                      .primary,
+                                                            ),
+                                                          ),
+                                                        ],
+                                                      ),
+                                                    ),
+                                                    ..._geocodeResults.map((r) {
+                                                      final display =
+                                                          r['display_name']
+                                                              ?.toString() ??
+                                                          '';
+                                                      final cid =
+                                                          r['canonical_id']
+                                                              ?.toString() ??
+                                                          '';
+                                                      return ListTile(
+                                                        dense: true,
+                                                        leading: const Icon(
+                                                          Icons.place,
+                                                          size: 20,
+                                                        ),
+                                                        title: Text(
+                                                          display,
+                                                          maxLines: 1,
+                                                          overflow: TextOverflow
+                                                              .ellipsis,
+                                                        ),
+                                                        subtitle: Text(
+                                                          cid,
+                                                          style: TextStyle(
+                                                            fontSize: 10,
+                                                            color: Colors
+                                                                .grey
+                                                                .shade500,
+                                                          ),
+                                                        ),
+                                                        onTap: () =>
+                                                            _selectGeocodeResult(
+                                                              r,
+                                                            ),
+                                                      );
+                                                    }).toList(),
+                                                  ],
+                                                ),
+                                              ),
+                                            ),
+                                          if (_selectedCityId != null)
+                                            Padding(
+                                              padding: const EdgeInsets.only(
+                                                top: 4,
+                                              ),
+                                              child: Row(
+                                                children: [
+                                                  Icon(
+                                                    Icons.check_circle,
+                                                    size: 14,
+                                                    color:
+                                                        Colors.green.shade600,
+                                                  ),
+                                                  const SizedBox(width: 6),
+                                                  Expanded(
+                                                    child: Text(
+                                                      'ID: $_selectedCityId',
+                                                      style: TextStyle(
+                                                        fontSize: 11,
+                                                        color: Colors
+                                                            .green
+                                                            .shade700,
+                                                      ),
+                                                      maxLines: 1,
+                                                      overflow:
+                                                          TextOverflow.ellipsis,
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                            ),
                                           const SizedBox(height: 12),
                                           TextFormField(
                                             controller: _storeVillageCtrl,
                                             textInputAction:
                                                 TextInputAction.next,
+                                            maxLines: 2,
                                             decoration: InputDecoration(
-                                              labelText: t('village'),
-                                              prefixIcon: const Icon(Icons.map),
+                                              labelText:
+                                                  '${t('location_description') ?? 'Location description'} (${t('optional') ?? 'optional'})',
+                                              hintText:
+                                                  t('location_hint') ??
+                                                  'e.g. Next to Al-Fayhaa Market, Main Street',
+                                              prefixIcon: const Icon(
+                                                Icons.notes,
+                                              ),
                                               border:
                                                   const OutlineInputBorder(),
                                             ),
                                           ),
                                           const SizedBox(height: 12),
-                                          DropdownButtonFormField<String>(
+                                          // Searchable country dropdown with auto-detection
+                                          _SearchableCountryField(
                                             value: _selectedCountry,
-                                            decoration: InputDecoration(
-                                              labelText: '${t('country')} *',
-                                              prefixIcon: const Icon(
-                                                Icons.public,
-                                              ),
-                                              border:
-                                                  const OutlineInputBorder(),
-                                            ),
-                                            items: countries.map((c) {
-                                              return DropdownMenuItem<String>(
-                                                value: c,
-                                                child: Text(c),
-                                              );
-                                            }).toList(),
                                             onChanged: (value) => setState(
                                               () => _selectedCountry = value,
                                             ),
@@ -681,6 +1194,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
                                               ),
                                             ),
                                           ],
+                                        ),
+                                        // Live password requirement checklist
+                                        _buildPasswordChecklist(
+                                          _passwordCtrl.text,
                                         ),
                                         const SizedBox(height: 4),
                                         Align(
@@ -826,5 +1343,284 @@ class _RegisterScreenState extends State<RegisterScreen> {
     _storeLatCtrl.dispose();
     _storeLngCtrl.dispose();
     super.dispose();
+  }
+}
+
+// ============================================================
+// SEARCHABLE COUNTRY DROPDOWN (inline typing + Enter selects)
+// ============================================================
+
+class _SearchableCountryField extends StatefulWidget {
+  final String? value;
+  final ValueChanged<String?> onChanged;
+
+  const _SearchableCountryField({this.value, required this.onChanged});
+
+  @override
+  State<_SearchableCountryField> createState() =>
+      _SearchableCountryFieldState();
+}
+
+class _SearchableCountryFieldState extends State<_SearchableCountryField> {
+  final _controller = TextEditingController();
+  final _focusNode = FocusNode();
+  bool _isOpen = false;
+  List<String> _filtered = [];
+
+  // Common names so users can type "syr" / "syria" and find SY
+  static const Map<String, String> _countryNames = {
+    'AF': 'Afghanistan',
+    'AL': 'Albania',
+    'DZ': 'Algeria',
+    'AR': 'Argentina',
+    'AU': 'Australia',
+    'AT': 'Austria',
+    'BD': 'Bangladesh',
+    'BE': 'Belgium',
+    'BR': 'Brazil',
+    'CA': 'Canada',
+    'CN': 'China',
+    'CO': 'Colombia',
+    'EG': 'Egypt',
+    'FR': 'France',
+    'DE': 'Germany',
+    'GR': 'Greece',
+    'IN': 'India',
+    'ID': 'Indonesia',
+    'IR': 'Iran',
+    'IQ': 'Iraq',
+    'IE': 'Ireland',
+    'IT': 'Italy',
+    'JP': 'Japan',
+    'JO': 'Jordan',
+    'KW': 'Kuwait',
+    'LB': 'Lebanon',
+    'LY': 'Libya',
+    'MY': 'Malaysia',
+    'MX': 'Mexico',
+    'MA': 'Morocco',
+    'NL': 'Netherlands',
+    'NZ': 'New Zealand',
+    'NG': 'Nigeria',
+    'PK': 'Pakistan',
+    'PS': 'Palestine',
+    'PE': 'Peru',
+    'PH': 'Philippines',
+    'PL': 'Poland',
+    'QA': 'Qatar',
+    'RU': 'Russia',
+    'SA': 'Saudi Arabia',
+    'SG': 'Singapore',
+    'ZA': 'South Africa',
+    'KR': 'South Korea',
+    'ES': 'Spain',
+    'SE': 'Sweden',
+    'CH': 'Switzerland',
+    'SY': 'Syria',
+    'TW': 'Taiwan',
+    'TH': 'Thailand',
+    'TN': 'Tunisia',
+    'TR': 'Turkey',
+    'UA': 'Ukraine',
+    'AE': 'United Arab Emirates',
+    'GB': 'United Kingdom',
+    'US': 'United States',
+    'YE': 'Yemen',
+  };
+
+  @override
+  void initState() {
+    super.initState();
+    _filtered = countries;
+    if (widget.value != null) _controller.text = widget.value!;
+    _focusNode.addListener(_onFocusChange);
+  }
+
+  void _onFocusChange() {
+    if (_focusNode.hasFocus) {
+      setState(() {
+        _isOpen = true;
+        _filtered = countries;
+      });
+    } else {
+      // Slight delay so a tap on a dropdown item registers before closing
+      Future.delayed(const Duration(milliseconds: 200), () {
+        if (mounted && !_focusNode.hasFocus) {
+          setState(() => _isOpen = false);
+        }
+      });
+    }
+  }
+
+  @override
+  void didUpdateWidget(_SearchableCountryField oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.value != oldWidget.value) {
+      if (widget.value != null) {
+        if (_controller.text != widget.value) _controller.text = widget.value!;
+      } else {
+        _controller.clear();
+      }
+    }
+  }
+
+  void _filter(String query) {
+    setState(() {
+      if (query.isEmpty) {
+        _filtered = countries;
+      } else {
+        final q = query.toLowerCase();
+        _filtered = countries.where((c) {
+          final name = _countryNames[c.toUpperCase()]?.toLowerCase() ?? '';
+          return c.toLowerCase().contains(q) || name.contains(q);
+        }).toList();
+      }
+      _isOpen = true;
+    });
+  }
+
+  void _select(String country) {
+    _controller.text = country;
+    widget.onChanged(country);
+    setState(() => _isOpen = false);
+    _focusNode.unfocus();
+  }
+
+  void _onSubmitted(String value) {
+    if (_filtered.isNotEmpty) {
+      _select(_filtered.first);
+    } else {
+      setState(() => _isOpen = false);
+      _focusNode.unfocus();
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    _focusNode.removeListener(_onFocusChange);
+    _focusNode.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        TextFormField(
+          controller: _controller,
+          focusNode: _focusNode,
+          onChanged: _filter,
+          onEditingComplete: () => _onSubmitted(_controller.text),
+          decoration: InputDecoration(
+            labelText: '${t('country')} *',
+            prefixIcon: const Icon(Icons.public),
+            suffixIcon: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (widget.value != null)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: Icon(
+                      Icons.check_circle,
+                      color: Colors.green.shade600,
+                      size: 20,
+                    ),
+                  ),
+                Icon(
+                  _isOpen ? Icons.arrow_drop_up : Icons.arrow_drop_down,
+                  color: Colors.grey,
+                ),
+              ],
+            ),
+            border: const OutlineInputBorder(),
+          ),
+        ),
+        if (_isOpen)
+          Container(
+            margin: const EdgeInsets.only(top: 4),
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.surface,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                color: Theme.of(context).colorScheme.outline.withOpacity(0.3),
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.1),
+                  blurRadius: 8,
+                  offset: const Offset(0, 4),
+                ),
+              ],
+            ),
+            constraints: const BoxConstraints(maxHeight: 280),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (_controller.text.isNotEmpty && _filtered.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.all(12),
+                    child: Text('No countries found'),
+                  ),
+                Flexible(
+                  child: ListView.builder(
+                    shrinkWrap: true,
+                    padding: EdgeInsets.zero,
+                    itemCount: _filtered.length,
+                    itemBuilder: (context, i) {
+                      final country = _filtered[i];
+                      final isSelected = widget.value == country;
+                      return ListTile(
+                        dense: true,
+                        leading: Text(
+                          _countryEmoji(country),
+                          style: const TextStyle(fontSize: 20),
+                        ),
+                        title: Text(
+                          '${_countryNames[country.toUpperCase()] ?? country} ($country)',
+                          style: TextStyle(
+                            fontWeight: isSelected
+                                ? FontWeight.bold
+                                : FontWeight.normal,
+                            color: isSelected
+                                ? Theme.of(context).colorScheme.primary
+                                : null,
+                          ),
+                        ),
+                        trailing: isSelected
+                            ? Icon(
+                                Icons.check,
+                                color: Theme.of(context).colorScheme.primary,
+                                size: 18,
+                              )
+                            : null,
+                        tileColor: isSelected
+                            ? Theme.of(
+                                context,
+                              ).colorScheme.primaryContainer.withOpacity(0.3)
+                            : null,
+                        onTap: () => _select(country),
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+      ],
+    );
+  }
+
+  String _countryEmoji(String countryCode) {
+    final code = countryCode.toUpperCase();
+    if (code.length != 2) return '🌐';
+    final flagOffset = 0x1F1E6;
+    final a = code.codeUnitAt(0);
+    final b = code.codeUnitAt(1);
+    if (a < 65 || a > 90 || b < 65 || b > 90) return '🌐';
+    return String.fromCharCode(flagOffset + a - 65) +
+        String.fromCharCode(flagOffset + b - 65);
   }
 }
