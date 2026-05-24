@@ -1,4 +1,4 @@
-//api_service.dart
+// lib/services/api_service.dart
 import 'dart:convert';
 import 'dart:typed_data';
 import 'dart:io';
@@ -155,7 +155,6 @@ class ApiService {
         );
   }
 
-  // FIX: Added PUT helper to match backend endpoints
   static Future<http.Response> _putWithTimeout(
     String url, {
     Map<String, String>? headers,
@@ -196,7 +195,6 @@ class ApiService {
       'preferred_language': preferredLanguage,
     };
     if (store != null) body['store'] = store;
-    // If store has lat/lng but no city_id, backend will auto-geocode
 
     final response = await _postWithTimeout(
       '$baseUrl/api/auth/register',
@@ -223,7 +221,6 @@ class ApiService {
       if (token != null) await setToken(token);
       return data;
     }
-    // FIX: Show actual server response body for debugging instead of generic "Login failed"
     throw Exception(
       data['error']?.toString() ?? data['message']?.toString() ?? response.body,
     );
@@ -281,7 +278,6 @@ class ApiService {
     throw Exception(data['error']?.toString() ?? 'Failed');
   }
 
-  // FIX: Use PUT instead of POST to match backend
   static Future<Map<String, dynamic>> updateProfile({
     required String fullName,
     required String phone,
@@ -296,7 +292,6 @@ class ApiService {
     throw Exception(data['error']?.toString() ?? 'Update failed');
   }
 
-  // FIX: Use PUT instead of POST to match backend
   static Future<void> changePassword({
     required String currentPassword,
     required String newPassword,
@@ -327,7 +322,6 @@ class ApiService {
     }
   }
 
-  // FIX: Use PUT instead of POST to match backend
   static Future<void> updatePreferredLanguage(String lang) async {
     final response = await _putWithTimeout(
       '$baseUrl/api/me/language',
@@ -369,6 +363,76 @@ class ApiService {
     if (response.statusCode != 200) {
       throw Exception(data['error']?.toString() ?? 'Failed');
     }
+  }
+
+  // ============================================================
+  // CATEGORIES
+  // ============================================================
+
+  static Future<List<dynamic>> fetchCategories() async {
+    final response = await _getWithTimeout(
+      '$baseUrl/api/categories',
+      headers: publicHeaders,
+      useCache: true,
+    );
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body) as List<dynamic>;
+    }
+    throw Exception('Failed to load categories');
+  }
+
+  // ============================================================
+  // BARCODE
+  // ============================================================
+
+  static Future<Map<String, dynamic>?> lookupBarcode(String barcode) async {
+    final response = await _getWithTimeout(
+      '$baseUrl/api/products/barcode/$barcode',
+      headers: publicHeaders,
+    );
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body) as Map<String, dynamic>;
+    }
+    if (response.statusCode == 404) return null;
+    throw Exception('Barcode lookup failed');
+  }
+
+  static Future<Map<String, dynamic>> checkBarcodeUnique(
+    String barcode, {
+    int? excludeId,
+  }) async {
+    var url =
+        '$baseUrl/api/products/check-barcode?barcode=${Uri.encodeComponent(barcode)}';
+    if (excludeId != null) url += '&exclude_id=$excludeId';
+    final response = await _getWithTimeout(url, headers: publicHeaders);
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body) as Map<String, dynamic>;
+    }
+    throw Exception('Barcode check failed');
+  }
+
+  static Future<Map<String, dynamic>?> validateBarcode(String barcode) async {
+    final response = await _getWithTimeout(
+      '$baseUrl/api/products/barcode/validate?code=${Uri.encodeComponent(barcode)}',
+      headers: publicHeaders,
+    );
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body) as Map<String, dynamic>;
+    }
+    if (response.statusCode == 404) return null;
+    throw Exception('Barcode validation failed');
+  }
+
+  static Future<Map<String, dynamic>> findProductByBarcode(
+    String barcode,
+  ) async {
+    final response = await _getWithTimeout(
+      '$baseUrl/api/products/barcode/$barcode',
+      headers: publicHeaders,
+    );
+    final data = jsonDecode(response.body) as Map<String, dynamic>;
+    if (response.statusCode == 200) return data;
+    throw Exception(data['error']?.toString() ?? 'Product not found');
   }
 
   // ============================================================
@@ -430,7 +494,10 @@ class ApiService {
     required int quantity,
     String? description,
     String? barcode,
+    int? categoryId,
+    int? lowStockThreshold,
     File? image,
+    List<File>? extraImages,
   }) async {
     final request = http.MultipartRequest(
       'POST',
@@ -442,8 +509,19 @@ class ApiService {
     request.fields['quantity'] = quantity.toString();
     if (description != null) request.fields['description'] = description;
     if (barcode != null) request.fields['barcode'] = barcode;
+    if (categoryId != null)
+      request.fields['category_id'] = categoryId.toString();
+    if (lowStockThreshold != null)
+      request.fields['low_stock_threshold'] = lowStockThreshold.toString();
     if (image != null) {
       request.files.add(await http.MultipartFile.fromPath('image', image.path));
+    }
+    if (extraImages != null && extraImages.isNotEmpty) {
+      for (final img in extraImages) {
+        request.files.add(
+          await http.MultipartFile.fromPath('extra_images', img.path),
+        );
+      }
     }
 
     final streamed = await request.send().timeout(const Duration(seconds: 15));
@@ -460,7 +538,11 @@ class ApiService {
     required int quantity,
     String? description,
     String? barcode,
+    int? categoryId,
+    int? lowStockThreshold,
     File? image,
+    List<File>? extraImages,
+    List<String>? existingImages,
   }) async {
     final request = http.MultipartRequest(
       'PUT',
@@ -472,8 +554,21 @@ class ApiService {
     request.fields['quantity'] = quantity.toString();
     if (description != null) request.fields['description'] = description;
     if (barcode != null) request.fields['barcode'] = barcode;
+    if (categoryId != null)
+      request.fields['category_id'] = categoryId.toString();
+    if (lowStockThreshold != null)
+      request.fields['low_stock_threshold'] = lowStockThreshold.toString();
+    if (existingImages != null)
+      request.fields['existing_images'] = jsonEncode(existingImages);
     if (image != null) {
       request.files.add(await http.MultipartFile.fromPath('image', image.path));
+    }
+    if (extraImages != null && extraImages.isNotEmpty) {
+      for (final img in extraImages) {
+        request.files.add(
+          await http.MultipartFile.fromPath('extra_images', img.path),
+        );
+      }
     }
 
     final streamed = await request.send().timeout(const Duration(seconds: 15));
@@ -508,9 +603,6 @@ class ApiService {
     if (phone != null) request.fields['phone'] = phone;
     if (lat != null) request.fields['lat'] = lat.toString();
     if (lng != null) request.fields['lng'] = lng.toString();
-    if (cityId != null) request.fields['city_id'] = cityId;
-    if (countryCode != null) request.fields['country_code'] = countryCode;
-    if (villageId != null) request.fields['village_id'] = villageId;
     if (cityId != null) request.fields['city_id'] = cityId;
     if (countryCode != null) request.fields['country_code'] = countryCode;
     if (villageId != null) request.fields['village_id'] = villageId;
@@ -552,6 +644,192 @@ class ApiService {
       final data = jsonDecode(response.body) as Map<String, dynamic>;
       throw Exception(data['error']?.toString() ?? 'Failed');
     }
+  }
+
+  // ============================================================
+  // PRODUCT IMAGES
+  // ============================================================
+
+  static Future<List<dynamic>> fetchProductImages(int productId) async {
+    final response = await _getWithTimeout(
+      '$baseUrl/api/products/$productId/images',
+      headers: publicHeaders,
+    );
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body) as List<dynamic>;
+    }
+    return [];
+  }
+
+  static Future<void> uploadProductImage(int productId, File image) async {
+    final request = http.MultipartRequest(
+      'POST',
+      Uri.parse('$baseUrl/api/products/$productId/images'),
+    );
+    request.headers.addAll(await multipartAuthHeaders);
+    request.files.add(await http.MultipartFile.fromPath('image', image.path));
+    final streamed = await request.send().timeout(const Duration(seconds: 15));
+    final response = await http.Response.fromStream(streamed);
+    if (response.statusCode != 201) {
+      throw Exception('Image upload failed');
+    }
+  }
+
+  // ============================================================
+  // CHECKOUT & ORDERS
+  // ============================================================
+
+  static Future<Map<String, dynamic>> checkout({
+    required List<Map<String, dynamic>> items,
+    String paymentMethod = 'cash',
+    String? notes,
+  }) async {
+    final response = await _postWithTimeout(
+      '$baseUrl/api/checkout',
+      headers: await authHeaders,
+      body: jsonEncode({
+        'items': items,
+        'payment_method': paymentMethod,
+        'notes': notes,
+      }),
+    );
+    final data = jsonDecode(response.body) as Map<String, dynamic>;
+    if (response.statusCode == 201) return data;
+    throw Exception(data['error']?.toString() ?? 'Checkout failed');
+  }
+
+  static Future<Map<String, dynamic>> createOrder({
+    required List<Map<String, dynamic>> items,
+    String? customerName,
+    String? customerPhone,
+    double discount = 0,
+    double tax = 0,
+    String paymentMethod = 'cash',
+    String? notes,
+  }) async {
+    final body = <String, dynamic>{
+      'items': items,
+      'discount': discount,
+      'tax': tax,
+      'payment_method': paymentMethod,
+    };
+    if (customerName != null) body['customer_name'] = customerName;
+    if (customerPhone != null) body['customer_phone'] = customerPhone;
+    if (notes != null) body['notes'] = notes;
+
+    final response = await _postWithTimeout(
+      '$baseUrl/api/orders',
+      headers: await authHeaders,
+      body: jsonEncode(body),
+    );
+    final data = jsonDecode(response.body) as Map<String, dynamic>;
+    if (response.statusCode == 201) return data;
+    throw Exception(data['error']?.toString() ?? 'Checkout failed');
+  }
+
+  static Future<List<dynamic>> fetchOrders({
+    int limit = 50,
+    int offset = 0,
+  }) async {
+    final response = await _getWithTimeout(
+      '$baseUrl/api/orders?limit=$limit&offset=$offset',
+      headers: await authHeaders,
+    );
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body) as List<dynamic>;
+    }
+    throw Exception('Failed to load orders');
+  }
+
+  static Future<Map<String, dynamic>> fetchOrder(int id) async {
+    final response = await _getWithTimeout(
+      '$baseUrl/api/orders/$id',
+      headers: await authHeaders,
+    );
+    final data = jsonDecode(response.body) as Map<String, dynamic>;
+    if (response.statusCode == 200) return data;
+    throw Exception(data['error']?.toString() ?? 'Order not found');
+  }
+
+  // ============================================================
+  // RECEIPT SETTINGS
+  // ============================================================
+
+  static Future<Map<String, dynamic>> getReceiptSettings() async {
+    final response = await _getWithTimeout(
+      '$baseUrl/api/my-store/receipt-settings',
+      headers: await authHeaders,
+    );
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body) as Map<String, dynamic>;
+    }
+    return {
+      'footer_message': 'Thank you for your purchase!',
+      'show_logo': true,
+      'show_barcode': true,
+      'currency_symbol': 'SYP',
+    };
+  }
+
+  static Future<Map<String, dynamic>> updateReceiptSettings({
+    String? footerMessage,
+    bool? showLogo,
+    bool? showBarcode,
+    String? currencySymbol,
+  }) async {
+    final body = <String, dynamic>{};
+    if (footerMessage != null) body['footer_message'] = footerMessage;
+    if (showLogo != null) body['show_logo'] = showLogo;
+    if (showBarcode != null) body['show_barcode'] = showBarcode;
+    if (currencySymbol != null) body['currency_symbol'] = currencySymbol;
+
+    final response = await _putWithTimeout(
+      '$baseUrl/api/my-store/receipt-settings',
+      headers: await authHeaders,
+      body: jsonEncode(body),
+    );
+    final data = jsonDecode(response.body) as Map<String, dynamic>;
+    if (response.statusCode == 200) return data;
+    throw Exception(data['error']?.toString() ?? 'Update failed');
+  }
+
+  // ============================================================
+  // PRODUCT SEARCH (for checkout)
+  // ============================================================
+
+  static Future<List<dynamic>> searchStoreProducts({
+    required String query,
+    int? storeId,
+    int limit = 20,
+  }) async {
+    final url = storeId != null
+        ? '$baseUrl/api/products/$storeId/search?q=${Uri.encodeComponent(query)}&limit=$limit'
+        : '$baseUrl/api/products/search?q=${Uri.encodeComponent(query)}&limit=$limit';
+    final response = await _getWithTimeout(
+      url,
+      headers: publicHeaders,
+      timeout: const Duration(seconds: 5),
+    );
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body) as List<dynamic>;
+    }
+    return [];
+  }
+
+  // ============================================================
+  // LOW STOCK ALERTS
+  // ============================================================
+
+  static Future<List<dynamic>> fetchLowStockProducts() async {
+    final response = await _getWithTimeout(
+      '$baseUrl/api/my-store/low-stock',
+      headers: await authHeaders,
+      timeout: const Duration(seconds: 5),
+    );
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body) as List<dynamic>;
+    }
+    return [];
   }
 
   // ============================================================
@@ -635,7 +913,6 @@ class ApiService {
     return [];
   }
 
-  // NEW: Server-side geo filter for nearby products
   static Future<List<dynamic>> fetchNearbyProducts({
     required double lat,
     required double lng,
@@ -653,6 +930,7 @@ class ApiService {
     } catch (_) {}
     return [];
   }
+
   // ============================================================
   // GEOCODING / CANONICAL LOCATIONS
   // ============================================================
@@ -686,11 +964,9 @@ class ApiService {
   }
 
   // ============================================================
-  // ============================================================
-  // IMAGE SEARCH (backend proxy — Gemini key never exposed)
+  // IMAGE SEARCH
   // ============================================================
 
-  // FIX: Accept mimeType from caller so PNG/WebP aren't sent as JPEG
   static Future<String?> searchByImage(
     Uint8List imageBytes, {
     String mimeType = 'image/jpeg',
@@ -704,7 +980,6 @@ class ApiService {
         timeout: const Duration(seconds: 15),
       );
 
-      // FIX: Throw on non-200 so the UI can show the real backend message
       if (response.statusCode != 200) {
         final data = jsonDecode(response.body) as Map<String, dynamic>;
         throw Exception(
@@ -717,12 +992,11 @@ class ApiService {
       return data['query']?.toString();
     } catch (e) {
       if (kDebugMode) print('Image search error: ' + e.toString());
-      rethrow; // Let the caller handle it so real errors reach the UI
+      rethrow;
     }
   }
 }
 
-// FIX: Renamed to avoid conflict with dart:async TimeoutException
 class ApiTimeoutException implements Exception {
   final String message;
   ApiTimeoutException(this.message);

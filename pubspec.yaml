@@ -26,6 +26,9 @@ dependencies:
   geolocator: ^14.0.2
   cached_network_image: ^3.4.1
   mobile_scanner: ^3.5.5
+  barcode_widget: ^2.0.4
+  barcode: ^2.2.8
+  share_plus: ^10.0.0       
  
 dev_dependencies:
   flutter_test:

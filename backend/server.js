@@ -1,4 +1,4 @@
-//server.js
+// server.js
 require('dotenv').config();
 const express = require('express');
 const { Pool } = require('pg');
@@ -19,7 +19,6 @@ const PORT = process.env.PORT || 3000;
 const genAI = process.env.GEMINI_API_KEY ? new GoogleGenerativeAI(process.env.GEMINI_API_KEY) : null;
 
 // ==================== LOCATION SYSTEM (Canonical IDs) ====================
-// Requires Node 18+ native fetch, or install node-fetch for older versions.
 let transliterate;
 try {
   transliterate = require('transliteration').transliterate;
@@ -42,7 +41,6 @@ function slugify(str) {
 }
 
 async function nominatimFetch(url) {
-  // Nominatim Usage Policy: max 1 req/sec, provide valid User-Agent
   await new Promise(r => setTimeout(r, 1100));
   const res = await fetch(url, {
     headers: {
@@ -149,7 +147,6 @@ async function reverseGeocodeLogic(lat, lng, lang) {
       };
     }
   } catch (cacheErr) {
-    // Cache read failed (column might not exist yet), continue to fetch from API
     console.log('Cache read skipped:', cacheErr.message);
   }
 
@@ -206,7 +203,6 @@ async function initLocationTables() {
     WHERE lat IS NOT NULL AND lng IS NOT NULL;
   `);
 
-  // FIX: Check if geocode_cache has the correct schema, recreate if not
   const cacheCheck = await pool.query(`
     SELECT column_name 
     FROM information_schema.columns 
@@ -219,7 +215,6 @@ async function initLocationTables() {
   const hasAllColumns = requiredColumns.every(col => existingColumns.includes(col));
 
   if (existingColumns.length > 0 && !hasAllColumns) {
-    // Table exists but wrong schema - backup and recreate
     console.log('⚠️  geocode_cache has old schema, recreating...');
     await pool.query(`DROP TABLE IF EXISTS geocode_cache_backup`);
     await pool.query(`ALTER TABLE geocode_cache RENAME TO geocode_cache_backup`);
@@ -256,7 +251,6 @@ async function initLocationTables() {
       IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='stores' AND column_name='location_description') THEN
         ALTER TABLE stores ADD COLUMN location_description VARCHAR(200);
       END IF;
-      -- Legacy: keep village column for backward compatibility, but new code uses location_description
       IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='stores' AND column_name='village') THEN
         ALTER TABLE stores ADD COLUMN village VARCHAR(100);
       END IF;
@@ -265,10 +259,91 @@ async function initLocationTables() {
   console.log('✅ Location tables initialized');
 }
 
-// ==================== END LOCATION SYSTEM ====================
+// ==================== NEW: INVENTORY & CHECKOUT TABLES ====================
+async function initInventoryTables() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS categories (
+      id SERIAL PRIMARY KEY,
+      name VARCHAR(100) NOT NULL,
+      parent_id INTEGER REFERENCES categories(id) ON DELETE SET NULL,
+      icon VARCHAR(50),
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+  `);
 
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='products' AND column_name='barcode') THEN
+        ALTER TABLE products ADD COLUMN barcode VARCHAR(50) UNIQUE;
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='products' AND column_name='category_id') THEN
+        ALTER TABLE products ADD COLUMN category_id INTEGER REFERENCES categories(id);
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='products' AND column_name='images') THEN
+        ALTER TABLE products ADD COLUMN images JSONB DEFAULT '[]';
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='products' AND column_name='low_stock_threshold') THEN
+        ALTER TABLE products ADD COLUMN low_stock_threshold INTEGER DEFAULT 5;
+      END IF;
+    END $$;
+  `);
 
-// ==================== EMAIL TRANSPORT (Gmail SMTP only for localhost) ====================
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS orders (
+      id SERIAL PRIMARY KEY,
+      store_id INTEGER NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+      receipt_number VARCHAR(50) NOT NULL UNIQUE,
+      total DECIMAL(12,2) NOT NULL DEFAULT 0,
+      status VARCHAR(20) DEFAULT 'completed',
+      payment_method VARCHAR(20) DEFAULT 'cash',
+      notes TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS order_items (
+      id SERIAL PRIMARY KEY,
+      order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+      product_id INTEGER NOT NULL REFERENCES products(id),
+      quantity INTEGER NOT NULL,
+      unit_price DECIMAL(12,2) NOT NULL,
+      total_price DECIMAL(12,2) NOT NULL
+    );
+  `);
+
+  // Seed default categories (idempotent)
+  const categories = [
+    { name: 'General', icon: 'category' },
+    { name: 'Food & Beverages', icon: 'restaurant' },
+    { name: 'Clothing & Apparel', icon: 'checkroom' },
+    { name: 'Electronics', icon: 'devices' },
+    { name: 'Home & Garden', icon: 'home' },
+    { name: 'Health & Beauty', icon: 'healing' },
+    { name: 'Toys & Games', icon: 'toys' },
+    { name: 'Automotive', icon: 'directions_car' },
+    { name: 'Books & Stationery', icon: 'menu_book' },
+    { name: 'Sports & Outdoors', icon: 'sports' }
+  ];
+  for (const cat of categories) {
+    await pool.query(
+      `INSERT INTO categories (name, icon) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+      [cat.name, cat.icon]
+    );
+  }
+
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_products_barcode ON products(barcode);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_products_category ON products(category_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_orders_store ON orders(store_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_orders_receipt ON orders(receipt_number);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_order_items_order ON order_items(order_id);`);
+
+  console.log('✅ Inventory tables initialized');
+}
+// ==================== END INVENTORY TABLES ====================
+
+// ==================== EMAIL TRANSPORT ====================
 let transporter = null;
 let emailReady = false;
 
@@ -293,7 +368,6 @@ async function sendEmail({ from, to, subject, html }) {
   return await transporter.sendMail({ from: sender, to, subject, html });
 }
 
-// Verify on startup
 if (emailReady) {
   transporter.verify((err, success) => {
     if (err) console.error('❌ SMTP connection failed:', err.message);
@@ -448,7 +522,6 @@ async function checkLoginLockout(email) {
  return { allowed: true, waitMin: 0 };
 }
 
-// ==================== FIXED: recordFailedLogin — avoid SQL interval math ====================
 async function recordFailedLogin(email) {
  const now = await serverNow();
  const lock2h   = new Date(now.getTime() + 2 * 60 * 60 * 1000);
@@ -478,13 +551,11 @@ async function clearLoginAttempts(email) {
  await pool.query('DELETE FROM failed_logins WHERE email = $1', [email]);
 }
 
-// ==================== FIXED: checkOtpRateLimit — avoid SQL interval math ====================
 async function checkOtpRateLimit(email) {
   const now = await serverNow();
   const sixtySecondsAgo = new Date(now.getTime() - 60 * 1000);
   const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000);
 
-  // Check cooldown: 1 code per 60 seconds
   const cooldownResult = await pool.query(
     `SELECT MAX(created_at) as last FROM verification_codes
      WHERE email = $1 AND created_at > $2`,
@@ -499,7 +570,6 @@ async function checkOtpRateLimit(email) {
     }
   }
 
-  // Check hourly limit: max 5 codes per hour
   const hourResult = await pool.query(
     `SELECT COUNT(*) as c FROM verification_codes
      WHERE email = $1 AND created_at > $2`,
@@ -519,7 +589,7 @@ function generateOtp() {
 
 async function storeOtp(email, type, code) {
  const now = await serverNow();
- const expires = new Date(now.getTime() + 10 * 60 * 1000); // ← 10 minutes
+ const expires = new Date(now.getTime() + 10 * 60 * 1000);
  const codeHash = await bcrypt.hash(code, 10);
 
  const client = await pool.connect();
@@ -599,7 +669,6 @@ async function verifyOtp(email, type, inputCode) {
  return { valid: true };
 }
 
-// ==================== NEW: Human-readable wait formatter ====================
 function formatWaitTime(totalSeconds) {
   if (totalSeconds <= 0) return '0 seconds';
   const mins = Math.floor(totalSeconds / 60);
@@ -675,104 +744,104 @@ ${isRTL ? 'إذا لم تطلب هذا، يمكنك تجاهل البريد بأ
 
 const emailTexts = {
  en: {
- verifySubject: 'Verify your Market Bridge account',
- verifySubtitle: 'Welcome aboard!',
- verifyBody: 'Thank you for joining Market Bridge! Please enter the verification code below in your app to verify your email address and activate your account.',
- verifyBtn: null,
- resetSubject: 'Your password reset code',
- resetSubtitle: 'Password Reset Request',
- resetBody: 'We received a request to reset your password. Use the code below to complete the process.',
- resetBtn: null,
+   verifySubject: 'Verify your Market Bridge account',
+   verifySubtitle: 'Welcome aboard!',
+   verifyBody: 'Thank you for joining Market Bridge! Please enter the verification code below in your app to verify your email address and activate your account.',
+   verifyBtn: null,
+   resetSubject: 'Your password reset code',
+   resetSubtitle: 'Password Reset Request',
+   resetBody: 'We received a request to reset your password. Use the code below to complete the process.',
+   resetBtn: null,
  },
  ar: {
- verifySubject: 'تأكيد حسابك على Market Bridge',
- verifySubtitle: 'مرحباً بك!',
- verifyBody: 'شكراً لانضمامك إلى Market Bridge! أدخل رمز التحقق أدناه في التطبيق لتأكيد بريدك الإلكتروني وتفعيل حسابك.',
- verifyBtn: null,
- resetSubject: 'رمز إعادة تعيين كلمة المرور',
- resetSubtitle: 'طلب إعادة تعيين كلمة المرور',
- resetBody: 'تلقينا طلباً لإعادة تعيين كلمة المرور الخاصة بك. استخدم الرمز أدناه لإكمال العملية.',
- resetBtn: null,
+   verifySubject: 'تأكيد حسابك على Market Bridge',
+   verifySubtitle: 'مرحباً بك!',
+   verifyBody: 'شكراً لانضمامك إلى Market Bridge! أدخل رمز التحقق أدناه في التطبيق لتأكيد بريدك الإلكتروني وتفعيل حسابك.',
+   verifyBtn: null,
+   resetSubject: 'رمز إعادة تعيين كلمة المرور',
+   resetSubtitle: 'طلب إعادة تعيين كلمة المرور',
+   resetBody: 'تلقينا طلباً لإعادة تعيين كلمة المرور الخاصة بك. استخدم الرمز أدناه لإكمال العملية.',
+   resetBtn: null,
  },
  fr: {
- verifySubject: 'Vérifiez votre compte Market Bridge',
- verifySubtitle: 'Bienvenue !',
- verifyBody: 'Merci d\'avoir rejoint Market Bridge ! Saisissez le code de vérification ci-dessous dans votre application pour vérifier votre adresse e-mail et activer votre compte.',
- verifyBtn: null,
- resetSubject: 'Votre code de réinitialisation',
- resetSubtitle: 'Demande de réinitialisation',
- resetBody: 'Nous avons reçu une demande de réinitialisation de votre mot de passe. Utilisez le code ci-dessous pour compléter le processus.',
- resetBtn: null,
+   verifySubject: 'Vérifiez votre compte Market Bridge',
+   verifySubtitle: 'Bienvenue !',
+   verifyBody: 'Merci d\'avoir rejoint Market Bridge ! Saisissez le code de vérification ci-dessous dans votre application pour vérifier votre adresse e-mail et activer votre compte.',
+   verifyBtn: null,
+   resetSubject: 'Votre code de réinitialisation',
+   resetSubtitle: 'Demande de réinitialisation',
+   resetBody: 'Nous avons reçu une demande de réinitialisation de votre mot de passe. Utilisez le code ci-dessous pour compléter le processus.',
+   resetBtn: null,
  },
  es: {
- verifySubject: 'Verifica tu cuenta de Market Bridge',
- verifySubtitle: '¡Bienvenido!',
- verifyBody: '¡Gracias por unirte a Market Bridge! Introduce el código de verificación a continuación en tu aplicación para verificar tu correo y activar tu cuenta.',
- verifyBtn: null,
- resetSubject: 'Tu código de restablecimiento',
- resetSubtitle: 'Solicitud de restablecimiento',
- resetBody: 'Recibimos una solicitud para restablecer tu contraseña. Usa el código de abajo para completar el proceso.',
- resetBtn: null,
+   verifySubject: 'Verifica tu cuenta de Market Bridge',
+   verifySubtitle: '¡Bienvenido!',
+   verifyBody: '¡Gracias por unirte a Market Bridge! Introduce el código de verificación a continuación en tu aplicación para verificar tu correo y activar tu cuenta.',
+   verifyBtn: null,
+   resetSubject: 'Tu código de restablecimiento',
+   resetSubtitle: 'Solicitud de restablecimiento',
+   resetBody: 'Recibimos una solicitud para restablecer tu contraseña. Usa el código de abajo para completar el proceso.',
+   resetBtn: null,
  },
  tr: {
- verifySubject: 'Market Bridge hesabınızı doğrulayın',
- verifySubtitle: 'Hoş geldiniz!',
- verifyBody: 'Market Bridge\'e katıldığınız için teşekkürler! E-posta adresinizi doğrulamak ve hesabınızı etkinleştirmek için uygulamaya aşağıdaki doğrulama kodunu girin.',
- verifyBtn: null,
- resetSubject: 'Şifre sıfırlama kodunuz',
- resetSubtitle: 'Şifre Sıfırlama Talebi',
- resetBody: 'Şifrenizi sıfırlama talebi aldık. İşlemi tamamlamak için aşağıdaki kodu kullanın.',
- resetBtn: null,
+   verifySubject: 'Market Bridge hesabınızı doğrulayın',
+   verifySubtitle: 'Hoş geldiniz!',
+   verifyBody: 'Market Bridge\'e katıldığınız için teşekkürler! E-posta adresinizi doğrulamak ve hesabınızı etkinleştirmek için uygulamaya aşağıdaki doğrulama kodunu girin.',
+   verifyBtn: null,
+   resetSubject: 'Şifre sıfırlama kodunuz',
+   resetSubtitle: 'Şifre Sıfırlama Talebi',
+   resetBody: 'Şifrenizi sıfırlama talebi aldık. İşlemi tamamlamak için aşağıdaki kodu kullanın.',
+   resetBtn: null,
  },
  ur: {
- verifySubject: 'Market Bridge اکاؤنٹ کی تصدیق',
- verifySubtitle: 'خوش آمدید!',
- verifyBody: 'Market Bridge میں شامل ہونے کا شکریہ! اپنا ای میل تصدیق کرنے اور اکاؤنٹ فعال کرنے کے لیے ایپ میں نیچے دیا گیا تصدیقی کوڈ درج کریں۔',
- verifyBtn: null,
- resetSubject: 'پاس ورڈ ری سیٹ کوڈ',
- resetSubtitle: 'پاس ورڈ ری سیٹ کی درخواست',
- resetBody: 'ہمیں آپ کا پاس ورڈ ری سیٹ کرنے کی درخواست موصول ہوئی ہے۔ عمل مکمل کرنے کے لیے نیچے دیا گیا کوڈ استعمال کریں۔',
- resetBtn: null,
+   verifySubject: 'Market Bridge اکاؤنٹ کی تصدیق',
+   verifySubtitle: 'خوش آمدید!',
+   verifyBody: 'Market Bridge میں شامل ہونے کا شکریہ! اپنا ای میل تصدیق کرنے اور اکاؤنٹ فعال کرنے کے لیے ایپ میں نیچے دیا گیا تصدیقی کوڈ درج کریں۔',
+   verifyBtn: null,
+   resetSubject: 'پاس ورڈ ری سیٹ کوڈ',
+   resetSubtitle: 'پاس ورڈ ری سیٹ کی درخواست',
+   resetBody: 'ہمیں آپ کا پاس ورڈ ری سیٹ کرنے کی درخواست موصول ہوئی ہے۔ عمل مکمل کرنے کے لیے نیچے دیا گیا کوڈ استعمال کریں۔',
+   resetBtn: null,
  },
  hi: {
- verifySubject: 'अपना Market Bridge खाता सत्यापित करें',
- verifySubtitle: 'स्वागत है!',
- verifyBody: 'Market Bridge में शामिल होने के लिए धन्यवाद! अपना ईमेल सत्यापित करने और खाता सक्रिय करने के लिए ऐप में नीचे दिया गया सत्यापन कोड दर्ज करें।',
- verifyBtn: null,
- resetSubject: 'आपका पासवर्ड रीसेट कोड',
- resetSubtitle: 'पासवर्ड रीसेट अनुरोध',
- resetBody: 'हमें आपका पासवर्ड रीसेट करने का अनुरोध प्राप्त हुआ। प्रक्रिया पूरी करने के लिए नीचे दिए कोड का उपयोग करें।',
- resetBtn: null,
+   verifySubject: 'अपना Market Bridge खाता सत्यापित करें',
+   verifySubtitle: 'स्वागत है!',
+   verifyBody: 'Market Bridge में शामिल होने के लिए धन्यवाद! अपना ईमेल सत्यापित करने और खाता सक्रिय करने के लिए ऐप में नीचे दिया गया सत्यापन कोड दर्ज करें।',
+   verifyBtn: null,
+   resetSubject: 'आपका पासवर्ड रीसेट कोड',
+   resetSubtitle: 'पासवर्ड रीसेट अनुरोध',
+   resetBody: 'हमें आपका पासवर्ड रीसेट करने का अनुरोध प्राप्त हुआ। प्रक्रिया पूरी करने के लिए नीचे दिए कोड का उपयोग करें।',
+   resetBtn: null,
  },
  bn: {
- verifySubject: 'আপনার Market Bridge অ্যাকাউন্ট যাচাই করুন',
- verifySubtitle: 'স্বাগতম!',
- verifyBody: 'Market Bridge-এ যোগ দেওয়ার জন্য ধন্যবাদ! আপনার ইমেইল যাচাই করতে এবং অ্যাকাউন্ট সক্রিয় করতে অ্যাপে নীচের যাচাইকরণ কোডটি লিখুন।',
- verifyBtn: null,
- resetSubject: 'আপনার পাসওয়ার্ড রিসেট কোড',
- resetSubtitle: 'পাসওয়ার্ড রিসেট অনুরোধ',
- resetBody: 'আমরা আপনার পাসওয়ার্ড রিসেট করার অনুরোধ পেয়েছি। প্রক্রিয়া সম্পূর্ণ করতে নীচের কোডটি ব্যবহার করুন।',
- resetBtn: null,
+   verifySubject: 'আপনার Market Bridge অ্যাকাউন্ট যাচাই করুন',
+   verifySubtitle: 'স্বাগতম!',
+   verifyBody: 'Market Bridge-এ যোগ দেওয়ার জন্য ধন্যবাদ! আপনার ইমেইল যাচাই করতে এবং অ্যাকাউন্ট সক্রিয় করতে অ্যাপে নীচের যাচাইকরণ কোডটি লিখুন।',
+   verifyBtn: null,
+   resetSubject: 'আপনার পাসওয়ার্ড রিসেট কোড',
+   resetSubtitle: 'পাসওয়ার্ড রিসেট অনুরোধ',
+   resetBody: 'আমরা আপনার পাসওয়ার্ড রিসেট করার অনুরোধ পেয়েছি। প্রক্রিয়া সম্পূর্ণ করতে নীচের কোডটি ব্যবহার করুন।',
+   resetBtn: null,
  },
  ru: {
- verifySubject: 'Подтвердите аккаунт Market Bridge',
- verifySubtitle: 'Добро пожаловать!',
- verifyBody: 'Спасибо за регистрацию в Market Bridge! Введите код подтверждения ниже в приложении, чтобы подтвердить адрес электронной почты и активировать аккаунт.',
- verifyBtn: null,
- resetSubject: 'Код сброса пароля',
- resetSubtitle: 'Запрос на сброс пароля',
- resetBody: 'Мы получили запрос на сброс вашего пароля. Используйте код ниже для завершения процесса.',
- resetBtn: null,
+   verifySubject: 'Подтвердите аккаунт Market Bridge',
+   verifySubtitle: 'Добро пожаловать!',
+   verifyBody: 'Спасибо за регистрацию в Market Bridge! Введите код подтверждения ниже в приложении, чтобы подтвердить адрес электронной почты и активировать аккаунт.',
+   verifyBtn: null,
+   resetSubject: 'Код сброса пароля',
+   resetSubtitle: 'Запрос на сброс пароля',
+   resetBody: 'Мы получили запрос на сброс вашего пароля. Используйте код ниже для завершения процесса.',
+   resetBtn: null,
  },
  zh: {
- verifySubject: '验证您的 Market Bridge 账户',
- verifySubtitle: '欢迎！',
- verifyBody: '感谢加入 Market Bridge！请在应用中输入下方的验证码以验证您的电子邮件地址并激活账户。',
- verifyBtn: null,
- resetSubject: '您的密码重置验证码',
- resetSubtitle: '密码重置请求',
- resetBody: '我们收到了重置您密码的请求。请使用下方验证码完成操作。',
- resetBtn: null,
+   verifySubject: '验证您的 Market Bridge 账户',
+   verifySubtitle: '欢迎！',
+   verifyBody: '感谢加入 Market Bridge！请在应用中输入下方的验证码以验证您的电子邮件地址并激活账户。',
+   verifyBtn: null,
+   resetSubject: '您的密码重置验证码',
+   resetSubtitle: '密码重置请求',
+   resetBody: '我们收到了重置您密码的请求。请使用下方验证码完成操作。',
+   resetBtn: null,
  },
 };
 
@@ -809,10 +878,13 @@ const upload = multer({
 
 app.get('/', (req, res) => res.send('Market Bridge API'));
 
+// Product image upload supports main + extras
+const productUpload = upload.fields([
+  { name: 'image', maxCount: 1 },
+  { name: 'extra_images', maxCount: 5 }
+]);
 
 // ==================== GEOCODING ENDPOINTS ====================
-
-// Search / Autocomplete places
 app.get('/api/geocode/search', async (req, res) => {
   try {
     const query = sanitizeString(req.query.q, 200);
@@ -869,7 +941,6 @@ app.get('/api/geocode/search', async (req, res) => {
   }
 });
 
-// Reverse geocode (GPS → canonical city)
 app.get('/api/geocode/reverse', async (req, res) => {
   try {
     const lat = parseFloat(req.query.lat);
@@ -886,7 +957,6 @@ app.get('/api/geocode/reverse', async (req, res) => {
   }
 });
 
-// Admin: migrate old text-based stores to canonical IDs
 app.post('/api/admin/migrate-locations', authenticateToken, async (req, res) => {
   try {
     const userResult = await pool.query('SELECT role FROM users WHERE id = $1', [req.user.userId]);
@@ -923,10 +993,9 @@ app.post('/api/admin/migrate-locations', authenticateToken, async (req, res) => 
     res.status(500).json({ error: 'Migration failed' });
   }
 });
-
 // ==================== END GEOCODING ====================
 
-// ==================== IMAGE SEARCH (Gemini Proxy) ====================
+// ==================== IMAGE SEARCH ====================
 app.post('/api/search/image', optionalAuth, async (req, res) => {
   try {
     if (!genAI) {
@@ -938,7 +1007,6 @@ app.post('/api/search/image', optionalAuth, async (req, res) => {
       return res.status(400).json({ error: 'image (base64) and mimeType are required' });
     }
 
-    // FIX: Validate mimeType to prevent Gemini rejecting bad types
     const allowedMime = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
     if (!allowedMime.includes(mimeType)) {
       return res.status(400).json({ error: `Unsupported mimeType ${mimeType}. Use image/jpeg, image/png, image/webp, or image/gif.` });
@@ -950,7 +1018,6 @@ app.post('/api/search/image', optionalAuth, async (req, res) => {
       { inlineData: { mimeType, data: image } },
     ]);
 
-    // FIX: Safer response extraction. Some SDK versions return candidates with content.parts
     let query = null;
     try {
       const response = result.response;
@@ -970,11 +1037,197 @@ app.post('/api/search/image', optionalAuth, async (req, res) => {
     res.json({ query });
   } catch (err) {
     console.error('Image search error:', err);
-    // FIX: Return the actual error message so the frontend can show it
     res.status(500).json({ error: err.message || 'Image search failed. Please try again.' });
   }
 });
 // ==================== END IMAGE SEARCH ====================
+
+// ==================== CATEGORIES ====================
+app.get('/api/categories', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM categories ORDER BY name');
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to load categories' });
+  }
+});
+// ==================== END CATEGORIES ====================
+
+// ==================== BARCODE LOOKUP ====================
+app.get('/api/products/barcode/:barcode', requireRealUser, async (req, res) => {
+  try {
+    const storeResult = await pool.query('SELECT id FROM stores WHERE owner_id=$1', [req.user.userId]);
+    if (storeResult.rows.length === 0) return res.status(404).json({ error: 'No store found' });
+    const storeId = storeResult.rows[0].id;
+
+    const result = await pool.query(
+      'SELECT * FROM products WHERE barcode=$1 AND store_id=$2',
+      [req.params.barcode, storeId]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Product not found' });
+    res.json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: 'Barcode lookup failed' });
+  }
+});
+
+app.get('/api/products/check-barcode', requireRealUser, async (req, res) => {
+  try {
+    const barcode = req.query.barcode;
+    const excludeId = req.query.exclude_id;
+    if (!barcode) return res.status(400).json({ error: 'Barcode required' });
+
+    let sql = 'SELECT id, name FROM products WHERE barcode=$1';
+    const params = [barcode];
+    if (excludeId) {
+      sql += ' AND id != $2';
+      params.push(excludeId);
+    }
+    const result = await pool.query(sql, params);
+    res.json({ exists: result.rows.length > 0, product: result.rows[0] || null });
+  } catch (err) {
+    res.status(500).json({ error: 'Barcode check failed' });
+  }
+});
+// ==================== END BARCODE ====================
+
+// ==================== CHECKOUT & ORDERS ====================
+app.post('/api/checkout', requireRealUser, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const storeResult = await client.query(
+      'SELECT id, name, city, country, phone, image_url FROM stores WHERE owner_id=$1',
+      [req.user.userId]
+    );
+    if (storeResult.rows.length === 0) throw new Error('No store found');
+    const store = storeResult.rows[0];
+
+    const { items, payment_method, notes } = req.body;
+    if (!items || !Array.isArray(items) || items.length === 0) {
+      throw new Error('Cart is empty');
+    }
+
+    const now = await serverNow();
+    const dateStr = now.toISOString().slice(0,10).replace(/-/g,'');
+    const randomSuffix = Math.floor(1000 + Math.random() * 9000);
+    const receiptNumber = `MB-${dateStr}-${randomSuffix}`;
+
+    let total = 0;
+    const validatedItems = [];
+
+    for (const item of items) {
+      const product = await client.query(
+        'SELECT id, name, price, quantity FROM products WHERE id=$1 AND store_id=$2 FOR UPDATE',
+        [item.product_id, store.id]
+      );
+      if (product.rows.length === 0) throw new Error(`Product not found`);
+      if (product.rows[0].quantity < item.quantity) {
+        throw new Error(`Insufficient stock for "${product.rows[0].name}". Available: ${product.rows[0].quantity}, Requested: ${item.quantity}`);
+      }
+
+      const unitPrice = parseFloat(product.rows[0].price);
+      const itemTotal = unitPrice * item.quantity;
+      total += itemTotal;
+
+      validatedItems.push({
+        product_id: item.product_id,
+        quantity: item.quantity,
+        unit_price: unitPrice,
+        total_price: itemTotal,
+        product_name: product.rows[0].name
+      });
+    }
+
+    const orderResult = await client.query(
+      `INSERT INTO orders (store_id, receipt_number, total, status, payment_method, notes)
+       VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+      [store.id, receiptNumber, total, 'completed', payment_method || 'cash', notes || null]
+    );
+    const order = orderResult.rows[0];
+
+    for (const item of validatedItems) {
+      await client.query(
+        `INSERT INTO order_items (order_id, product_id, quantity, unit_price, total_price)
+         VALUES ($1,$2,$3,$4,$5)`,
+        [order.id, item.product_id, item.quantity, item.unit_price, item.total_price]
+      );
+      await client.query(
+        'UPDATE products SET quantity = quantity - $1 WHERE id = $2',
+        [item.quantity, item.product_id]
+      );
+    }
+
+    await client.query('COMMIT');
+
+    const itemsResult = await pool.query(
+      `SELECT oi.*, p.name as product_name, p.barcode
+       FROM order_items oi
+       JOIN products p ON oi.product_id = p.id
+       WHERE oi.order_id=$1`,
+      [order.id]
+    );
+
+    res.status(201).json({
+      order: { ...order, store_name: store.name },
+      items: itemsResult.rows
+    });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Checkout error:', err);
+    res.status(400).json({ error: err.message || 'Checkout failed' });
+  } finally {
+    client.release();
+  }
+});
+
+app.get('/api/orders', requireRealUser, async (req, res) => {
+  try {
+    const storeResult = await pool.query('SELECT id FROM stores WHERE owner_id=$1', [req.user.userId]);
+    if (storeResult.rows.length === 0) return res.status(404).json({ error: 'No store' });
+
+    const result = await pool.query(
+      `SELECT o.*,
+        (SELECT COUNT(*) FROM order_items oi WHERE oi.order_id = o.id) as item_count
+       FROM orders o
+       WHERE o.store_id=$1
+       ORDER BY o.created_at DESC
+       LIMIT 100`,
+      [storeResult.rows[0].id]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to load orders' });
+  }
+});
+
+app.get('/api/orders/:id', requireRealUser, async (req, res) => {
+  try {
+    const storeResult = await pool.query('SELECT id FROM stores WHERE owner_id=$1', [req.user.userId]);
+    if (storeResult.rows.length === 0) return res.status(404).json({ error: 'No store' });
+    const storeId = storeResult.rows[0].id;
+
+    const orderResult = await pool.query(
+      'SELECT * FROM orders WHERE id=$1 AND store_id=$2',
+      [req.params.id, storeId]
+    );
+    if (orderResult.rows.length === 0) return res.status(404).json({ error: 'Order not found' });
+
+    const itemsResult = await pool.query(
+      `SELECT oi.*, p.name as product_name, p.barcode, p.image_url
+       FROM order_items oi
+       JOIN products p ON oi.product_id = p.id
+       WHERE oi.order_id=$1`,
+      [req.params.id]
+    );
+
+    res.json({ order: orderResult.rows[0], items: itemsResult.rows });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to load order' });
+  }
+});
+// ==================== END CHECKOUT & ORDERS ====================
 
 // REGISTER
 app.post('/api/auth/register', async (req, res) => {
@@ -1026,10 +1279,8 @@ app.post('/api/auth/register', async (req, res) => {
  const code = generateOtp();
  await storeOtp(email, 'email_verification', code);
 
- // Respond immediately so the client never times out waiting for SMTP
  res.status(201).json({ message: 'Created. Check email for verification code.', email });
 
- // Fire-and-forget email so slow SMTP doesn't block the HTTP response
  const texts = emailTexts[lang];
  (async () => {
    try {
@@ -1054,7 +1305,7 @@ app.post('/api/auth/register', async (req, res) => {
  }
 });
 
-// VERIFY EMAIL (OTP-based)
+// VERIFY EMAIL
 app.post('/api/auth/verify-email', async (req, res) => {
  try {
  const email = sanitizeString(req.body.email, 255).toLowerCase();
@@ -1092,7 +1343,7 @@ app.post('/api/auth/verify-email', async (req, res) => {
  }
 });
 
-// RESEND VERIFICATION (OTP-based)
+// RESEND VERIFICATION
 app.post('/api/auth/resend-verification', async (req, res) => {
  try {
  const email = sanitizeString(req.body.email, 255).toLowerCase();
@@ -1119,10 +1370,8 @@ app.post('/api/auth/resend-verification', async (req, res) => {
  const code = generateOtp();
  await storeOtp(email, 'email_verification', code);
 
- // Respond immediately so the client never times out waiting for SMTP
  res.json({ message: 'If this email is registered, a verification code has been sent.' });
 
- // Fire-and-forget email so slow SMTP doesn't block the HTTP response
  const texts = emailTexts[lang];
  (async () => {
    try {
@@ -1224,7 +1473,7 @@ app.post('/api/auth/guest-login', async (req, res) => {
  }
 });
 
-// FORGOT PASSWORD (OTP-based)
+// FORGOT PASSWORD
 app.post('/api/auth/forgot-password', async (req, res) => {
  try {
  const email = sanitizeString(req.body.email, 255).toLowerCase();
@@ -1248,10 +1497,8 @@ app.post('/api/auth/forgot-password', async (req, res) => {
  const code = generateOtp();
  await storeOtp(email, 'password_reset', code);
 
- // Respond immediately so the client never times out waiting for SMTP
  res.json({ message: 'If this email is registered, a reset code has been sent.' });
 
- // Fire-and-forget email so slow SMTP doesn't block the HTTP response
  const texts = emailTexts[lang];
  (async () => {
    try {
@@ -1272,7 +1519,7 @@ app.post('/api/auth/forgot-password', async (req, res) => {
  }
 });
 
-// RESET PASSWORD (OTP-based with constant-time comparison)
+// RESET PASSWORD
 app.post('/api/auth/reset-password', async (req, res) => {
  try {
  const email = sanitizeString(req.body.email, 255).toLowerCase();
@@ -1608,44 +1855,96 @@ app.get('/api/products/:storeId', async (req, res) => {
  res.json(result.rows);
 });
 
-app.post('/api/products', requireRealUser, upload.single('image'), async (req, res) => {
- try {
- const storeResult = await pool.query('SELECT id FROM stores WHERE owner_id=$1', [req.user.userId]);
- if (storeResult.rows.length === 0) return res.status(403).json({ error: 'You do not own a store' });
- const storeId = storeResult.rows[0].id;
- const { name, price, quantity, description, barcode } = req.body;
+// CREATE PRODUCT (with barcode, category, multiple images)
+app.post('/api/products', requireRealUser, productUpload, async (req, res) => {
+  try {
+    const storeResult = await pool.query('SELECT id FROM stores WHERE owner_id=$1', [req.user.userId]);
+    if (storeResult.rows.length === 0) return res.status(403).json({ error: 'You do not own a store' });
+    const storeId = storeResult.rows[0].id;
 
- const imageUrl = req.file ? `${getBaseUrl(req)}/uploads/${req.file.filename}` : null;
- const result = await pool.query(
- 'INSERT INTO products (store_id, name, price, quantity, description, barcode, image_url) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *',
- [storeId, name, price, quantity || 0, description, barcode, imageUrl]
- );
- res.status(201).json(result.rows[0]);
- } catch (err) {
- console.error(err);
- res.status(500).json({ error: 'Something went wrong. Please try again later.' });
- }
+    const { name, price, quantity, description, barcode, category_id, low_stock_threshold } = req.body;
+
+    if (barcode) {
+      const existing = await pool.query('SELECT id FROM products WHERE barcode=$1', [barcode]);
+      if (existing.rows.length > 0) {
+        return res.status(409).json({ error: 'Barcode already exists', product_id: existing.rows[0].id });
+      }
+    }
+
+    const imageUrl = req.files?.['image']?.[0] ? `${getBaseUrl(req)}/uploads/${req.files['image'][0].filename}` : null;
+    const extraImages = req.files?.['extra_images']?.map(f => `${getBaseUrl(req)}/uploads/${f.filename}`) || [];
+    const allImages = imageUrl ? [imageUrl, ...extraImages] : extraImages;
+
+    const result = await pool.query(
+      `INSERT INTO products (store_id, name, price, quantity, description, barcode, category_id, images, image_url, low_stock_threshold)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+      [
+        storeId,
+        sanitizeString(name, 200),
+        parseFloat(price) || 0,
+        parseInt(quantity) || 0,
+        description ? sanitizeString(description, 1000) : null,
+        barcode ? sanitizeString(barcode, 50) : null,
+        category_id ? parseInt(category_id) : null,
+        JSON.stringify(allImages),
+        imageUrl,
+        parseInt(low_stock_threshold) || 5
+      ]
+    );
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Something went wrong. Please try again later.' });
+  }
 });
 
-app.put('/api/products/:id', requireRealUser, upload.single('image'), async (req, res) => {
- try {
- const storeResult = await pool.query('SELECT id FROM stores WHERE owner_id=$1', [req.user.userId]);
- if (storeResult.rows.length === 0) return res.status(403).json({ error: 'No store found' });
- const storeId = storeResult.rows[0].id;
- const { name, price, quantity, description, barcode } = req.body;
- const existing = await pool.query('SELECT * FROM products WHERE id=$1 AND store_id=$2', [req.params.id, storeId]);
- if (existing.rows.length === 0) return res.status(404).json({ error: 'Product not found' });
+// UPDATE PRODUCT
+app.put('/api/products/:id', requireRealUser, productUpload, async (req, res) => {
+  try {
+    const storeResult = await pool.query('SELECT id FROM stores WHERE owner_id=$1', [req.user.userId]);
+    if (storeResult.rows.length === 0) return res.status(403).json({ error: 'No store found' });
+    const storeId = storeResult.rows[0].id;
 
- const imageUrl = req.file ? `${getBaseUrl(req)}/uploads/${req.file.filename}` : existing.rows[0].image_url;
- const result = await pool.query(
- 'UPDATE products SET name=$1, price=$2, quantity=$3, description=$4, barcode=$5, image_url=$6, updated_at=NOW() WHERE id=$7 RETURNING *',
- [name, price, quantity, description, barcode, imageUrl, req.params.id]
- );
- res.json(result.rows[0]);
- } catch (err) {
- console.error(err);
- res.status(500).json({ error: 'Something went wrong. Please try again later.' });
- }
+    const existing = await pool.query('SELECT * FROM products WHERE id=$1 AND store_id=$2', [req.params.id, storeId]);
+    if (existing.rows.length === 0) return res.status(404).json({ error: 'Product not found' });
+
+    const old = existing.rows[0];
+    const name = req.body.name !== undefined ? sanitizeString(req.body.name, 200) : old.name;
+    const price = req.body.price !== undefined ? parseFloat(req.body.price) : old.price;
+    const quantity = req.body.quantity !== undefined ? parseInt(req.body.quantity) : old.quantity;
+    const description = req.body.description !== undefined ? (req.body.description ? sanitizeString(req.body.description, 1000) : null) : old.description;
+    const barcode = req.body.barcode !== undefined ? (req.body.barcode ? sanitizeString(req.body.barcode, 50) : null) : old.barcode;
+    const category_id = req.body.category_id !== undefined ? (req.body.category_id ? parseInt(req.body.category_id) : null) : old.category_id;
+    const low_stock_threshold = req.body.low_stock_threshold !== undefined ? parseInt(req.body.low_stock_threshold) : old.low_stock_threshold;
+
+    if (barcode && barcode !== old.barcode) {
+      const bcCheck = await pool.query('SELECT id FROM products WHERE barcode=$1 AND id != $2', [barcode, req.params.id]);
+      if (bcCheck.rows.length > 0) {
+        return res.status(409).json({ error: 'Barcode already exists', product_id: bcCheck.rows[0].id });
+      }
+    }
+
+    const imageUrl = req.files?.['image']?.[0] ? `${getBaseUrl(req)}/uploads/${req.files['image'][0].filename}` : old.image_url;
+
+    let allImages = old.images || [];
+    if (req.body.existing_images) {
+      try { allImages = JSON.parse(req.body.existing_images); } catch (_) {}
+    }
+    const newImages = req.files?.['extra_images']?.map(f => `${getBaseUrl(req)}/uploads/${f.filename}`) || [];
+    allImages = [...allImages, ...newImages];
+    if (imageUrl && !allImages.includes(imageUrl)) {
+      allImages.unshift(imageUrl);
+    }
+
+    const result = await pool.query(
+      `UPDATE products SET name=$1, price=$2, quantity=$3, description=$4, barcode=$5, category_id=$6, low_stock_threshold=$7, image_url=$8, images=$9, updated_at=NOW() WHERE id=$10 RETURNING *`,
+      [name, price, quantity, description, barcode, category_id, low_stock_threshold, imageUrl, JSON.stringify(allImages), req.params.id]
+    );
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Something went wrong. Please try again later.' });
+  }
 });
 
 app.delete('/api/products/:id', requireRealUser, async (req, res) => {
@@ -1808,8 +2107,485 @@ app.use((err, req, res, next) => {
  }
  next(err);
 });
+// ==================== BACKEND EXTENSIONS ====================
+// Append these routes to your existing server.js BEFORE the error handler and listen() call.
+// Do NOT modify existing routes above.
 
+// ==================== CATEGORIES ====================
+
+app.get('/api/categories', async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT c.*, p.name as parent_name
+       FROM categories c
+       LEFT JOIN categories p ON c.parent_id = p.id
+       ORDER BY c.sort_order, c.name`
+    );
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Categories error:', err);
+    res.status(500).json({ error: 'Failed to load categories' });
+  }
+});
+
+app.get('/api/categories/:id', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM categories WHERE id = $1', [req.params.id]);
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Category not found' });
+    res.json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed' });
+  }
+});
+
+// ==================== PRODUCT IMAGES ====================
+
+app.get('/api/products/:id/images', async (req, res) => {
+  try {
+    const result = await pool.query(
+      'SELECT * FROM product_images WHERE product_id = $1 ORDER BY sort_order, id',
+      [req.params.id]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed' });
+  }
+});
+
+app.post('/api/products/:id/images', requireRealUser, upload.single('image'), async (req, res) => {
+  try {
+    const storeResult = await pool.query('SELECT id FROM stores WHERE owner_id=$1', [req.user.userId]);
+    if (storeResult.rows.length === 0) return res.status(403).json({ error: 'No store found' });
+
+    const productCheck = await pool.query(
+      'SELECT p.id FROM products p JOIN stores s ON p.store_id = s.id WHERE p.id=$1 AND s.owner_id=$2',
+      [req.params.id, req.user.userId]
+    );
+    if (productCheck.rows.length === 0) return res.status(403).json({ error: 'Not your product' });
+
+    if (!req.file) return res.status(400).json({ error: 'No image' });
+    const imageUrl = `${getBaseUrl(req)}/uploads/${req.file.filename}`;
+
+    const result = await pool.query(
+      'INSERT INTO product_images (product_id, image_url) VALUES ($1, $2) RETURNING *',
+      [req.params.id, imageUrl]
+    );
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed' });
+  }
+});
+
+app.delete('/api/products/:id/images/:imageId', requireRealUser, async (req, res) => {
+  try {
+    const storeResult = await pool.query('SELECT id FROM stores WHERE owner_id=$1', [req.user.userId]);
+    if (storeResult.rows.length === 0) return res.status(403).json({ error: 'No store found' });
+
+    const result = await pool.query(
+      `DELETE FROM product_images pi
+       USING products p, stores s
+       WHERE pi.id=$1 AND pi.product_id=$2 AND p.id=pi.product_id AND s.id=p.store_id AND s.owner_id=$3
+       RETURNING pi.*`,
+      [req.params.imageId, req.params.id, req.user.userId]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Image not found' });
+    res.json({ message: 'Deleted' });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed' });
+  }
+});
+
+// ==================== BARCODE ====================
+
+app.get('/api/products/barcode/validate', async (req, res) => {
+  try {
+    const code = sanitizeString(req.query.code, 50);
+    if (!code) return res.status(400).json({ error: 'Code required' });
+
+    const result = await pool.query(
+      'SELECT id, name, barcode, quantity FROM products WHERE barcode = $1 LIMIT 1',
+      [code]
+    );
+    res.json({
+      exists: result.rows.length > 0,
+      product: result.rows.length > 0 ? result.rows[0] : null,
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed' });
+  }
+});
+
+app.get('/api/products/barcode/:code', async (req, res) => {
+  try {
+    const code = sanitizeString(req.params.code, 50);
+    const result = await pool.query(
+      `SELECT p.*, s.name as shop_name, s.city, s.country, s.lat, s.lng
+       FROM products p
+       JOIN stores s ON p.store_id = s.id
+       WHERE p.barcode = $1
+       LIMIT 1`,
+      [code]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Product not found' });
+    res.json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed' });
+  }
+});
+
+// ==================== PRODUCT SEARCH ====================
+
+app.get('/api/products/:storeId/search', async (req, res) => {
+  try {
+    const storeId = parseInt(req.params.storeId);
+    const q = sanitizeString(req.query.q, 100);
+    const limit = Math.min(parseInt(req.query.limit) || 20, 50);
+    if (!q) return res.json([]);
+
+    const result = await pool.query(
+      `SELECT p.* FROM products p
+       WHERE p.store_id = $1 AND (p.name ILIKE $2 OR p.barcode ILIKE $2)
+       ORDER BY p.name
+       LIMIT $3`,
+      [storeId, `%${q}%`, limit]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed' });
+  }
+});
+
+app.get('/api/products/search', async (req, res) => {
+  try {
+    const q = sanitizeString(req.query.q, 100);
+    const limit = Math.min(parseInt(req.query.limit) || 20, 50);
+    if (!q) return res.json([]);
+
+    const result = await pool.query(
+      `SELECT p.*, s.name as shop_name FROM products p
+       JOIN stores s ON p.store_id = s.id
+       WHERE p.name ILIKE $1 OR p.barcode ILIKE $1
+       ORDER BY p.name
+       LIMIT $2`,
+      [`%${q}%`, limit]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed' });
+  }
+});
+
+// ==================== LOW STOCK ====================
+
+app.get('/api/my-store/low-stock', requireRealUser, async (req, res) => {
+  try {
+    const storeResult = await pool.query('SELECT id FROM stores WHERE owner_id=$1', [req.user.userId]);
+    if (storeResult.rows.length === 0) return res.status(404).json({ error: 'No store' });
+    const storeId = storeResult.rows[0].id;
+
+    const result = await pool.query(
+      `SELECT id, name, quantity, barcode, price FROM products
+       WHERE store_id = $1 AND quantity <= 5 AND quantity >= 0
+       ORDER BY quantity ASC, name`,
+      [storeId]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed' });
+  }
+});
+
+// ==================== ORDERS / CHECKOUT ====================
+
+function generateReceiptNumber() {
+  const now = new Date();
+  const ts = now.getFullYear().toString().slice(2)
+    + String(now.getMonth() + 1).padStart(2, '0')
+    + String(now.getDate()).padStart(2, '0')
+    + String(now.getHours()).padStart(2, '0')
+    + String(now.getMinutes()).padStart(2, '0')
+    + String(now.getSeconds()).padStart(2, '0');
+  const rnd = crypto.randomInt(1000, 9999).toString();
+  return `MB-${ts}-${rnd}`;
+}
+
+app.post('/api/orders', requireRealUser, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const storeResult = await client.query('SELECT id FROM stores WHERE owner_id=$1', [req.user.userId]);
+    if (storeResult.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({ error: 'You do not own a store' });
+    }
+    const storeId = storeResult.rows[0].id;
+
+    const items = req.body.items;
+    if (!Array.isArray(items) || items.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'Items required' });
+    }
+
+    // Validate stock and calculate totals
+    let subtotal = 0;
+    for (const item of items) {
+      const productId = item.product_id;
+      const qty = parseInt(item.quantity);
+      if (!productId || isNaN(qty) || qty < 1) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ error: 'Invalid item data' });
+      }
+
+      const stockCheck = await client.query(
+        'SELECT quantity, name FROM products WHERE id = $1 AND store_id = $2 FOR UPDATE',
+        [productId, storeId]
+      );
+      if (stockCheck.rows.length === 0) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ error: `Product ${productId} not found` });
+      }
+      const available = stockCheck.rows[0].quantity;
+      if (available < qty) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          error: `Insufficient stock for "${stockCheck.rows[0].name}". Available: ${available}, Requested: ${qty}`
+        });
+      }
+
+      const unitPrice = parseFloat(item.unit_price) || 0;
+      subtotal += unitPrice * qty;
+    }
+
+    const discount = parseFloat(req.body.discount) || 0;
+    const tax = parseFloat(req.body.tax) || 0;
+    const total = Math.max(0, subtotal - discount + tax);
+    const receiptNumber = generateReceiptNumber();
+
+    const orderResult = await client.query(
+      `INSERT INTO orders (store_id, cashier_id, customer_name, customer_phone, subtotal, discount, tax, total, status, payment_method, receipt_number, notes)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+       RETURNING *`,
+      [
+        storeId,
+        req.user.userId,
+        req.body.customer_name || null,
+        req.body.customer_phone || null,
+        subtotal,
+        discount,
+        tax,
+        total,
+        'completed',
+        req.body.payment_method || 'cash',
+        receiptNumber,
+        req.body.notes || null,
+      ]
+    );
+    const orderId = orderResult.rows[0].id;
+
+    // Insert items and reduce stock
+    for (const item of items) {
+      const productId = item.product_id;
+      const qty = parseInt(item.quantity);
+      const unitPrice = parseFloat(item.unit_price) || 0;
+      const lineTotal = parseFloat(item.total_price) || (unitPrice * qty);
+
+      await client.query(
+        `INSERT INTO order_items (order_id, product_id, product_name, quantity, unit_price, total_price, barcode)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [orderId, productId, item.product_name, qty, unitPrice, lineTotal, item.barcode || null]
+      );
+
+      await client.query(
+        'UPDATE products SET quantity = quantity - $1, updated_at = NOW() WHERE id = $2',
+        [qty, productId]
+      );
+    }
+
+    await client.query('COMMIT');
+    res.status(201).json(orderResult.rows[0]);
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Checkout error:', err);
+    res.status(500).json({ error: 'Checkout failed. Please try again.' });
+  } finally {
+    client.release();
+  }
+});
+
+app.get('/api/orders', requireRealUser, async (req, res) => {
+  try {
+    const storeResult = await pool.query('SELECT id FROM stores WHERE owner_id=$1', [req.user.userId]);
+    if (storeResult.rows.length === 0) return res.json([]);
+    const storeId = storeResult.rows[0].id;
+
+    const limit = Math.min(parseInt(req.query.limit) || 50, 100);
+    const offset = parseInt(req.query.offset) || 0;
+
+    const result = await pool.query(
+      `SELECT o.*, u.full_name as cashier_name
+       FROM orders o
+       LEFT JOIN users u ON o.cashier_id = u.id
+       WHERE o.store_id = $1
+       ORDER BY o.created_at DESC
+       LIMIT $2 OFFSET $3`,
+      [storeId, limit, offset]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed' });
+  }
+});
+
+app.get('/api/orders/:id', requireRealUser, async (req, res) => {
+  try {
+    const storeResult = await pool.query('SELECT id FROM stores WHERE owner_id=$1', [req.user.userId]);
+    if (storeResult.rows.length === 0) return res.status(404).json({ error: 'No store' });
+    const storeId = storeResult.rows[0].id;
+
+    const orderResult = await pool.query(
+      `SELECT o.*, u.full_name as cashier_name
+       FROM orders o
+       LEFT JOIN users u ON o.cashier_id = u.id
+       WHERE o.id = $1 AND o.store_id = $2`,
+      [req.params.id, storeId]
+    );
+    if (orderResult.rows.length === 0) return res.status(404).json({ error: 'Order not found' });
+
+    const itemsResult = await pool.query(
+      'SELECT * FROM order_items WHERE order_id = $1 ORDER BY id',
+      [req.params.id]
+    );
+
+    const order = orderResult.rows[0];
+    order.items = itemsResult.rows;
+    res.json(order);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed' });
+  }
+});
+
+// ==================== RECEIPT SETTINGS ====================
+
+app.get('/api/my-store/receipt-settings', requireRealUser, async (req, res) => {
+  try {
+    const storeResult = await pool.query('SELECT id FROM stores WHERE owner_id=$1', [req.user.userId]);
+    if (storeResult.rows.length === 0) return res.status(404).json({ error: 'No store' });
+    const storeId = storeResult.rows[0].id;
+
+    const result = await pool.query(
+      'SELECT * FROM receipt_settings WHERE store_id = $1',
+      [storeId]
+    );
+    if (result.rows.length > 0) return res.json(result.rows[0]);
+
+    // Return defaults
+    res.json({
+      store_id: storeId,
+      footer_message: 'Thank you for your purchase!',
+      show_logo: true,
+      show_barcode: true,
+      currency_symbol: 'SYP',
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed' });
+  }
+});
+
+app.put('/api/my-store/receipt-settings', requireRealUser, async (req, res) => {
+  try {
+    const storeResult = await pool.query('SELECT id FROM stores WHERE owner_id=$1', [req.user.userId]);
+    if (storeResult.rows.length === 0) return res.status(404).json({ error: 'No store' });
+    const storeId = storeResult.rows[0].id;
+
+    const existing = await pool.query('SELECT id FROM receipt_settings WHERE store_id = $1', [storeId]);
+    const hasRecord = existing.rows.length > 0;
+
+    const footer = req.body.footer_message !== undefined ? sanitizeString(req.body.footer_message, 255) : null;
+    const showLogo = req.body.show_logo !== undefined ? !!req.body.show_logo : null;
+    const showBarcode = req.body.show_barcode !== undefined ? !!req.body.show_barcode : null;
+    const currency = req.body.currency_symbol !== undefined ? sanitizeString(req.body.currency_symbol, 10) : null;
+
+    let result;
+    if (hasRecord) {
+      result = await pool.query(
+        `UPDATE receipt_settings SET
+          footer_message = COALESCE($1, footer_message),
+          show_logo = COALESCE($2, show_logo),
+          show_barcode = COALESCE($3, show_barcode),
+          currency_symbol = COALESCE($4, currency_symbol),
+          updated_at = NOW()
+         WHERE store_id = $5
+         RETURNING *`,
+        [footer, showLogo, showBarcode, currency, storeId]
+      );
+    } else {
+      result = await pool.query(
+        `INSERT INTO receipt_settings (store_id, footer_message, show_logo, show_barcode, currency_symbol)
+         VALUES ($1, $2, $3, $4, $5)
+         RETURNING *`,
+        [storeId, footer || 'Thank you for your purchase!', showLogo ?? true, showBarcode ?? true, currency || 'SYP']
+      );
+    }
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed' });
+  }
+});
+
+// ==================== PRODUCT UPDATE WITH CATEGORIES ====================
+// Extend existing PUT /api/products/:id to handle categories and images
+
+app.put('/api/products/:id', requireRealUser, upload.single('image'), async (req, res) => {
+  try {
+    const storeResult = await pool.query('SELECT id FROM stores WHERE owner_id=$1', [req.user.userId]);
+    if (storeResult.rows.length === 0) return res.status(403).json({ error: 'No store found' });
+    const storeId = storeResult.rows[0].id;
+
+    const existing = await pool.query(
+      'SELECT * FROM products WHERE id=$1 AND store_id=$2',
+      [req.params.id, storeId]
+    );
+    if (existing.rows.length === 0) return res.status(404).json({ error: 'Product not found' });
+
+    const { name, price, quantity, description, barcode } = req.body;
+    const imageUrl = req.file ? `${getBaseUrl(req)}/uploads/${req.file.filename}` : existing.rows[0].image_url;
+
+    const result = await pool.query(
+      `UPDATE products SET name=$1, price=$2, quantity=$3, description=$4, barcode=$5, image_url=$6, updated_at=NOW()
+       WHERE id=$7 AND store_id=$8 RETURNING *`,
+      [name, price, quantity, description, barcode, imageUrl, req.params.id, storeId]
+    );
+
+    // Handle category_ids if provided
+    if (req.body.category_ids) {
+      let catIds = req.body.category_ids;
+      if (typeof catIds === 'string') {
+        try { catIds = JSON.parse(catIds); } catch (_) { catIds = []; }
+      }
+      if (Array.isArray(catIds)) {
+        await pool.query('DELETE FROM product_categories WHERE product_id=$1', [req.params.id]);
+        for (const cid of catIds) {
+          await pool.query(
+            'INSERT INTO product_categories (product_id, category_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
+            [req.params.id, parseInt(cid)]
+          );
+        }
+      }
+    }
+
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Something went wrong. Please try again later.' });
+  }
+});
+
+// ==================== END BACKEND EXTENSIONS ====================
 (async () => {
   await initLocationTables();
+  await initInventoryTables();
   app.listen(PORT, '0.0.0.0', () => console.log(`Server on ${getBaseUrl({ headers: {} })} (port ${PORT})`));
 })();
