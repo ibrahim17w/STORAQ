@@ -1,6 +1,4 @@
 // lib/lang/translations.dart
-
-import 'package:flutter/material.dart';
 import '../providers/locale_provider.dart';
 
 final Map<String, Map<String, String>> _translations = {
@@ -257,6 +255,44 @@ final Map<String, Map<String, String>> _translations = {
     'request_timeout': 'Request timed out. Please try again.',
     'skip': 'Skip',
     'verify': 'Verify',
+    'barcode_scanner_unavailable': 'Barcode Scanner Unavailable',
+    'basic_info': 'Basic Info',
+    'best_match': 'Best Match',
+    'camera_error': 'Camera Error',
+    'categorization': 'Categorization',
+    'cheapest_first': 'Cheapest First',
+    'close': 'Close',
+    'closest_first': 'Closest First',
+    'closest_first_off': 'Closest first: OFF',
+    'closest_first_on': 'Closest first: ON',
+    'details': 'Details',
+    'enter_barcode_manually': 'Enter barcode manually',
+    'enter_manually': 'Enter Manually',
+    'expensive_first': 'Expensive First',
+    'image_search_failed': 'Image search failed. Please try again.',
+    'image_search_model_unavailable':
+        'Image search is temporarily unavailable. Please try again later.',
+    'image_search_network_error':
+        'Network error. Please check your connection and try again.',
+    'image_search_no_similar_products':
+        'No visually similar products found in the marketplace. Try a different image or angle.',
+    'image_search_out_of_stock':
+        'We found similar products but they are currently out of stock.',
+    'image_search_preview': 'Search by Image',
+    'image_search_preview_subtitle':
+        'Find visually similar products in the marketplace',
+    'image_search_rate_limited':
+        'Too many searches. Please wait a minute and try again.',
+    'image_search_results': 'Image Search Results',
+    'image_search_timeout': 'Image search timed out. Please try again.',
+    'point_camera_at_barcode': 'Point camera at barcode',
+    'recent_product_views': 'Recent Product Views',
+    'result': 'result',
+    'results': 'results',
+    'retry': 'Retry',
+    'scanner_not_available': 'Scanner not available',
+    'subtotal': 'Subtotal',
+    'tap_product_to_view': 'Tap a product to view details',
   },
 
   'ar': {
@@ -516,6 +552,42 @@ final Map<String, Map<String, String>> _translations = {
     'request_timeout': 'انتهت مهلة الطلب. يرجى المحاولة مرة أخرى.',
     'skip': 'تخطي',
     'verify': 'تحقق',
+    'barcode_scanner_unavailable': 'ماسح الباركود غير متوفر',
+    'basic_info': 'المعلومات الأساسية',
+    'best_match': 'أفضل تطابق',
+    'camera_error': 'خطأ في الكاميرا',
+    'categorization': 'التصنيف',
+    'cheapest_first': 'الأرخص أولاً',
+    'close': 'إغلاق',
+    'closest_first': 'الأقرب أولاً',
+    'closest_first_off': 'الأقرب أولاً: معطل',
+    'closest_first_on': 'الأقرب أولاً: مفعل',
+    'details': 'التفاصيل',
+    'enter_barcode_manually': 'أدخل الباركود يدوياً',
+    'enter_manually': 'الإدخال اليدوي',
+    'expensive_first': 'الأغلى أولاً',
+    'image_search_failed': 'فشل البحث بالصورة. يرجى المحاولة مرة أخرى.',
+    'image_search_model_unavailable':
+        'البحث بالصورة غير متوفر مؤقتاً. يرجى المحاولة لاحقاً.',
+    'image_search_network_error':
+        'خطأ في الشبكة. يرجى التحقق من الاتصال والمحاولة مرة أخرى.',
+    'image_search_no_similar_products':
+        'لم يتم العثور على منتجات مشابهة بصرياً في السوق. جرب صورة أو زاوية مختلفة.',
+    'image_search_out_of_stock': 'وجدنا منتجات مشابهة لكنها غير متوفرة حالياً.',
+    'image_search_preview': 'البحث بالصورة',
+    'image_search_preview_subtitle': 'ابحث عن منتجات مشابهة بصرياً في السوق',
+    'image_search_rate_limited':
+        'محاولات بحث كثيرة جداً. يرجى الانتظار دقيقة والمحاولة مرة أخرى.',
+    'image_search_results': 'نتائج البحث بالصورة',
+    'image_search_timeout': 'انتهت مهلة البحث بالصورة. يرجى المحاولة مرة أخرى.',
+    'point_camera_at_barcode': 'وجه الكاميرا نحو الباركود',
+    'recent_product_views': 'آخر المنتجات المعروضة',
+    'result': 'نتيجة',
+    'results': 'نتائج',
+    'retry': 'إعادة المحاولة',
+    'scanner_not_available': 'الماسح غير متوفر',
+    'subtotal': 'المجموع الفرعي',
+    'tap_product_to_view': 'اضغط على منتج لعرض التفاصيل',
   },
 
   'fr': {
@@ -780,6 +852,46 @@ final Map<String, Map<String, String>> _translations = {
     'request_timeout': 'La requête a expiré. Veuillez réessayer.',
     'skip': 'Passer',
     'verify': 'Vérifier',
+    'barcode_scanner_unavailable': 'Scanner de code-barres indisponible',
+    'basic_info': 'Informations de base',
+    'best_match': 'Meilleure correspondance',
+    'camera_error': 'Erreur de caméra',
+    'categorization': 'Catégorisation',
+    'cheapest_first': 'Moins cher d\'abord',
+    'close': 'Fermer',
+    'closest_first': 'Plus proche d\'abord',
+    'closest_first_off': 'Plus proche d\'abord: OFF',
+    'closest_first_on': 'Plus proche d\'abord: ON',
+    'details': 'Détails',
+    'enter_barcode_manually': 'Saisir le code-barres manuellement',
+    'enter_manually': 'Saisie manuelle',
+    'expensive_first': 'Plus cher d\'abord',
+    'image_search_failed':
+        'La recherche par image a échoué. Veuillez réessayer.',
+    'image_search_model_unavailable':
+        'La recherche par image est temporairement indisponible. Veuillez réessayer plus tard.',
+    'image_search_network_error':
+        'Erreur réseau. Veuillez vérifier votre connexion et réessayer.',
+    'image_search_no_similar_products':
+        'Aucun produit visuellement similaire trouvé sur le marché. Essayez une autre image ou angle.',
+    'image_search_out_of_stock':
+        'Nous avons trouvé des produits similaires mais ils sont actuellement en rupture de stock.',
+    'image_search_preview': 'Recherche par image',
+    'image_search_preview_subtitle':
+        'Trouvez des produits visuellement similaires sur le marché',
+    'image_search_rate_limited':
+        'Trop de recherches. Veuillez attendre une minute et réessayer.',
+    'image_search_results': 'Résultats de recherche par image',
+    'image_search_timeout':
+        'La recherche par image a expiré. Veuillez réessayer.',
+    'point_camera_at_barcode': 'Pointez la caméra vers le code-barres',
+    'recent_product_views': 'Vues récentes des produits',
+    'result': 'résultat',
+    'results': 'résultats',
+    'retry': 'Réessayer',
+    'scanner_not_available': 'Scanner non disponible',
+    'subtotal': 'Sous-total',
+    'tap_product_to_view': 'Appuyez sur un produit pour voir les détails',
   },
 
   'es': {
@@ -1042,6 +1154,46 @@ final Map<String, Map<String, String>> _translations = {
     'request_timeout': 'La solicitud ha caducado. Inténtalo de nuevo.',
     'skip': 'Omitir',
     'verify': 'Verificar',
+    'barcode_scanner_unavailable': 'Escáner de código de barras no disponible',
+    'basic_info': 'Información básica',
+    'best_match': 'Mejor coincidencia',
+    'camera_error': 'Error de cámara',
+    'categorization': 'Categorización',
+    'cheapest_first': 'Más barato primero',
+    'close': 'Cerrar',
+    'closest_first': 'Más cercano primero',
+    'closest_first_off': 'Más cercano primero: OFF',
+    'closest_first_on': 'Más cercano primero: ON',
+    'details': 'Detalles',
+    'enter_barcode_manually': 'Ingresar código de barras manualmente',
+    'enter_manually': 'Ingresar manualmente',
+    'expensive_first': 'Más caro primero',
+    'image_search_failed':
+        'Búsqueda por imagen fallida. Por favor intente de nuevo.',
+    'image_search_model_unavailable':
+        'Búsqueda por imagen no disponible temporalmente. Intente más tarde.',
+    'image_search_network_error':
+        'Error de red. Verifique su conexión e intente de nuevo.',
+    'image_search_no_similar_products':
+        'No se encontraron productos visualmente similares. Pruebe otra imagen o ángulo.',
+    'image_search_out_of_stock':
+        'Encontramos productos similares pero actualmente están agotados.',
+    'image_search_preview': 'Búsqueda por imagen',
+    'image_search_preview_subtitle':
+        'Encuentre productos visualmente similares en el mercado',
+    'image_search_rate_limited':
+        'Demasiadas búsquedas. Espere un minuto e intente de nuevo.',
+    'image_search_results': 'Resultados de búsqueda por imagen',
+    'image_search_timeout':
+        'Búsqueda por imagen agotó el tiempo. Intente de nuevo.',
+    'point_camera_at_barcode': 'Apunte la cámara al código de barras',
+    'recent_product_views': 'Vistas recientes de productos',
+    'result': 'resultado',
+    'results': 'resultados',
+    'retry': 'Reintentar',
+    'scanner_not_available': 'Escáner no disponible',
+    'subtotal': 'Subtotal',
+    'tap_product_to_view': 'Toque un producto para ver detalles',
   },
 
   'tr': {
@@ -1303,6 +1455,45 @@ final Map<String, Map<String, String>> _translations = {
     'request_timeout': 'İstek zaman aşımına uğradı. Lütfen tekrar deneyin.',
     'skip': 'Atla',
     'verify': 'Doğrula',
+    'barcode_scanner_unavailable': 'Barkod Tarayıcı Kullanılamıyor',
+    'basic_info': 'Temel Bilgiler',
+    'best_match': 'En İyi Eşleşme',
+    'camera_error': 'Kamera Hatası',
+    'categorization': 'Kategorilendirme',
+    'cheapest_first': 'Önce En Ucuz',
+    'close': 'Kapat',
+    'closest_first': 'Önce En Yakın',
+    'closest_first_off': 'Önce En Yakın: KAPALI',
+    'closest_first_on': 'Önce En Yakın: AÇIK',
+    'details': 'Detaylar',
+    'enter_barcode_manually': 'Barkodu manuel girin',
+    'enter_manually': 'Manuel Girin',
+    'expensive_first': 'Önce En Pahalı',
+    'image_search_failed': 'Görsel arama başarısız. Lütfen tekrar deneyin.',
+    'image_search_model_unavailable':
+        'Görsel arama geçici olarak kullanılamıyor. Lütfen daha sonra tekrar deneyin.',
+    'image_search_network_error':
+        'Ağ hatası. Lütfen bağlantınızı kontrol edip tekrar deneyin.',
+    'image_search_no_similar_products':
+        'Pazarda görsel olarak benzer ürün bulunamadı. Farklı bir görsel veya açı deneyin.',
+    'image_search_out_of_stock':
+        'Benzer ürünler bulduk ancak şu anda stokta yok.',
+    'image_search_preview': 'Görsel ile Ara',
+    'image_search_preview_subtitle':
+        'Pazarda görsel olarak benzer ürünler bulun',
+    'image_search_rate_limited':
+        'Çok fazla arama. Lütfen bir dakika bekleyip tekrar deneyin.',
+    'image_search_results': 'Görsel Arama Sonuçları',
+    'image_search_timeout':
+        'Görsel arama zaman aşımına uğradı. Lütfen tekrar deneyin.',
+    'point_camera_at_barcode': 'Kamerayı barkoda doğru tutun',
+    'recent_product_views': 'Son Ürün Görüntülemeleri',
+    'result': 'sonuç',
+    'results': 'sonuçlar',
+    'retry': 'Tekrar Dene',
+    'scanner_not_available': 'Tarayıcı kullanılamıyor',
+    'subtotal': 'Ara Toplam',
+    'tap_product_to_view': 'Detayları görmek için bir ürüne dokunun',
   },
 
   'ur': {
@@ -1561,6 +1752,45 @@ final Map<String, Map<String, String>> _translations = {
     'request_timeout': 'درخواست کا وقت ختم ہو گیا۔ براہ کرم دوبارہ کوشش کریں۔',
     'skip': 'چھوڑیں',
     'verify': 'تصدیق کریں',
+    'barcode_scanner_unavailable': 'بارکوڈ اسکینر دستیاب نہیں',
+    'basic_info': 'بنیادی معلومات',
+    'best_match': 'بہترین میچ',
+    'camera_error': 'کیمرے کی خرابی',
+    'categorization': 'زمرہ بندی',
+    'cheapest_first': 'سب سے سستا پہلے',
+    'close': 'بند کریں',
+    'closest_first': 'سب سے قریب پہلے',
+    'closest_first_off': 'سب سے قریب پہلے: بند',
+    'closest_first_on': 'سب سے قریب پہلے: آن',
+    'details': 'تفصیلات',
+    'enter_barcode_manually': 'بارکوڈ دستی طور پر درج کریں',
+    'enter_manually': 'دستی طور پر درج کریں',
+    'expensive_first': 'سب سے مہنگا پہلے',
+    'image_search_failed': 'تصویری تلاش ناکام۔ براہ کرم دوبارہ کوشش کریں۔',
+    'image_search_model_unavailable':
+        'تصویری تلاش عارضی طور پر دستیاب نہیں۔ براہ کرم بعد میں دوبارہ کوشش کریں۔',
+    'image_search_network_error':
+        'نیٹ ورک خرابی۔ براہ کرم اپنا کنکشن چیک کریں اور دوبارہ کوشش کریں۔',
+    'image_search_no_similar_products':
+        'مارکیٹ میں کوئی نظری طور پر ملتا جلتا پروڈکٹ نہیں ملا۔ مختلف تصویر یا زاویہ آزمائیں۔',
+    'image_search_out_of_stock':
+        'ہمیں ملتے جلتے مصنوعات ملیں لیکن وہ فی الحال اسٹاک میں نہیں ہیں۔',
+    'image_search_preview': 'تصویر کے ذریعے تلاش',
+    'image_search_preview_subtitle':
+        'مارکیٹ میں نظری طور پر ملتے جلتے مصنوعات تلاش کریں',
+    'image_search_rate_limited':
+        'بہت زیادہ تلاشیں۔ براہ کرم ایک منٹ انتظار کریں اور دوبارہ کوشش کریں۔',
+    'image_search_results': 'تصویری تلاش کے نتائج',
+    'image_search_timeout':
+        'تصویری تلاش کا وقت ختم ہو گیا۔ براہ کرم دوبارہ کوشش کریں۔',
+    'point_camera_at_barcode': 'کیمرے کو بارکوڈ کی طرف کریں',
+    'recent_product_views': 'حالیہ پروڈکٹ ویوز',
+    'result': 'نتیجہ',
+    'results': 'نتائج',
+    'retry': 'دوبارہ کوشش کریں',
+    'scanner_not_available': 'اسکینر دستیاب نہیں',
+    'subtotal': 'ذیلی کل',
+    'tap_product_to_view': 'تفصیلات دیکھنے کے لیے پروڈکٹ پر دبائیں',
   },
 
   'hi': {
@@ -1822,6 +2052,45 @@ final Map<String, Map<String, String>> _translations = {
     'request_timeout': 'अनुरोध का समय समाप्त हो गया। कृपया पुनः प्रयास करें।',
     'skip': 'छोड़ें',
     'verify': 'सत्यापित करें',
+    'barcode_scanner_unavailable': 'बारकोड स्कैनर अनुपलब्ध',
+    'basic_info': 'बुनियादी जानकारी',
+    'best_match': 'सबसे अच्छा मिलान',
+    'camera_error': 'कैमरा त्रुटि',
+    'categorization': 'वर्गीकरण',
+    'cheapest_first': 'सबसे सस्ता पहले',
+    'close': 'बंद करें',
+    'closest_first': 'सबसे नज़दीक पहले',
+    'closest_first_off': 'सबसे नज़दीक पहले: बंद',
+    'closest_first_on': 'सबसे नज़दीक पहले: चालू',
+    'details': 'विवरण',
+    'enter_barcode_manually': 'बारकोड मैन्युअली दर्ज करें',
+    'enter_manually': 'मैन्युअली दर्ज करें',
+    'expensive_first': 'सबसे महंगा पहले',
+    'image_search_failed': 'छवि खोज विफल। कृपया पुनः प्रयास करें।',
+    'image_search_model_unavailable':
+        'छवि खोज अस्थायी रूप से अनुपलब्ध है। कृपया बाद में पुनः प्रयास करें।',
+    'image_search_network_error':
+        'नेटवर्क त्रुटि। कृपया अपना कनेक्शन जांचें और पुनः प्रयास करें।',
+    'image_search_no_similar_products':
+        'मार्केटप्लेस में दृष्टिगत रूप से समान उत्पाद नहीं मिले। कोई अन्य छवि या कोण आज़माएं।',
+    'image_search_out_of_stock':
+        'हमें समान उत्पाद मिले लेकिन वे वर्तमान में स्टॉक में नहीं हैं।',
+    'image_search_preview': 'छवि द्वारा खोजें',
+    'image_search_preview_subtitle':
+        'मार्केटप्लेस में दृष्टिगत रूप से समान उत्पाद खोजें',
+    'image_search_rate_limited':
+        'बहुत अधिक खोजें। कृपया एक मिनट प्रतीक्षा करें और पुनः प्रयास करें।',
+    'image_search_results': 'छवि खोज परिणाम',
+    'image_search_timeout':
+        'छवि खोज का समय समाप्त हो गया। कृपया पुनः प्रयास करें।',
+    'point_camera_at_barcode': 'कैमरे को बारकोड की ओर करें',
+    'recent_product_views': 'हाल के उत्पाद दृश्य',
+    'result': 'परिणाम',
+    'results': 'परिणाम',
+    'retry': 'पुनः प्रयास करें',
+    'scanner_not_available': 'स्कैनर उपलब्ध नहीं',
+    'subtotal': 'उप-योग',
+    'tap_product_to_view': 'विवरण देखने के लिए उत्पाद पर टैप करें',
   },
 
   'bn': {
@@ -2082,6 +2351,45 @@ final Map<String, Map<String, String>> _translations = {
     'request_timeout': 'অনুরোধের সময় শেষ। অনুগ্রহ করে আবার চেষ্টা করুন।',
     'skip': 'এড়িয়ে যান',
     'verify': 'যাচাই করুন',
+    'barcode_scanner_unavailable': 'বারকোড স্ক্যানার অনুপলব্ধ',
+    'basic_info': 'বেসিক তথ্য',
+    'best_match': 'সেরা ম্যাচ',
+    'camera_error': 'ক্যামেরা ত্রুটি',
+    'categorization': 'শ্রেণীবিভাগ',
+    'cheapest_first': 'সবচেয়ে সস্তা প্রথমে',
+    'close': 'বন্ধ করুন',
+    'closest_first': 'নিকটতম প্রথমে',
+    'closest_first_off': 'নিকটতম প্রথমে: বন্ধ',
+    'closest_first_on': 'নিকটতম প্রথমে: চালু',
+    'details': 'বিস্তারিত',
+    'enter_barcode_manually': 'বারকোড ম্যানুয়ালি লিখুন',
+    'enter_manually': 'ম্যানুয়ালি লিখুন',
+    'expensive_first': 'সবচেয়ে দামি প্রথমে',
+    'image_search_failed':
+        'ছবি অনুসন্ধান ব্যর্থ। অনুগ্রহ করে আবার চেষ্টা করুন।',
+    'image_search_model_unavailable':
+        'ছবি অনুসন্ধান সাময়িকভাবে অনুপলব্ধ। অনুগ্রহ করে পরে আবার চেষ্টা করুন।',
+    'image_search_network_error':
+        'নেটওয়ার্ক ত্রুটি। অনুগ্রহ করে আপনার সংযোগ পরীক্ষা করে আবার চেষ্টা করুন।',
+    'image_search_no_similar_products':
+        'বাজারে দৃশ্যতঃ অনুরূপ কোনো পণ্য পাওয়া যায়নি। অন্য ছবি বা কোণ চেষ্টা করুন।',
+    'image_search_out_of_stock':
+        'আমরা অনুরূপ পণ্য পেয়েছি কিন্তু সেগুলো বর্তমানে স্টকে নেই।',
+    'image_search_preview': 'ছবি দিয়ে অনুসন্ধান',
+    'image_search_preview_subtitle': 'বাজারে দৃশ্যতঃ অনুরূপ পণ্য খুঁজুন',
+    'image_search_rate_limited':
+        'অনেকগুলি অনুসন্ধান। অনুগ্রহ করে এক মিনিট অপেক্ষা করে আবার চেষ্টা করুন।',
+    'image_search_results': 'ছবি অনুসন্ধানের ফলাফল',
+    'image_search_timeout':
+        'ছবি অনুসন্ধানের সময় শেষ। অনুগ্রহ করে আবার চেষ্টা করুন।',
+    'point_camera_at_barcode': 'ক্যামেরাটি বারকোডের দিকে করুন',
+    'recent_product_views': 'সাম্প্রতিক পণ্য দর্শন',
+    'result': 'ফলাফল',
+    'results': 'ফলাফলসমূহ',
+    'retry': 'আবার চেষ্টা করুন',
+    'scanner_not_available': 'স্ক্যানার অনুপলব্ধ',
+    'subtotal': 'উপ-মোট',
+    'tap_product_to_view': 'বিস্তারিত দেখতে একটি পণ্যে ট্যাপ করুন',
   },
 
   'ru': {
@@ -2340,6 +2648,46 @@ final Map<String, Map<String, String>> _translations = {
     'request_timeout': 'Время ожидания запроса истекло. Попробуйте снова.',
     'skip': 'Пропустить',
     'verify': 'Подтвердить',
+    'barcode_scanner_unavailable': 'Сканер штрихкодов недоступен',
+    'basic_info': 'Основная информация',
+    'best_match': 'Лучшее совпадение',
+    'camera_error': 'Ошибка камеры',
+    'categorization': 'Категоризация',
+    'cheapest_first': 'Сначала дешевые',
+    'close': 'Закрыть',
+    'closest_first': 'Сначала ближайшие',
+    'closest_first_off': 'Сначала ближайшие: ВЫКЛ',
+    'closest_first_on': 'Сначала ближайшие: ВКЛ',
+    'details': 'Детали',
+    'enter_barcode_manually': 'Введите штрихкод вручную',
+    'enter_manually': 'Ввести вручную',
+    'expensive_first': 'Сначала дорогие',
+    'image_search_failed':
+        'Поиск по изображению не удался. Пожалуйста, попробуйте снова.',
+    'image_search_model_unavailable':
+        'Поиск по изображению временно недоступен. Пожалуйста, попробуйте позже.',
+    'image_search_network_error':
+        'Ошибка сети. Пожалуйста, проверьте подключение и попробуйте снова.',
+    'image_search_no_similar_products':
+        'Визуально похожих товаров на площадке не найдено. Попробуйте другую картинку или ракурс.',
+    'image_search_out_of_stock':
+        'Мы нашли похожие товары, но они сейчас отсутствуют на складе.',
+    'image_search_preview': 'Поиск по изображению',
+    'image_search_preview_subtitle':
+        'Найдите визуально похожие товары на площадке',
+    'image_search_rate_limited':
+        'Слишком много поисков. Пожалуйста, подождите минуту и попробуйте снова.',
+    'image_search_results': 'Результаты поиска по изображению',
+    'image_search_timeout':
+        'Время ожидания поиска по изображению истекло. Пожалуйста, попробуйте снова.',
+    'point_camera_at_barcode': 'Наведите камеру на штрихкод',
+    'recent_product_views': 'Недавние просмотры товаров',
+    'result': 'результат',
+    'results': 'результаты',
+    'retry': 'Повторить',
+    'scanner_not_available': 'Сканер недоступен',
+    'subtotal': 'Промежуточный итог',
+    'tap_product_to_view': 'Нажмите на товар, чтобы посмотреть детали',
   },
 
   'zh': {
@@ -2591,6 +2939,38 @@ final Map<String, Map<String, String>> _translations = {
     'request_timeout': '请求超时，请重试。',
     'skip': '跳过',
     'verify': '验证',
+    'barcode_scanner_unavailable': '条码扫描器不可用',
+    'basic_info': '基本信息',
+    'best_match': '最佳匹配',
+    'camera_error': '相机错误',
+    'categorization': '分类',
+    'cheapest_first': '最便宜优先',
+    'close': '关闭',
+    'closest_first': '最近优先',
+    'closest_first_off': '最近优先：关闭',
+    'closest_first_on': '最近优先：开启',
+    'details': '详情',
+    'enter_barcode_manually': '手动输入条形码',
+    'enter_manually': '手动输入',
+    'expensive_first': '最贵优先',
+    'image_search_failed': '图片搜索失败。请重试。',
+    'image_search_model_unavailable': '图片搜索暂时不可用。请稍后重试。',
+    'image_search_network_error': '网络错误。请检查您的连接并重试。',
+    'image_search_no_similar_products': '市场中未找到视觉相似的产品。尝试不同的图片或角度。',
+    'image_search_out_of_stock': '我们找到了类似的产品，但目前缺货。',
+    'image_search_preview': '以图搜图',
+    'image_search_preview_subtitle': '在市场中查找视觉相似的产品',
+    'image_search_rate_limited': '搜索次数过多。请等待一分钟后再试。',
+    'image_search_results': '图片搜索结果',
+    'image_search_timeout': '图片搜索超时。请重试。',
+    'point_camera_at_barcode': '将相机对准条形码',
+    'recent_product_views': '最近浏览的产品',
+    'result': '结果',
+    'results': '结果',
+    'retry': '重试',
+    'scanner_not_available': '扫描器不可用',
+    'subtotal': '小计',
+    'tap_product_to_view': '点击产品查看详情',
   },
 };
 

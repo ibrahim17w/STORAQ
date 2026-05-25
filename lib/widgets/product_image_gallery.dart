@@ -1,6 +1,4 @@
 // lib/widgets/product_image_gallery.dart
-// FIXED: Unique keys, no double setState, max image enforcement, proper image picker
-
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
@@ -12,7 +10,7 @@ class ProductImageGallery extends StatefulWidget {
   final ValueChanged<List<File>> onNewFilesChanged;
   final ValueChanged<List<String>> onExistingRemoved;
   final bool readOnly;
-  final int? maxImages; // null = unlimited
+  final int maxImages;
 
   const ProductImageGallery({
     super.key,
@@ -21,7 +19,7 @@ class ProductImageGallery extends StatefulWidget {
     required this.onNewFilesChanged,
     required this.onExistingRemoved,
     this.readOnly = false,
-    this.maxImages,
+    this.maxImages = 4,
   });
 
   @override
@@ -29,97 +27,57 @@ class ProductImageGallery extends StatefulWidget {
 }
 
 class _ProductImageGalleryState extends State<ProductImageGallery> {
+  late List<File> _files;
   late List<String> _urls;
-  final ImagePicker _picker = ImagePicker();
 
   @override
   void initState() {
     super.initState();
+    _files = List.from(widget.newFiles);
     _urls = List.from(widget.existingUrls);
   }
 
-  @override
-  void didUpdateWidget(covariant ProductImageGallery oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    // Only update local URLs from parent if they actually changed
-    if (_urls.length != widget.existingUrls.length ||
-        !_urls.every((url) => widget.existingUrls.contains(url))) {
-      _urls = List.from(widget.existingUrls);
-    }
-  }
-
-  int get _totalImages => _urls.length + widget.newFiles.length;
-  int get _remainingSlots {
-    if (widget.maxImages == null) return 999;
-    return (widget.maxImages! - _totalImages).clamp(0, 999);
-  }
-
-  bool get _canAddMore =>
-      widget.maxImages == null || _totalImages < widget.maxImages!;
+  int get _total => _urls.length + _files.length;
+  bool get _atLimit => _total >= widget.maxImages;
 
   Future<void> _pickImage() async {
-    if (!_canAddMore) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Maximum ${widget.maxImages} images allowed'),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
-      return;
-    }
+    if (_atLimit) return;
 
+    final picker = ImagePicker();
     final source = await showDialog<ImageSource>(
       context: context,
       builder: (_) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: Text(t('select_image_source')),
         actions: [
-          TextButton.icon(
+          TextButton(
             onPressed: () => Navigator.pop(context, ImageSource.camera),
-            icon: const Icon(Icons.camera_alt),
-            label: Text(t('camera')),
+            child: Text(t('camera')),
           ),
-          TextButton.icon(
+          TextButton(
             onPressed: () => Navigator.pop(context, ImageSource.gallery),
-            icon: const Icon(Icons.photo_library),
-            label: Text(t('gallery')),
+            child: Text(t('gallery')),
           ),
         ],
       ),
     );
-
     if (source == null) return;
-
-    try {
-      final picked = await _picker.pickImage(
-        source: source,
-        maxWidth: 1200,
-        maxHeight: 1200,
-        imageQuality: 85,
-      );
-
-      if (picked != null) {
-        final newFile = File(picked.path);
-        // Only notify parent — DO NOT call setState here for newFiles
-        // The parent controls newFiles via its own state
-        final updated = [...widget.newFiles, newFile];
-        widget.onNewFilesChanged(updated);
-      }
-    } catch (e) {
-      debugPrint('Image picker error: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Failed to pick image: $e')));
-      }
+    final picked = await picker.pickImage(
+      source: source,
+      maxWidth: 1200,
+      maxHeight: 1200,
+      imageQuality: 85,
+    );
+    if (picked != null) {
+      final newFiles = [..._files, File(picked.path)];
+      setState(() => _files = newFiles);
+      widget.onNewFilesChanged(_files);
     }
   }
 
   void _removeFile(int index) {
-    // index is within newFiles range
-    final updated = List<File>.from(widget.newFiles);
-    updated.removeAt(index);
-    widget.onNewFilesChanged(updated);
+    setState(() => _files.removeAt(index));
+    widget.onNewFilesChanged(_files);
   }
 
   void _removeUrl(int index) {
@@ -130,85 +88,33 @@ class _ProductImageGalleryState extends State<ProductImageGallery> {
 
   void _reorder(int oldIndex, int newIndex) {
     if (newIndex > oldIndex) newIndex--;
-
-    final total = _urls.length + widget.newFiles.length;
-    if (oldIndex < 0 || oldIndex >= total || newIndex < 0 || newIndex >= total)
-      return;
-
-    // Reordering URLs
-    if (oldIndex < _urls.length && newIndex < _urls.length) {
-      setState(() {
+    setState(() {
+      if (oldIndex < _urls.length && newIndex < _urls.length) {
         final item = _urls.removeAt(oldIndex);
         _urls.insert(newIndex, item);
-      });
-      widget.onExistingRemoved([]); // trigger parent sync if needed
-      return;
-    }
-
-    // Reordering Files
-    final fileOldIndex = oldIndex - _urls.length;
-    final fileNewIndex = newIndex - _urls.length;
-    if (fileOldIndex >= 0 &&
-        fileOldIndex < widget.newFiles.length &&
-        fileNewIndex >= 0 &&
-        fileNewIndex < widget.newFiles.length) {
-      final updated = List<File>.from(widget.newFiles);
-      final item = updated.removeAt(fileOldIndex);
-      updated.insert(fileNewIndex, item);
-      widget.onNewFilesChanged(updated);
-    }
+      } else if (oldIndex >= _urls.length && newIndex >= _urls.length) {
+        final fOld = oldIndex - _urls.length;
+        final fNew = newIndex - _urls.length;
+        final item = _files.removeAt(fOld);
+        _files.insert(fNew, item);
+      }
+    });
+    widget.onNewFilesChanged(_files);
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final total = _totalImages;
-    final max = widget.maxImages;
+    final total = _urls.length + _files.length;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        if (max != null)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 8),
-            child: Row(
-              children: [
-                Text(
-                  '$total / $max',
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    fontWeight: FontWeight.w600,
-                    color: total >= max
-                        ? Colors.orange
-                        : theme.colorScheme.onSurfaceVariant,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                if (total >= max)
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 4,
-                    ),
-                    decoration: BoxDecoration(
-                      color: Colors.orange.withOpacity(0.12),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Text(
-                      'Limit reached',
-                      style: theme.textTheme.labelSmall?.copyWith(
-                        color: Colors.orange.shade800,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ),
-              ],
-            ),
-          ),
         SizedBox(
           height: 110,
           child: ReorderableListView.builder(
             scrollDirection: Axis.horizontal,
-            itemCount: total + (widget.readOnly || !_canAddMore ? 0 : 1),
+            itemCount: total + (widget.readOnly ? 0 : 1),
             onReorder: _reorder,
             proxyDecorator: (child, index, animation) => AnimatedBuilder(
               animation: animation,
@@ -217,37 +123,46 @@ class _ProductImageGalleryState extends State<ProductImageGallery> {
             ),
             itemBuilder: (_, index) {
               // Add button
-              if (!widget.readOnly && _canAddMore && index == total) {
+              if (!widget.readOnly && index == total) {
                 return Padding(
-                  key: const ValueKey('__add_button__'),
+                  key: const ValueKey('add'),
                   padding: const EdgeInsets.only(right: 8),
                   child: InkWell(
-                    onTap: _pickImage,
+                    onTap: _atLimit ? null : _pickImage,
                     borderRadius: BorderRadius.circular(12),
                     child: Container(
                       width: 100,
                       height: 100,
                       decoration: BoxDecoration(
-                        color: theme.colorScheme.surfaceContainerHighest,
+                        color: _atLimit
+                            ? theme.colorScheme.surfaceContainerHighest.withOpacity(0.5)
+                            : theme.colorScheme.surfaceContainerHighest,
                         borderRadius: BorderRadius.circular(12),
                         border: Border.all(
-                          color: theme.colorScheme.outlineVariant,
+                          color: _atLimit
+                              ? theme.colorScheme.outlineVariant.withOpacity(0.5)
+                              : theme.colorScheme.outlineVariant,
                           width: 2,
+                          style: BorderStyle.solid,
                         ),
                       ),
                       child: Column(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
                           Icon(
-                            Icons.add_photo_alternate,
-                            color: theme.colorScheme.primary,
+                            _atLimit ? Icons.block : Icons.add_photo_alternate,
+                            color: _atLimit
+                                ? theme.colorScheme.onSurfaceVariant.withOpacity(0.4)
+                                : theme.colorScheme.primary,
                           ),
                           const SizedBox(height: 4),
                           Text(
-                            t('add'),
+                            _atLimit ? t('limit_reached') : t('add'),
                             style: TextStyle(
                               fontSize: 12,
-                              color: theme.colorScheme.primary,
+                              color: _atLimit
+                                  ? theme.colorScheme.onSurfaceVariant.withOpacity(0.4)
+                                  : theme.colorScheme.primary,
                             ),
                           ),
                         ],
@@ -259,18 +174,10 @@ class _ProductImageGalleryState extends State<ProductImageGallery> {
 
               final isUrl = index < _urls.length;
               final url = isUrl ? _urls[index] : null;
-              final fileIndex = index - _urls.length;
-              final file = !isUrl && fileIndex < widget.newFiles.length
-                  ? widget.newFiles[fileIndex]
-                  : null;
-
-              // FIXED: Use proper unique keys with actual index values
-              final itemKey = isUrl
-                  ? ValueKey('url_${url}_$index')
-                  : ValueKey('file_${file?.path}_$index');
+              final file = !isUrl ? _files[index - _urls.length] : null;
 
               return Padding(
-                key: itemKey,
+                key: ValueKey(isUrl ? 'url_$index' : 'file_$index'),
                 padding: const EdgeInsets.only(right: 8),
                 child: Stack(
                   children: [
@@ -287,9 +194,10 @@ class _ProductImageGalleryState extends State<ProductImageGallery> {
                                 errorBuilder: (_, __, ___) =>
                                     const Icon(Icons.broken_image),
                               )
-                            : (file != null
-                                  ? Image.file(file, fit: BoxFit.cover)
-                                  : const Icon(Icons.broken_image)),
+                            : Image.file(
+                                file!,
+                                fit: BoxFit.cover,
+                              ),
                       ),
                     ),
                     if (!widget.readOnly)
@@ -299,17 +207,14 @@ class _ProductImageGalleryState extends State<ProductImageGallery> {
                         child: GestureDetector(
                           onTap: () => isUrl
                               ? _removeUrl(index)
-                              : _removeFile(fileIndex),
+                              : _removeFile(index - _urls.length),
                           child: Container(
                             decoration: const BoxDecoration(
                               color: Colors.black54,
                               shape: BoxShape.circle,
                             ),
-                            child: const Icon(
-                              Icons.close,
-                              size: 16,
-                              color: Colors.white,
-                            ),
+                            child: const Icon(Icons.close,
+                                size: 16, color: Colors.white),
                           ),
                         ),
                       ),
@@ -319,9 +224,7 @@ class _ProductImageGalleryState extends State<ProductImageGallery> {
                         left: 4,
                         child: Container(
                           padding: const EdgeInsets.symmetric(
-                            horizontal: 6,
-                            vertical: 2,
-                          ),
+                              horizontal: 6, vertical: 2),
                           decoration: BoxDecoration(
                             color: theme.colorScheme.primary,
                             borderRadius: BorderRadius.circular(4),

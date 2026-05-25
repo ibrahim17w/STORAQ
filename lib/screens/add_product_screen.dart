@@ -1,5 +1,5 @@
 // lib/screens/add_product_screen.dart
-// FIXED: No double setState, proper gallery integration, max 4 images
+// COMPLETE REPLACEMENT — modern centered UI, max 4 images per product
 
 import 'dart:io';
 import 'dart:math' show max;
@@ -35,11 +35,16 @@ class _AddProductScreenState extends State<AddProductScreen> {
   List<File> _newImages = [];
   List<String> _existingImages = [];
   List<int> _categoryIds = [];
+  String? _barcodeError;
   bool _isLoading = false;
   bool _barcodeExists = false;
   Map<String, dynamic>? _existingBarcodeProduct;
 
   static const int _maxImagesPerProduct = 4;
+
+  int get _totalImages => _existingImages.length + _newImages.length;
+  int get _remainingImageSlots =>
+      max(0, _maxImagesPerProduct - _existingImages.length);
 
   @override
   void initState() {
@@ -67,30 +72,32 @@ class _AddProductScreenState extends State<AddProductScreen> {
           });
         }
       } else {
-        if (mounted) {
+        if (mounted)
           setState(() {
             _barcodeExists = false;
             _existingBarcodeProduct = null;
           });
-        }
       }
     } catch (_) {
       // Silently fail validation; backend will enforce on save
     }
   }
 
-  /// Called by gallery when new files are picked.
-  /// Gallery now handles max enforcement internally, so we just accept.
   void _handleNewImages(List<File> files) {
-    // Only update state — no validation needed here anymore
-    setState(() => _newImages = files);
-  }
-
-  /// Called by gallery when existing images are removed.
-  void _handleExistingRemoved(List<String> removed) {
-    // If you need to track removed URLs for server deletion, do it here.
-    // For now just let the gallery manage its own _urls list.
-    setState(() {}); // rebuild to sync any parent-level counters if needed
+    if (_remainingImageSlots <= 0) {
+      _showError(
+        'Maximum $_maxImagesPerProduct images allowed per product. Remove existing images first.',
+      );
+      return;
+    }
+    if (files.length > _remainingImageSlots) {
+      _showError(
+        'Only $_remainingImageSlots image slot(s) remaining (max $_maxImagesPerProduct total).',
+      );
+      setState(() => _newImages = files.take(_remainingImageSlots).toList());
+    } else {
+      setState(() => _newImages = files);
+    }
   }
 
   Future<void> _save() async {
@@ -166,14 +173,9 @@ class _AddProductScreenState extends State<AddProductScreen> {
           SnackBar(
             content: Text(t('offline_saved')),
             backgroundColor: Colors.orange,
-            behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12),
-            ),
-            margin: const EdgeInsets.all(12),
           ),
         );
-        Navigator.pop(context);
+        Navigator.pop(context, {'offline': true});
       }
       return;
     }
@@ -189,10 +191,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
           quantity: qty,
           description: _descCtrl.text.trim(),
           barcode: barcode,
-          categoryId: _categoryIds.isNotEmpty ? _categoryIds.first : null,
           image: _newImages.isNotEmpty ? _newImages.first : null,
-          extraImages: _newImages.length > 1 ? _newImages.sublist(1) : null,
-          existingImages: _existingImages,
         );
       } else {
         result = await ApiService.createProduct(
@@ -201,10 +200,22 @@ class _AddProductScreenState extends State<AddProductScreen> {
           quantity: qty,
           description: _descCtrl.text.trim(),
           barcode: barcode,
-          categoryId: _categoryIds.isNotEmpty ? _categoryIds.first : null,
           image: _newImages.isNotEmpty ? _newImages.first : null,
-          extraImages: _newImages.length > 1 ? _newImages.sublist(1) : null,
         );
+      }
+
+      // Upload additional images if any (max 4 total)
+      if (_newImages.length > 1 && result['id'] != null) {
+        final extraImages = _newImages
+            .sublist(1)
+            .take(_maxImagesPerProduct - 1);
+        for (final img in extraImages) {
+          try {
+            await ApiService.uploadProductImage(result['id'] as int, img);
+          } catch (e) {
+            debugPrint('Extra image upload failed: $e');
+          }
+        }
       }
 
       if (mounted) {
@@ -212,11 +223,6 @@ class _AddProductScreenState extends State<AddProductScreen> {
           SnackBar(
             content: Text(widget.product != null ? t('updated') : t('saved')),
             backgroundColor: Colors.green,
-            behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12),
-            ),
-            margin: const EdgeInsets.all(12),
           ),
         );
         Navigator.pop(context, result);
@@ -277,6 +283,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
     String label, {
     IconData? icon,
     String? helper,
+    Widget? suffix,
   }) {
     final theme = Theme.of(context);
     final borderRadius = BorderRadius.circular(14);
@@ -286,6 +293,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
       prefixIcon: icon != null
           ? Icon(icon, size: 20, color: theme.colorScheme.onSurfaceVariant)
           : null,
+      suffix: suffix,
       filled: true,
       fillColor: theme.brightness == Brightness.light
           ? Colors.grey.shade50
@@ -364,12 +372,55 @@ class _AddProductScreenState extends State<AddProductScreen> {
                         ],
                       ),
                       padding: const EdgeInsets.all(16),
-                      child: ProductImageGallery(
-                        existingUrls: _existingImages,
-                        newFiles: _newImages,
-                        onNewFilesChanged: _handleNewImages,
-                        onExistingRemoved: _handleExistingRemoved,
-                        maxImages: _maxImagesPerProduct,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Text(
+                                '$_totalImages / $_maxImagesPerProduct',
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                  color: _totalImages >= _maxImagesPerProduct
+                                      ? Colors.orange
+                                      : theme.colorScheme.onSurfaceVariant,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                              if (_totalImages >= _maxImagesPerProduct)
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 8,
+                                    vertical: 4,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: Colors.orange.withOpacity(0.12),
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  child: Text(
+                                    'Limit reached',
+                                    style: theme.textTheme.labelSmall?.copyWith(
+                                      color: Colors.orange.shade800,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ),
+                            ],
+                          ),
+                          const SizedBox(height: 10),
+                          ProductImageGallery(
+                            existingUrls: _existingImages,
+                            newFiles: _newImages,
+                            onNewFilesChanged: _handleNewImages,
+                            onExistingRemoved: (removed) {
+                              setState(() {
+                                for (final url in removed) {
+                                  _existingImages.remove(url);
+                                }
+                              });
+                            },
+                          ),
+                        ],
                       ),
                     ),
                     const SizedBox(height: 28),
@@ -436,7 +487,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
                                   decoration: _modernInputDecoration(
                                     context,
                                     '${t('price')} *',
-                                    icon: Icons.attach_money,
+                                    icon: Icons.payments_outlined,
                                     helper: t('price_helper'),
                                   ),
                                   validator: (v) {

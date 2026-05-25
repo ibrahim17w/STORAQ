@@ -6,6 +6,7 @@ const cors = require('cors');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
+const fs = require('fs');
 const multer = require('multer');
 const path = require('path');
 const rateLimit = require('express-rate-limit');
@@ -995,53 +996,255 @@ app.post('/api/admin/migrate-locations', authenticateToken, async (req, res) => 
 });
 // ==================== END GEOCODING ====================
 
-// ==================== IMAGE SEARCH ====================
-app.post('/api/search/image', optionalAuth, async (req, res) => {
+
+// ==================== IMAGE EMBEDDING SYSTEM ====================
+let clipProcessor = null;
+let clipVisionModel = null;
+let pgvectorAvailable = false;
+let transformersModule = null;
+
+async function getTransformers() {
+  if (transformersModule) return transformersModule;
   try {
-    if (!genAI) {
-      return res.status(503).json({ error: 'Image search not configured. Set GEMINI_API_KEY in .env' });
-    }
-
-    const { image, mimeType } = req.body;
-    if (!image || !mimeType) {
-      return res.status(400).json({ error: 'image (base64) and mimeType are required' });
-    }
-
-    const allowedMime = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
-    if (!allowedMime.includes(mimeType)) {
-      return res.status(400).json({ error: `Unsupported mimeType ${mimeType}. Use image/jpeg, image/png, image/webp, or image/gif.` });
-    }
-
-    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
-    const result = await model.generateContent([
-      'Describe the main product in this image in 2-4 words suitable for a marketplace search query. Return ONLY the search query text, nothing else.',
-      { inlineData: { mimeType, data: image } },
-    ]);
-
-    let query = null;
-    try {
-      const response = result.response;
-      if (response && typeof response.text === 'function') {
-        query = response.text()?.trim();
-      } else if (response && response.candidates && response.candidates[0]?.content?.parts?.[0]?.text) {
-        query = response.candidates[0].content.parts[0].text.trim();
-      }
-    } catch (parseErr) {
-      console.error('Gemini response parse error:', parseErr.message);
-    }
-
-    if (!query) {
-      return res.status(422).json({ error: 'Could not identify product in image' });
-    }
-
-    res.json({ query });
+    const mod = await import('@xenova/transformers');
+    // Handle both ESM and CJS module structures
+    transformersModule = mod.default || mod;
+    console.log('Transformers module loaded. Available keys:', Object.keys(transformersModule).slice(0, 10));
+    return transformersModule;
   } catch (err) {
-    console.error('Image search error:', err);
-    res.status(500).json({ error: err.message || 'Image search failed. Please try again.' });
+    console.error('Failed to import @xenova/transformers:', err.message);
+    throw err;
   }
-});
-// ==================== END IMAGE SEARCH ====================
+}
 
+async function initEmbeddingTables() {
+  try {
+    await pool.query('CREATE EXTENSION IF NOT EXISTS vector');
+    pgvectorAvailable = true;
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS image_embeddings (
+        id SERIAL PRIMARY KEY,
+        product_id INTEGER REFERENCES products(id) ON DELETE CASCADE,
+        image_url TEXT NOT NULL,
+        embedding vector(512),
+        model_name VARCHAR(50) DEFAULT 'Xenova/clip-vit-base-patch16',
+        created_at TIMESTAMP DEFAULT NOW(),
+        UNIQUE(product_id, image_url)
+      )
+    `);
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_image_embeddings_vector 
+      ON image_embeddings USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100)
+    `);
+    console.log('✅ pgvector embedding tables ready');
+  } catch (err) {
+    console.log('⚠️ pgvector not available, using JSONB fallback for embeddings');
+    pgvectorAvailable = false;
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS image_embeddings (
+        id SERIAL PRIMARY KEY,
+        product_id INTEGER REFERENCES products(id) ON DELETE CASCADE,
+        image_url TEXT NOT NULL,
+        embedding_json JSONB,
+        model_name VARCHAR(50) DEFAULT 'Xenova/clip-vit-base-patch16',
+        created_at TIMESTAMP DEFAULT NOW(),
+        UNIQUE(product_id, image_url)
+      )
+    `);
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_image_embeddings_product ON image_embeddings(product_id)
+    `);
+  }
+}
+
+async function loadClipModel() {
+  if (clipProcessor && clipVisionModel) return { processor: clipProcessor, model: clipVisionModel };
+
+  const tf = await getTransformers();
+
+  // Check what's available
+  const hasAutoProcessor = tf.AutoProcessor || (tf.default && tf.default.AutoProcessor);
+  const hasVisionModel = tf.CLIPVisionModelWithProjection || (tf.default && tf.default.CLIPVisionModelWithProjection);
+  const hasRawImage = tf.RawImage || (tf.default && tf.default.RawImage);
+  const hasEnv = tf.env || (tf.default && tf.default.env);
+
+  console.log('AutoProcessor available:', !!hasAutoProcessor);
+  console.log('CLIPVisionModelWithProjection available:', !!hasVisionModel);
+  console.log('RawImage available:', !!hasRawImage);
+  console.log('env available:', !!hasEnv);
+
+  if (!hasAutoProcessor || !hasVisionModel) {
+    throw new Error('Required CLIP classes not found in @xenova/transformers. Available: ' + Object.keys(tf).join(', '));
+  }
+
+  try {
+    const AutoProcessor = tf.AutoProcessor || tf.default.AutoProcessor;
+    const CLIPVisionModelWithProjection = tf.CLIPVisionModelWithProjection || tf.default.CLIPVisionModelWithProjection;
+    const env = tf.env || tf.default.env || {};
+
+    if (env.allowRemoteModels !== undefined) env.allowRemoteModels = true;
+    if (env.localModelPath !== undefined) env.localModelPath = './models/';
+
+    const modelId = 'Xenova/clip-vit-base-patch16';
+    clipProcessor = await AutoProcessor.from_pretrained(modelId);
+    clipVisionModel = await CLIPVisionModelWithProjection.from_pretrained(modelId, { quantized: true });
+    console.log('✅ CLIP vision model loaded (Xenova/clip-vit-base-patch16)');
+    return { processor: clipProcessor, model: clipVisionModel };
+  } catch (err) {
+    console.error('❌ Failed to load CLIP model:', err.message);
+    throw new Error('Image embedding model unavailable: ' + err.message);
+  }
+}
+
+function normalizeVector(vec) {
+  const norm = Math.sqrt(vec.reduce((sum, v) => sum + v * v, 0));
+  if (norm === 0) return vec;
+  return vec.map(v => v / norm);
+}
+
+async function generateImageEmbedding(imagePath) {
+  const { processor, model } = await loadClipModel();
+  const tf = await getTransformers();
+
+  const RawImage = tf.RawImage || (tf.default && tf.default.RawImage);
+  if (!RawImage) {
+    throw new Error('RawImage not available in @xenova/transformers');
+  }
+
+  const image = await RawImage.read(imagePath);
+  const imageInputs = await processor(image);
+  const { image_embeds } = await model(imageInputs);
+
+  let vec;
+  if (image_embeds && image_embeds.data) {
+    vec = Array.from(image_embeds.data);
+  } else {
+    throw new Error('Failed to extract image embedding');
+  }
+
+  vec = vec.map(v => typeof v === 'number' ? v : parseFloat(v)).filter(v => !isNaN(v));
+  if (vec.length === 0) throw new Error('Empty embedding generated');
+  if (vec.length !== 512) {
+    console.warn(`Embedding dimension is ${vec.length}, expected 512. Truncating/padding.`);
+    if (vec.length > 512) vec = vec.slice(0, 512);
+    else while (vec.length < 512) vec.push(0);
+  }
+  return normalizeVector(vec);
+}
+
+async function saveEmbedding(productId, imageUrl, embedding) {
+  if (!embedding || embedding.length === 0) return;
+  if (pgvectorAvailable) {
+    const vectorStr = `[${embedding.join(',')}]`;
+    await pool.query(
+      `INSERT INTO image_embeddings (product_id, image_url, embedding)
+       VALUES ($1, $2, $3::vector)
+       ON CONFLICT (product_id, image_url) DO UPDATE SET
+         embedding = EXCLUDED.embedding,
+         model_name = 'Xenova/clip-vit-base-patch16',
+         created_at = NOW()`,
+      [productId, imageUrl, vectorStr]
+    );
+  } else {
+    await pool.query(
+      `INSERT INTO image_embeddings (product_id, image_url, embedding_json)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (product_id, image_url) DO UPDATE SET
+         embedding_json = EXCLUDED.embedding_json,
+         model_name = 'Xenova/clip-vit-base-patch16',
+         created_at = NOW()`,
+      [productId, imageUrl, JSON.stringify(embedding)]
+    );
+  }
+}
+
+async function deleteEmbeddingsForProduct(productId) {
+  await pool.query('DELETE FROM image_embeddings WHERE product_id = $1', [productId]);
+}
+
+function cosineSimilarity(a, b) {
+  if (!Array.isArray(a)) a = JSON.parse(JSON.stringify(a));
+  if (!Array.isArray(b)) b = JSON.parse(JSON.stringify(b));
+  let dot = 0, normA = 0, normB = 0;
+  const len = Math.min(a.length, b.length);
+  for (let i = 0; i < len; i++) {
+    dot += a[i] * b[i];
+    normA += a[i] * a[i];
+    normB += b[i] * b[i];
+  }
+  if (normA === 0 || normB === 0) return 0;
+  return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+}
+
+// ==================== IMAGE SIMILARITY SEARCH ====================
+async function findSimilarProductsByImage(embedding, limit = 20, minSimilarity = 0.60) {
+  let rows = [];
+  
+  if (pgvectorAvailable) {
+    const vectorStr = `[${embedding.join(',')}]`;
+    const result = await pool.query(
+      `SELECT 
+         ie.product_id,
+         ie.image_url,
+         1 - (ie.embedding <=> $1::vector) AS similarity
+       FROM image_embeddings ie
+       WHERE 1 - (ie.embedding <=> $1::vector) >= $2
+       ORDER BY similarity DESC
+       LIMIT $3`,
+      [vectorStr, minSimilarity, limit * 3] // fetch extra to allow for dedup
+    );
+    rows = result.rows;
+  } else {
+    const result = await pool.query(
+      `SELECT product_id, image_url, embedding_json FROM image_embeddings`
+    );
+    rows = result.rows.map(row => ({
+      product_id: row.product_id,
+      image_url: row.image_url,
+      similarity: cosineSimilarity(embedding, row.embedding_json)
+    })).filter(r => r.similarity >= minSimilarity);
+    rows.sort((a, b) => b.similarity - a.similarity);
+    rows = rows.slice(0, limit * 3);
+  }
+
+  // DEDUPLICATE: keep only highest similarity per product_id
+  const bestByProduct = new Map();
+  for (const row of rows) {
+    const existing = bestByProduct.get(row.product_id);
+    if (!existing || row.similarity > existing.similarity) {
+      bestByProduct.set(row.product_id, row);
+    }
+  }
+  
+  return Array.from(bestByProduct.values())
+    .sort((a, b) => b.similarity - a.similarity)
+    .slice(0, limit);
+}
+// Fire-and-forget embedding generation for product images
+async function processProductEmbeddings(productId, imageUrls) {
+  try {
+    await deleteEmbeddingsForProduct(productId);
+    for (const url of imageUrls) {
+      if (!url) continue;
+      const filename = path.basename(url);
+      const filePath = path.join(__dirname, 'uploads', filename);
+      if (!fs.existsSync(filePath)) {
+        console.log('Image file not found for embedding:', filePath);
+        continue;
+      }
+      const embedding = await generateImageEmbedding(filePath);
+      await saveEmbedding(productId, url, embedding);
+    }
+    console.log(`✅ Embeddings generated for product ${productId}`);
+  } catch (err) {
+    console.error(`❌ Embedding generation failed for product ${productId}:`, err.message);
+  }
+}
+// ==================== END IMAGE EMBEDDING SYSTEM ====================
+// server.js - IMAGE SIMILARITY SEARCH FIX (Part 1 of 2)
+// This replaces the /api/search/image-similarity endpoint
+
+// ==================== IMAGE SEARCH ====================
 // ==================== CATEGORIES ====================
 app.get('/api/categories', async (req, res) => {
   try {
@@ -1228,7 +1431,6 @@ app.get('/api/orders/:id', requireRealUser, async (req, res) => {
   }
 });
 // ==================== END CHECKOUT & ORDERS ====================
-
 // REGISTER
 app.post('/api/auth/register', async (req, res) => {
  const client = await pool.connect();
@@ -1892,6 +2094,15 @@ app.post('/api/products', requireRealUser, productUpload, async (req, res) => {
       ]
     );
     res.status(201).json(result.rows[0]);
+
+    // Async embedding generation (fire-and-forget)
+    const productId = result.rows[0].id;
+    const imagesForEmbed = allImages.filter(url => url != null && url.length > 0);
+    if (imagesForEmbed.length > 0) {
+      setTimeout(() => processProductEmbeddings(productId, imagesForEmbed).catch((e) => {
+        console.error('Background embedding error for product', productId, e.message);
+      }), 0);
+    }
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Something went wrong. Please try again later.' });
@@ -1941,6 +2152,14 @@ app.put('/api/products/:id', requireRealUser, productUpload, async (req, res) =>
       [name, price, quantity, description, barcode, category_id, low_stock_threshold, imageUrl, JSON.stringify(allImages), req.params.id]
     );
     res.json(result.rows[0]);
+
+    // Async embedding generation (fire-and-forget)
+    const updatedImages = allImages.filter(url => url != null && url.length > 0);
+    if (updatedImages.length > 0) {
+      setTimeout(() => processProductEmbeddings(req.params.id, updatedImages).catch((e) => {
+        console.error('Background embedding error for product', req.params.id, e.message);
+      }), 0);
+    }
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Something went wrong. Please try again later.' });
@@ -1964,7 +2183,6 @@ app.post('/api/upload', requireRealUser, upload.single('image'), (req, res) => {
 
  res.json({ url: `${getBaseUrl(req)}/uploads/${req.file.filename}` });
 });
-
 // UPDATE PREFERRED LANGUAGE
 app.put('/api/me/language', requireRealUser, async (req, res) => {
  try {
@@ -1979,7 +2197,91 @@ app.put('/api/me/language', requireRealUser, async (req, res) => {
  }
 });
 
+// ==================== IMAGE SIMILARITY SEARCH (FIXED - show ALL matching products) ====================
+const imageSearchLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (req, res) => res.status(429).json({ error: 'Too many image searches. Please wait a minute.' }),
+});
+
+app.post('/api/search/image-similarity', imageSearchLimiter, upload.single('image'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No image uploaded' });
+
+    try {
+      await loadClipModel();
+    } catch (modelErr) {
+      console.error('Model load error:', modelErr.message);
+      return res.status(503).json({ 
+        error: 'Image search is currently unavailable. Model not loaded.',
+        detail: modelErr.message 
+      });
+    }
+
+    const filePath = req.file.path;
+    const embedding = await generateImageEmbedding(filePath);
+
+    // LOWERED THRESHOLD: 0.60 instead of 0.65 to show more matches
+    const similar = await findSimilarProductsByImage(embedding, 50, 0.60);
+
+    if (similar.length === 0) {
+      return res.json({ 
+        results: [], 
+        message: 'No visually similar products found',
+        reason: 'no_matches'
+      });
+    }
+
+    const productIds = similar.map(s => s.product_id);
+    const placeholders = productIds.map((_, i) => '$' + (i + 1)).join(',');
+    const productsResult = await pool.query(
+      `SELECT p.*, s.name as shop_name, s.city, s.country, s.lat, s.lng, s.id as store_id
+       FROM products p
+       JOIN stores s ON p.store_id = s.id
+       WHERE p.id IN (${placeholders}) AND p.quantity > 0`,
+      productIds
+    );
+
+    const productMap = new Map(productsResult.rows.map(p => [p.id, p]));
+
+    // Build results with similarity scores - NO DEDUPLICATION, show ALL matching products
+    let results = similar
+      .map(s => {
+        const product = productMap.get(s.product_id);
+        if (!product) return null;
+        return {
+          ...product,
+          similarity_score: Math.round(s.similarity * 1000) / 1000,
+          matched_image_url: s.image_url,
+        };
+      })
+      .filter(Boolean);
+
+    // Sort by similarity (highest first) - keep ALL results
+    results.sort((a, b) => b.similarity_score - a.similarity_score);
+
+    // Limit to top 50 results (increased from 20)
+    results = results.slice(0, 50);
+
+    if (results.length === 0) {
+      return res.json({ 
+        results: [], 
+        message: 'Similar products found but currently unavailable',
+        reason: 'out_of_stock'
+      });
+    }
+
+    res.json({ results });
+  } catch (err) {
+    console.error('Image similarity search error:', err);
+    res.status(500).json({ error: err.message || 'Image search failed' });
+  }
+});
+// ==================== END IMAGE SIMILARITY SEARCH ====================
 // MARKETPLACE FEED
+
 app.get('/api/marketplace/feed', async (req, res) => {
  try {
  const result = await pool.query(
@@ -2171,6 +2473,13 @@ app.post('/api/products/:id/images', requireRealUser, upload.single('image'), as
       [req.params.id, imageUrl]
     );
     res.status(201).json(result.rows[0]);
+
+    // Async embedding generation
+    const productId = result.rows[0].id;
+    const allImagesForEmbed = imageUrl ? [imageUrl, ...extraImages] : extraImages;
+    if (allImagesForEmbed.length > 0) {
+      setTimeout(() => processProductEmbeddings(productId, allImagesForEmbed).catch(() => {}), 0);
+    }
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Failed' });
@@ -2587,5 +2896,6 @@ app.put('/api/products/:id', requireRealUser, upload.single('image'), async (req
 (async () => {
   await initLocationTables();
   await initInventoryTables();
+  await initEmbeddingTables();
   app.listen(PORT, '0.0.0.0', () => console.log(`Server on ${getBaseUrl({ headers: {} })} (port ${PORT})`));
 })();

@@ -928,45 +928,30 @@ class _RegisterScreenState extends State<RegisterScreen> {
                                               constraints: const BoxConstraints(
                                                 maxHeight: 200,
                                               ),
-                                              child: SingleChildScrollView(
-                                                child: Column(
-                                                  mainAxisSize:
-                                                      MainAxisSize.min,
-                                                  children: [
-                                                    // Auto-select hint
-                                                    Container(
-                                                      padding:
-                                                          const EdgeInsets.symmetric(
-                                                            horizontal: 12,
-                                                            vertical: 6,
-                                                          ),
-                                                      color: Theme.of(context)
-                                                          .colorScheme
-                                                          .primaryContainer
-                                                          .withOpacity(0.3),
-                                                      child: Row(
-                                                        children: [
-                                                          Icon(
-                                                            Icons
-                                                                .keyboard_return,
-                                                            size: 14,
-                                                            color:
-                                                                Theme.of(
-                                                                      context,
-                                                                    )
-                                                                    .colorScheme
-                                                                    .primary,
-                                                          ),
-                                                          const SizedBox(
-                                                            width: 6,
-                                                          ),
-                                                          Text(
-                                                            t(
-                                                                  'press_enter_auto',
-                                                                ) ??
-                                                                'Press Enter to select first',
-                                                            style: TextStyle(
-                                                              fontSize: 11,
+                                              child: Material(
+                                                type: MaterialType.transparency,
+                                                child: SingleChildScrollView(
+                                                  child: Column(
+                                                    mainAxisSize:
+                                                        MainAxisSize.min,
+                                                    children: [
+                                                      // Auto-select hint
+                                                      Container(
+                                                        padding:
+                                                            const EdgeInsets.symmetric(
+                                                              horizontal: 12,
+                                                              vertical: 6,
+                                                            ),
+                                                        color: Theme.of(context)
+                                                            .colorScheme
+                                                            .primaryContainer
+                                                            .withOpacity(0.3),
+                                                        child: Row(
+                                                          children: [
+                                                            Icon(
+                                                              Icons
+                                                                  .keyboard_return,
+                                                              size: 14,
                                                               color:
                                                                   Theme.of(
                                                                         context,
@@ -974,47 +959,65 @@ class _RegisterScreenState extends State<RegisterScreen> {
                                                                       .colorScheme
                                                                       .primary,
                                                             ),
-                                                          ),
-                                                        ],
-                                                      ),
-                                                    ),
-                                                    ..._geocodeResults.map((r) {
-                                                      final display =
-                                                          r['display_name']
-                                                              ?.toString() ??
-                                                          '';
-                                                      final cid =
-                                                          r['canonical_id']
-                                                              ?.toString() ??
-                                                          '';
-                                                      return ListTile(
-                                                        dense: true,
-                                                        leading: const Icon(
-                                                          Icons.place,
-                                                          size: 20,
-                                                        ),
-                                                        title: Text(
-                                                          display,
-                                                          maxLines: 1,
-                                                          overflow: TextOverflow
-                                                              .ellipsis,
-                                                        ),
-                                                        subtitle: Text(
-                                                          cid,
-                                                          style: TextStyle(
-                                                            fontSize: 10,
-                                                            color: Colors
-                                                                .grey
-                                                                .shade500,
-                                                          ),
-                                                        ),
-                                                        onTap: () =>
-                                                            _selectGeocodeResult(
-                                                              r,
+                                                            const SizedBox(
+                                                              width: 6,
                                                             ),
-                                                      );
-                                                    }).toList(),
-                                                  ],
+                                                            Text(
+                                                              t(
+                                                                    'press_enter_auto',
+                                                                  ) ??
+                                                                  'Press Enter to select first',
+                                                              style: TextStyle(
+                                                                fontSize: 11,
+                                                                color: Theme.of(
+                                                                  context,
+                                                                ).colorScheme.primary,
+                                                              ),
+                                                            ),
+                                                          ],
+                                                        ),
+                                                      ),
+                                                      ..._geocodeResults.map((
+                                                        r,
+                                                      ) {
+                                                        final display =
+                                                            r['display_name']
+                                                                ?.toString() ??
+                                                            '';
+                                                        final cid =
+                                                            r['canonical_id']
+                                                                ?.toString() ??
+                                                            '';
+                                                        return ListTile(
+                                                          dense: true,
+                                                          leading: const Icon(
+                                                            Icons.place,
+                                                            size: 20,
+                                                          ),
+                                                          title: Text(
+                                                            display,
+                                                            maxLines: 1,
+                                                            overflow:
+                                                                TextOverflow
+                                                                    .ellipsis,
+                                                          ),
+                                                          subtitle: Text(
+                                                            cid,
+                                                            style: TextStyle(
+                                                              fontSize: 10,
+                                                              color: Colors
+                                                                  .grey
+                                                                  .shade500,
+                                                            ),
+                                                          ),
+                                                          onTap: () =>
+                                                              _selectGeocodeResult(
+                                                                r,
+                                                              ),
+                                                        );
+                                                      }).toList(),
+                                                    ],
+                                                  ),
                                                 ),
                                               ),
                                             ),
@@ -1556,57 +1559,60 @@ class _SearchableCountryFieldState extends State<_SearchableCountryField> {
               ],
             ),
             constraints: const BoxConstraints(maxHeight: 280),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (_controller.text.isNotEmpty && _filtered.isEmpty)
-                  const Padding(
-                    padding: EdgeInsets.all(12),
-                    child: Text('No countries found'),
-                  ),
-                Flexible(
-                  child: ListView.builder(
-                    shrinkWrap: true,
-                    padding: EdgeInsets.zero,
-                    itemCount: _filtered.length,
-                    itemBuilder: (context, i) {
-                      final country = _filtered[i];
-                      final isSelected = widget.value == country;
-                      return ListTile(
-                        dense: true,
-                        leading: Text(
-                          _countryEmoji(country),
-                          style: const TextStyle(fontSize: 20),
-                        ),
-                        title: Text(
-                          '${_countryNames[country.toUpperCase()] ?? country} ($country)',
-                          style: TextStyle(
-                            fontWeight: isSelected
-                                ? FontWeight.bold
-                                : FontWeight.normal,
-                            color: isSelected
-                                ? Theme.of(context).colorScheme.primary
-                                : null,
+            child: Material(
+              type: MaterialType.transparency,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (_controller.text.isNotEmpty && _filtered.isEmpty)
+                    const Padding(
+                      padding: EdgeInsets.all(12),
+                      child: Text('No countries found'),
+                    ),
+                  Flexible(
+                    child: ListView.builder(
+                      shrinkWrap: true,
+                      padding: EdgeInsets.zero,
+                      itemCount: _filtered.length,
+                      itemBuilder: (context, i) {
+                        final country = _filtered[i];
+                        final isSelected = widget.value == country;
+                        return ListTile(
+                          dense: true,
+                          leading: Text(
+                            _countryEmoji(country),
+                            style: const TextStyle(fontSize: 20),
                           ),
-                        ),
-                        trailing: isSelected
-                            ? Icon(
-                                Icons.check,
-                                color: Theme.of(context).colorScheme.primary,
-                                size: 18,
-                              )
-                            : null,
-                        tileColor: isSelected
-                            ? Theme.of(
-                                context,
-                              ).colorScheme.primaryContainer.withOpacity(0.3)
-                            : null,
-                        onTap: () => _select(country),
-                      );
-                    },
+                          title: Text(
+                            '${_countryNames[country.toUpperCase()] ?? country} ($country)',
+                            style: TextStyle(
+                              fontWeight: isSelected
+                                  ? FontWeight.bold
+                                  : FontWeight.normal,
+                              color: isSelected
+                                  ? Theme.of(context).colorScheme.primary
+                                  : null,
+                            ),
+                          ),
+                          trailing: isSelected
+                              ? Icon(
+                                  Icons.check,
+                                  color: Theme.of(context).colorScheme.primary,
+                                  size: 18,
+                                )
+                              : null,
+                          tileColor: isSelected
+                              ? Theme.of(
+                                  context,
+                                ).colorScheme.primaryContainer.withOpacity(0.3)
+                              : null,
+                          onTap: () => _select(country),
+                        );
+                      },
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
       ],

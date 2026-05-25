@@ -1,17 +1,12 @@
 // lib/screens/my_store_screen.dart
-// COMPLETE REPLACEMENT — adds checkout entry, low-stock badges, improved product cards
+// Auto-refreshes when returning from add/edit product
 
-import 'dart:io';
+import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:image_picker/image_picker.dart';
-import 'package:connectivity_plus/connectivity_plus.dart';
 import '../services/api_service.dart';
-import '../services/offline_service.dart';
-import '../widgets/gradient_button.dart';
-import 'add_product_screen.dart';
-import 'checkout_screen.dart';
-import 'order_history_screen.dart';
 import '../lang/translations.dart';
+import 'add_product_screen.dart';
+import 'product_detail_screen.dart';
 
 class MyStoreScreen extends StatefulWidget {
   const MyStoreScreen({super.key});
@@ -20,144 +15,73 @@ class MyStoreScreen extends StatefulWidget {
   State<MyStoreScreen> createState() => _MyStoreScreenState();
 }
 
-class _MyStoreScreenState extends State<MyStoreScreen> {
-  Map<String, dynamic>? store;
-  List<dynamic> products = [];
-  List<dynamic> lowStock = [];
-  bool isLoading = true;
-  bool isSyncing = false;
-  int pendingCount = 0;
-  File? _storeImage;
-  bool _updatingImage = false;
+class _MyStoreScreenState extends State<MyStoreScreen>
+    with AutomaticKeepAliveClientMixin {
+  Map<String, dynamic>? _store;
+  List<dynamic> _products = [];
+  bool _loading = true;
+  String? _error;
+
+  @override
+  bool get wantKeepAlive => true;
 
   @override
   void initState() {
     super.initState();
-    loadData();
+    _loadData();
   }
 
-  Future<void> loadData() async {
+  Future<void> _loadData() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
     try {
-      final storeData = await ApiService.getMyStore();
-      final productData = await ApiService.fetchProducts(storeData['id']);
-      final pending = await OfflineService.pendingCount();
-      List<dynamic> low = [];
-      try {
-        low = await ApiService.fetchLowStockProducts();
-      } catch (_) {}
-      setState(() {
-        store = storeData;
-        products = productData;
-        lowStock = low;
-        pendingCount = pending;
-        isLoading = false;
-      });
-    } catch (e) {
-      setState(() => isLoading = false);
+      final store = await ApiService.getMyStore();
+      final products = await ApiService.fetchProducts(store['id']);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(e.toString()), backgroundColor: Colors.red),
-        );
+        setState(() {
+          _store = store;
+          _products = products;
+          _loading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _error = e.toString();
+          _loading = false;
+        });
       }
     }
   }
 
-  Future<void> _pickStoreImage() async {
-    final picker = ImagePicker();
-    final picked = await showDialog<ImageSource>(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: Text(t('select_image_source')),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, ImageSource.camera),
-            child: Text(t('camera')),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, ImageSource.gallery),
-            child: Text(t('gallery')),
-          ),
-        ],
+  Future<void> _navigateToAddProduct() async {
+    final result = await Navigator.push<Map<String, dynamic>>(
+      context,
+      MaterialPageRoute(builder: (_) => const AddProductScreen()),
+    );
+    // Refresh regardless of result — product may have been added
+    await _loadData();
+  }
+
+  Future<void> _navigateToEditProduct(Map<String, dynamic> product) async {
+    final result = await Navigator.push<Map<String, dynamic>>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => AddProductScreen(product: product),
       ),
     );
-    if (picked == null) return;
-    final file = await picker.pickImage(source: picked, maxWidth: 1024);
-    if (file != null) {
-      setState(() => _storeImage = File(file.path));
-      await _updateStoreImage();
-    }
+    await _loadData();
   }
 
-  Future<void> _updateStoreImage() async {
-    if (_storeImage == null) return;
-    setState(() => _updatingImage = true);
-    try {
-      final updated = await ApiService.updateMyStore(image: _storeImage);
-      setState(() => store = updated);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(t('shop_image_updated')), backgroundColor: Colors.green),
-      );
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.toString()), backgroundColor: Colors.red),
-      );
-    } finally {
-      setState(() => _updatingImage = false);
-    }
-  }
-
-  Future<void> syncPending() async {
-    final connectivity = await Connectivity().checkConnectivity();
-    if (connectivity == ConnectivityResult.none) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(t('no_internet')), backgroundColor: Colors.orange),
-      );
-      return;
-    }
-
-    setState(() => isSyncing = true);
-    try {
-      final pending = await OfflineService.getPending();
-      for (final item in pending) {
-        try {
-          await ApiService.createProduct(
-            name: item['name'],
-            price: item['price'],
-            quantity: item['quantity'],
-            description: item['description'],
-            barcode: item['barcode'],
-            image: item['image_paths'] != null && (item['image_paths'] as List).isNotEmpty
-                ? File((item['image_paths'] as List).first)
-                : null,
-          );
-          await OfflineService.removePending(item['id'] as int);
-        } catch (e) {
-          debugPrint('Sync failed for ${item['name']}: $e');
-        }
-      }
-      await loadData();
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(t('sync_complete')), backgroundColor: Colors.green),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('${t('sync_error')}: $e'), backgroundColor: Colors.red),
-        );
-      }
-    } finally {
-      setState(() => isSyncing = false);
-    }
-  }
-
-  Future<void> deleteProduct(int id) async {
-    final confirm = await showDialog<bool>(
+  Future<void> _deleteProduct(int id) async {
+    final confirmed = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: Text(t('delete_product')),
-        content: Text(t('cannot_undo')),
+        content: Text(t('delete_product_confirm')),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
@@ -170,381 +94,281 @@ class _MyStoreScreenState extends State<MyStoreScreen> {
         ],
       ),
     );
-    if (confirm != true) return;
+    if (confirmed != true) return;
 
     try {
       await ApiService.deleteProduct(id);
-      loadData();
+      await _loadData();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(t('product_deleted')), backgroundColor: Colors.green),
+        );
+      }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.toString()), backgroundColor: Colors.red),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(e.toString()), backgroundColor: Colors.red),
+        );
+      }
     }
-  }
-
-  bool _isLowStock(dynamic product) {
-    final qty = (product['quantity'] as num?)?.toInt() ?? 0;
-    return qty <= 5 && qty >= 0;
   }
 
   @override
   Widget build(BuildContext context) {
+    super.build(context);
     final theme = Theme.of(context);
 
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(store?['name'] ?? t('my_store')),
-        actions: [
-          if (pendingCount > 0)
-            Badge(
-              label: Text('$pendingCount'),
-              child: IconButton(
-                icon: const Icon(Icons.sync),
-                onPressed: isSyncing ? null : syncPending,
-              ),
-            )
-          else
-            IconButton(
-              icon: isSyncing
-                  ? const SizedBox(
-                      height: 20,
-                      width: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                    )
-                  : const Icon(Icons.sync),
-              onPressed: isSyncing ? null : syncPending,
-            ),
-        ],
-      ),
-      body: isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : Column(
-              children: [
-                // Shop image header
-                GestureDetector(
-                  onTap: _updatingImage ? null : _pickStoreImage,
-                  child: Container(
-                    width: double.infinity,
-                    height: 160,
-                    decoration: BoxDecoration(
-                      color: Colors.grey.shade300,
-                      image: (store?['image_url'] != null || _storeImage != null)
-                          ? DecorationImage(
-                              image: _storeImage != null
-                                  ? FileImage(_storeImage!)
-                                  : NetworkImage(store!['image_url']) as ImageProvider,
-                              fit: BoxFit.cover,
-                            )
-                          : null,
-                    ),
-                    child: (store?['image_url'] == null && _storeImage == null)
-                        ? Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              const Icon(Icons.add_photo_alternate, size: 48, color: Colors.white),
-                              const SizedBox(height: 8),
-                              Text(
-                                t('tap_to_add_shop_image'),
-                                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-                              ),
-                            ],
-                          )
-                        : _updatingImage
-                            ? const Center(child: CircularProgressIndicator(color: Colors.white))
-                            : const Align(
-                                alignment: Alignment.bottomRight,
-                                child: Padding(
-                                  padding: EdgeInsets.all(12),
-                                  child: CircleAvatar(
-                                    backgroundColor: Colors.black54,
-                                    child: Icon(Icons.edit, color: Colors.white, size: 20),
-                                  ),
-                                ),
-                              ),
-                  ),
-                ),
+    if (_loading) {
+      return const Scaffold(
+        body: Center(child: CircularProgressIndicator()),
+      );
+    }
 
-                // Quick actions
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  child: Row(
+    if (_error != null) {
+      return Scaffold(
+        body: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.error_outline, size: 48, color: theme.colorScheme.error),
+              const SizedBox(height: 16),
+              Text(t('error_loading_store'), style: theme.textTheme.titleMedium),
+              const SizedBox(height: 8),
+              ElevatedButton(
+                onPressed: _loadData,
+                child: Text(t('retry')),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    final storeName = _store?['name']?.toString() ?? t('my_store');
+    final storeImage = _store?['image_url']?.toString();
+
+    return Scaffold(
+      backgroundColor: theme.brightness == Brightness.light
+          ? const Color(0xFFF8F9FA)
+          : theme.scaffoldBackgroundColor,
+      body: RefreshIndicator(
+        onRefresh: _loadData,
+        child: CustomScrollView(
+          slivers: [
+            // App bar with store header
+            SliverAppBar(
+              expandedHeight: 180,
+              pinned: true,
+              flexibleSpace: FlexibleSpaceBar(
+                title: Text(storeName, style: const TextStyle(fontWeight: FontWeight.w700)),
+                background: storeImage != null && storeImage.isNotEmpty
+                    ? Image.network(
+                        storeImage,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, __, ___) => Container(
+                          color: theme.colorScheme.primaryContainer,
+                        ),
+                      )
+                    : Container(color: theme.colorScheme.primaryContainer),
+              ),
+              actions: [
+                IconButton(
+                  icon: const Icon(Icons.refresh),
+                  onPressed: _loadData,
+                  tooltip: t('refresh'),
+                ),
+              ],
+            ),
+
+            // Product count + add button
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        '${_products.length} ${t('products')}',
+                        style: theme.textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                    FilledButton.icon(
+                      onPressed: _navigateToAddProduct,
+                      icon: const Icon(Icons.add, size: 18),
+                      label: Text(t('add_product')),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
+            // Products grid
+            if (_products.isEmpty)
+              SliverFillRemaining(
+                hasScrollBody: false,
+                child: Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      Expanded(
-                        child: _ActionCard(
-                          icon: Icons.point_of_sale,
-                          label: t('checkout'),
-                          color: theme.colorScheme.primary,
-                          onTap: () => Navigator.push(
-                            context,
-                            MaterialPageRoute(builder: (_) => const CheckoutScreen()),
-                          ),
-                        ),
+                      Icon(Icons.inventory_2_outlined,
+                          size: 64, color: theme.colorScheme.onSurfaceVariant.withOpacity(0.4)),
+                      const SizedBox(height: 16),
+                      Text(
+                        t('no_products_yet'),
+                        style: TextStyle(color: theme.colorScheme.onSurfaceVariant),
                       ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: _ActionCard(
-                          icon: Icons.receipt_long,
-                          label: t('orders'),
-                          color: theme.colorScheme.secondary,
-                          onTap: () => Navigator.push(
-                            context,
-                            MaterialPageRoute(builder: (_) => const OrderHistoryScreen()),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: _ActionCard(
-                          icon: Icons.inventory_2,
-                          label: t('low_stock'),
-                          color: lowStock.isNotEmpty ? Colors.orange : theme.colorScheme.outline,
-                          badge: lowStock.isNotEmpty ? '${lowStock.length}' : null,
-                          onTap: () {
-                            if (lowStock.isNotEmpty) {
-                              showModalBottomSheet(
-                                context: context,
-                                builder: (_) => _LowStockSheet(products: lowStock),
-                              );
-                            }
-                          },
-                        ),
+                      const SizedBox(height: 16),
+                      OutlinedButton.icon(
+                        onPressed: _navigateToAddProduct,
+                        icon: const Icon(Icons.add),
+                        label: Text(t('add_first_product')),
                       ),
                     ],
                   ),
                 ),
-
-                if (pendingCount > 0)
-                  Container(
-                    width: double.infinity,
-                    color: Colors.orange.shade800,
-                    padding: const EdgeInsets.symmetric(vertical: 8),
-                    child: Center(
-                      child: Text(
-                        '$pendingCount ${t('pending_sync')}',
-                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-                      ),
-                    ),
+              )
+            else
+              SliverPadding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                sliver: SliverList(
+                  delegate: SliverChildBuilderDelegate(
+                    (context, index) {
+                      final product = _products[index] as Map<String, dynamic>;
+                      return _ProductCard(
+                        product: product,
+                        onEdit: () => _navigateToEditProduct(product),
+                        onDelete: () => _deleteProduct(product['id']),
+                      );
+                    },
+                    childCount: _products.length,
                   ),
-
-                // Products list
-                Expanded(
-                  child: products.isEmpty
-                      ? Center(
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(Icons.inventory_2_outlined, size: 48, color: theme.colorScheme.outline),
-                              const SizedBox(height: 8),
-                              Text(t('no_products'), style: TextStyle(color: theme.colorScheme.outline)),
-                            ],
-                          ),
-                        )
-                      : ListView.builder(
-                          padding: const EdgeInsets.all(12),
-                          itemCount: products.length,
-                          itemBuilder: (context, index) {
-                            final p = products[index];
-                            final isLow = _isLowStock(p);
-                            final hasBarcode = p['barcode'] != null && p['barcode'].toString().isNotEmpty;
-
-                            return Card(
-                              margin: const EdgeInsets.only(bottom: 8),
-                              child: ListTile(
-                                leading: Stack(
-                                  children: [
-                                    ClipRRect(
-                                      borderRadius: BorderRadius.circular(8),
-                                      child: Container(
-                                        width: 56,
-                                        height: 56,
-                                        color: theme.colorScheme.surfaceContainerHighest,
-                                        child: p['image_url'] != null
-                                            ? Image.network(
-                                                p['image_url'],
-                                                fit: BoxFit.cover,
-                                                errorBuilder: (_, __, ___) => const Icon(Icons.image, size: 28),
-                                              )
-                                            : const Icon(Icons.inventory_2, size: 28),
-                                      ),
-                                    ),
-                                    if (isLow)
-                                      Positioned(
-                                        top: 0,
-                                        left: 0,
-                                        child: Container(
-                                          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-                                          decoration: BoxDecoration(
-                                            color: Colors.red,
-                                            borderRadius: BorderRadius.circular(4),
-                                          ),
-                                          child: Text(
-                                            t('low'),
-                                            style: const TextStyle(fontSize: 9, color: Colors.white, fontWeight: FontWeight.bold),
-                                          ),
-                                        ),
-                                      ),
-                                  ],
-                                ),
-                                title: Row(
-                                  children: [
-                                    Expanded(
-                                      child: Text(
-                                        p['name'],
-                                        style: const TextStyle(fontWeight: FontWeight.bold),
-                                        overflow: TextOverflow.ellipsis,
-                                      ),
-                                    ),
-                                    if (hasBarcode)
-                                      Icon(Icons.qr_code, size: 14, color: theme.colorScheme.primary),
-                                  ],
-                                ),
-                                subtitle: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text('${p['price']} SYP • ${t('qty')}: ${p['quantity']}'),
-                                    if (isLow)
-                                      Text(
-                                        t('low_stock_warning'),
-                                        style: TextStyle(fontSize: 11, color: Colors.red.shade700, fontWeight: FontWeight.w600),
-                                      ),
-                                  ],
-                                ),
-                                trailing: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    IconButton(
-                                      icon: const Icon(Icons.edit),
-                                      onPressed: () async {
-                                        await Navigator.push(
-                                          context,
-                                          MaterialPageRoute(builder: (_) => AddProductScreen(product: p)),
-                                        );
-                                        loadData();
-                                      },
-                                    ),
-                                    IconButton(
-                                      icon: const Icon(Icons.delete, color: Colors.red),
-                                      onPressed: () => deleteProduct(p['id']),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            );
-                          },
-                        ),
                 ),
-              ],
-            ),
+              ),
+
+            const SliverPadding(padding: EdgeInsets.only(bottom: 80)),
+          ],
+        ),
+      ),
       floatingActionButton: FloatingActionButton(
-        onPressed: () async {
-          await Navigator.push(
-            context,
-            MaterialPageRoute(builder: (_) => const AddProductScreen()),
-          );
-          loadData();
-        },
+        onPressed: _navigateToAddProduct,
         child: const Icon(Icons.add),
       ),
     );
   }
 }
 
-class _ActionCard extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final Color color;
-  final String? badge;
-  final VoidCallback onTap;
+class _ProductCard extends StatelessWidget {
+  final Map<String, dynamic> product;
+  final VoidCallback onEdit;
+  final VoidCallback onDelete;
 
-  const _ActionCard({
-    required this.icon,
-    required this.label,
-    required this.color,
-    this.badge,
-    required this.onTap,
+  const _ProductCard({
+    required this.product,
+    required this.onEdit,
+    required this.onDelete,
   });
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(12),
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
-        decoration: BoxDecoration(
-          color: color.withOpacity(0.1),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: color.withOpacity(0.3)),
-        ),
-        child: Column(
-          children: [
-            Stack(
-              children: [
-                Icon(icon, color: color),
-                if (badge != null)
-                  Positioned(
-                    right: -4,
-                    top: -4,
-                    child: Container(
-                      padding: const EdgeInsets.all(2),
-                      decoration: const BoxDecoration(color: Colors.red, shape: BoxShape.circle),
-                      constraints: const BoxConstraints(minWidth: 14, minHeight: 14),
-                      child: Text(badge!, style: const TextStyle(fontSize: 9, color: Colors.white), textAlign: TextAlign.center),
-                    ),
-                  ),
-              ],
-            ),
-            const SizedBox(height: 4),
-            Text(label, style: TextStyle(fontSize: 12, color: color, fontWeight: FontWeight.w600)),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _LowStockSheet extends StatelessWidget {
-  final List<dynamic> products;
-  const _LowStockSheet({required this.products});
-
-  @override
-  Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Container(
-      padding: const EdgeInsets.all(20),
-      constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.6),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(width: 40, height: 4, decoration: BoxDecoration(color: Colors.grey.shade400, borderRadius: BorderRadius.circular(2))),
-          const SizedBox(height: 16),
-          Row(
+    final name = product['name']?.toString() ?? 'Unnamed';
+    final price = product['price']?.toString() ?? '0';
+    final qty = product['quantity'] ?? 0;
+    final imageUrl = product['image_url']?.toString();
+    final images = product['images'] as List<dynamic>?;
+    final displayImage = imageUrl ?? (images != null && images.isNotEmpty ? images.first.toString() : null);
+    final isLowStock = (qty as num) <= (product['low_stock_threshold'] ?? 5);
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 12),
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(14),
+        side: BorderSide(color: Colors.grey.shade200),
+      ),
+      child: InkWell(
+        onTap: onEdit,
+        borderRadius: BorderRadius.circular(14),
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Row(
             children: [
-              Icon(Icons.warning_amber, color: Colors.orange.shade800),
-              const SizedBox(width: 8),
-              Text(t('low_stock_items'), style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold)),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(10),
+                child: Container(
+                  width: 72,
+                  height: 72,
+                  color: theme.colorScheme.surfaceContainerHighest,
+                  child: displayImage != null
+                      ? Image.network(
+                          displayImage,
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, __, ___) =>
+                              const Icon(Icons.image_not_supported),
+                        )
+                      : const Icon(Icons.inventory_2_outlined),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      name,
+                      style: theme.textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '$price ${t('currency')}',
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        color: theme.colorScheme.primary,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Row(
+                      children: [
+                        Icon(
+                          isLowStock ? Icons.warning_amber : Icons.inventory_2,
+                          size: 14,
+                          color: isLowStock ? Colors.orange : theme.colorScheme.onSurfaceVariant,
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          '$qty ${t('in_stock')}',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: isLowStock ? Colors.orange : theme.colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              PopupMenuButton<String>(
+                onSelected: (value) {
+                  if (value == 'edit') onEdit();
+                  if (value == 'delete') onDelete();
+                },
+                itemBuilder: (_) => [
+                  PopupMenuItem(value: 'edit', child: Text(t('edit'))),
+                  PopupMenuItem(
+                    value: 'delete',
+                    child: Text(t('delete'), style: const TextStyle(color: Colors.red)),
+                  ),
+                ],
+              ),
             ],
           ),
-          const SizedBox(height: 12),
-          Flexible(
-            child: ListView.builder(
-              shrinkWrap: true,
-              itemCount: products.length,
-              itemBuilder: (_, i) {
-                final p = products[i];
-                return ListTile(
-                  leading: const Icon(Icons.inventory_2, color: Colors.orange),
-                  title: Text(p['name']?.toString() ?? ''),
-                  trailing: Chip(
-                    label: Text('${p['quantity']}'),
-                    backgroundColor: Colors.orange.shade50,
-                    side: BorderSide(color: Colors.orange.shade200),
-                  ),
-                );
-              },
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }
