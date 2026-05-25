@@ -532,13 +532,13 @@ class _ExploreScreenState extends State<ExploreScreen> {
         ),
         body: Column(
           children: [
-            // ── Modern inline search bar (transparent, no dark block) ──
+            // ── Modern inline search bar (blends with scaffold in both themes) ──
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
               child: Container(
                 height: 48,
                 decoration: BoxDecoration(
-                  color: Colors.transparent,
+                  color: Theme.of(context).scaffoldBackgroundColor,
                   borderRadius: BorderRadius.circular(24),
                   border: Border.all(
                     color: _searchFocusNode.hasFocus
@@ -577,6 +577,8 @@ class _ExploreScreenState extends State<ExploreScreen> {
                             ).colorScheme.onSurface.withOpacity(0.35),
                             fontSize: 15,
                           ),
+                          filled: false,
+                          fillColor: Colors.transparent,
                           border: InputBorder.none,
                           isDense: true,
                           contentPadding: EdgeInsets.zero,
@@ -1115,41 +1117,6 @@ class _ExploreScreenState extends State<ExploreScreen> {
                             memCacheWidth: 400,
                           ),
                         ),
-                        // Distance badge (when closest sort is active)
-                        if (showDistance)
-                          Positioned(
-                            top: 8,
-                            right: 8,
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 8,
-                                vertical: 4,
-                              ),
-                              decoration: BoxDecoration(
-                                color: Theme.of(context).colorScheme.primary,
-                                borderRadius: BorderRadius.circular(20),
-                              ),
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  const Icon(
-                                    Icons.location_on,
-                                    size: 10,
-                                    color: Colors.white,
-                                  ),
-                                  const SizedBox(width: 2),
-                                  Text(
-                                    '${distance.toStringAsFixed(1)} km',
-                                    style: const TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 11,
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
                         // Similarity badge (when NOT closest sort)
                         if (!showDistance)
                           Positioned(
@@ -1233,6 +1200,29 @@ class _ExploreScreenState extends State<ExploreScreen> {
                               color: Colors.grey.shade500,
                             ),
                           ),
+                          if (showDistance) ...[
+                            const SizedBox(height: 2),
+                            Row(
+                              children: [
+                                Icon(
+                                  Icons.location_on,
+                                  size: 10,
+                                  color: Theme.of(context).colorScheme.primary,
+                                ),
+                                const SizedBox(width: 2),
+                                Text(
+                                  '${distance.toStringAsFixed(1)} km',
+                                  style: TextStyle(
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w600,
+                                    color: Theme.of(
+                                      context,
+                                    ).colorScheme.primary,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
                         ],
                       ),
                     ),
@@ -1261,42 +1251,11 @@ class _ExploreScreenState extends State<ExploreScreen> {
             onTap: () => _onProductTap(product),
             child: Stack(
               children: [
-                _ProductListTile(product: product, onTap: _onProductTap),
-                // Distance badge (when closest sort is active)
-                if (showDistance)
-                  Positioned(
-                    top: 8,
-                    right: 8,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 4,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Theme.of(context).colorScheme.primary,
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Icon(
-                            Icons.location_on,
-                            size: 10,
-                            color: Colors.white,
-                          ),
-                          const SizedBox(width: 2),
-                          Text(
-                            '${distance.toStringAsFixed(1)} km',
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 11,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
+                _ProductListTile(
+                  product: product,
+                  onTap: _onProductTap,
+                  distanceKm: showDistance ? distance : null,
+                ),
                 // Similarity badge (when NOT closest sort)
                 if (!showDistance)
                   Positioned(
@@ -1548,55 +1507,17 @@ class _StoreCard extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: [
-            Stack(
-              children: [
-                ClipRRect(
-                  borderRadius: const BorderRadius.vertical(
-                    top: Radius.circular(14),
-                  ),
-                  child: CachedAppImage(
-                    imageUrl: store['image_url'],
-                    height: 120,
-                    width: double.infinity,
-                    fit: BoxFit.cover,
-                    memCacheWidth: 400,
-                  ),
-                ),
-                if (distanceKm != null && distanceKm != double.infinity)
-                  Positioned(
-                    top: 6,
-                    right: 6,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 6,
-                        vertical: 2,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Colors.black.withOpacity(0.7),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Icon(
-                            Icons.location_on,
-                            size: 10,
-                            color: Colors.white,
-                          ),
-                          const SizedBox(width: 2),
-                          Text(
-                            '${distanceKm!.toStringAsFixed(1)} km',
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 9,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-              ],
+            ClipRRect(
+              borderRadius: const BorderRadius.vertical(
+                top: Radius.circular(14),
+              ),
+              child: CachedAppImage(
+                imageUrl: store['image_url'],
+                height: 120,
+                width: double.infinity,
+                fit: BoxFit.cover,
+                memCacheWidth: 400,
+              ),
             ),
             Padding(
               padding: const EdgeInsets.fromLTRB(10, 8, 10, 6),
@@ -1629,6 +1550,27 @@ class _StoreCard extends StatelessWidget {
                         fontSize: 9,
                         color: Colors.grey.shade600,
                       ),
+                    ),
+                  ],
+                  if (distanceKm != null && distanceKm != double.infinity) ...[
+                    const SizedBox(height: 4),
+                    Row(
+                      children: [
+                        Icon(
+                          Icons.location_on,
+                          size: 10,
+                          color: Theme.of(context).colorScheme.primary,
+                        ),
+                        const SizedBox(width: 2),
+                        Text(
+                          '${distanceKm!.toStringAsFixed(1)} km',
+                          style: TextStyle(
+                            fontSize: 9,
+                            fontWeight: FontWeight.w600,
+                            color: Theme.of(context).colorScheme.primary,
+                          ),
+                        ),
+                      ],
                     ),
                   ],
                 ],
@@ -1908,8 +1850,13 @@ class _StoreListTile extends StatelessWidget {
 class _ProductListTile extends StatelessWidget {
   final dynamic product;
   final void Function(dynamic) onTap;
+  final double? distanceKm;
 
-  const _ProductListTile({required this.product, required this.onTap});
+  const _ProductListTile({
+    required this.product,
+    required this.onTap,
+    this.distanceKm,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -1966,14 +1913,37 @@ class _ProductListTile extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(height: 2),
-                    Text(
-                      product['shop_name'] ?? '',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Colors.grey.shade500,
-                      ),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            product['shop_name'] ?? '',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.grey.shade500,
+                            ),
+                          ),
+                        ),
+                        if (distanceKm != null &&
+                            distanceKm != double.infinity) ...[
+                          Icon(
+                            Icons.location_on,
+                            size: 12,
+                            color: Theme.of(context).colorScheme.primary,
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            '${distanceKm!.toStringAsFixed(1)} km',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: Theme.of(context).colorScheme.primary,
+                            ),
+                          ),
+                        ],
+                      ],
                     ),
                   ],
                 ),

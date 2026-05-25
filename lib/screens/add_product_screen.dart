@@ -1,7 +1,9 @@
 // lib/screens/add_product_screen.dart
-// COMPLETE REPLACEMENT — modern centered UI, max 4 images per product
+// COMPLETE REPLACEMENT — fixes edit pre-fill, category dedup, translations
 
 import 'dart:io';
+import 'dart:convert';
+import 'dart:async' show scheduleMicrotask;
 import 'dart:math' show max;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -50,13 +52,88 @@ class _AddProductScreenState extends State<AddProductScreen> {
   void initState() {
     super.initState();
     if (widget.product != null) {
-      _nameCtrl.text = widget.product!['name'] ?? '';
-      _priceCtrl.text = widget.product!['price']?.toString() ?? '';
-      _qtyCtrl.text = widget.product!['quantity']?.toString() ?? '';
-      _descCtrl.text = widget.product!['description'] ?? '';
-      _barcodeCtrl.text = widget.product!['barcode'] ?? '';
-      _existingImages = List<String>.from(widget.product!['image_urls'] ?? []);
-      _categoryIds = List<int>.from(widget.product!['category_ids'] ?? []);
+      _populateFromProduct(widget.product!);
+    }
+  }
+
+  /// FIXED: Robust product pre-fill handling various backend response formats
+  void _populateFromProduct(Map<String, dynamic> product) {
+    _nameCtrl.text = product['name']?.toString() ?? '';
+
+    // Price: handle int, double, string
+    final rawPrice = product['price'];
+    if (rawPrice != null) {
+      if (rawPrice is num) {
+        _priceCtrl.text = rawPrice
+            .toStringAsFixed(rawPrice is int ? 0 : 2)
+            .replaceAll('.00', '');
+      } else {
+        _priceCtrl.text = rawPrice.toString();
+      }
+    }
+
+    // Quantity
+    final rawQty = product['quantity'];
+    if (rawQty != null) {
+      _qtyCtrl.text = rawQty.toString();
+    }
+
+    _descCtrl.text = product['description']?.toString() ?? '';
+    _barcodeCtrl.text = product['barcode']?.toString() ?? '';
+
+    // Images: handle multiple possible field names from backend
+    List<String> images = [];
+
+    // Try 'image_urls' first (what frontend expects)
+    final imageUrls = product['image_urls'];
+    if (imageUrls is List) {
+      images = imageUrls
+          .map((e) => e.toString())
+          .where((s) => s.isNotEmpty)
+          .toList();
+    }
+
+    // Fallback to 'images' (JSONB array from backend)
+    if (images.isEmpty) {
+      final rawImages = product['images'];
+      if (rawImages is List) {
+        images = rawImages
+            .map((e) => e.toString())
+            .where((s) => s.isNotEmpty)
+            .toList();
+      } else if (rawImages is String) {
+        try {
+          final decoded = jsonDecode(rawImages);
+          if (decoded is List) {
+            images = decoded
+                .map((e) => e.toString())
+                .where((s) => s.isNotEmpty)
+                .toList();
+          }
+        } catch (_) {}
+      }
+    }
+
+    // Fallback to single 'image_url'
+    if (images.isEmpty) {
+      final singleUrl = product['image_url']?.toString();
+      if (singleUrl != null && singleUrl.isNotEmpty) {
+        images = [singleUrl];
+      }
+    }
+
+    _existingImages = images;
+
+    // Categories: handle various formats
+    final rawCats = product['category_ids'] ?? product['category_id'];
+    if (rawCats is List) {
+      _categoryIds = rawCats.whereType<int>().toList();
+    } else if (rawCats is int) {
+      _categoryIds = [rawCats];
+    } else if (rawCats is String) {
+      try {
+        _categoryIds = [int.parse(rawCats)];
+      } catch (_) {}
     }
   }
 
@@ -191,7 +268,11 @@ class _AddProductScreenState extends State<AddProductScreen> {
           quantity: qty,
           description: _descCtrl.text.trim(),
           barcode: barcode,
+          categoryId: _categoryIds.isNotEmpty ? _categoryIds.first : null,
+          lowStockThreshold: 5,
           image: _newImages.isNotEmpty ? _newImages.first : null,
+          extraImages: _newImages.length > 1 ? _newImages.sublist(1) : null,
+          existingImages: _existingImages,
         );
       } else {
         result = await ApiService.createProduct(
@@ -200,22 +281,11 @@ class _AddProductScreenState extends State<AddProductScreen> {
           quantity: qty,
           description: _descCtrl.text.trim(),
           barcode: barcode,
+          categoryId: _categoryIds.isNotEmpty ? _categoryIds.first : null,
+          lowStockThreshold: 5,
           image: _newImages.isNotEmpty ? _newImages.first : null,
+          extraImages: _newImages.length > 1 ? _newImages.sublist(1) : null,
         );
-      }
-
-      // Upload additional images if any (max 4 total)
-      if (_newImages.length > 1 && result['id'] != null) {
-        final extraImages = _newImages
-            .sublist(1)
-            .take(_maxImagesPerProduct - 1);
-        for (final img in extraImages) {
-          try {
-            await ApiService.uploadProductImage(result['id'] as int, img);
-          } catch (e) {
-            debugPrint('Extra image upload failed: $e');
-          }
-        }
       }
 
       if (mounted) {

@@ -237,10 +237,6 @@ async function initLocationTables() {
     ON geocode_cache(created_at);
   `);
   await pool.query(`
-    CREATE INDEX IF NOT EXISTS idx_geocode_cache_created 
-    ON geocode_cache(created_at);
-  `);
-  await pool.query(`
     DO $$
     BEGIN
       IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='stores' AND column_name='city_id') THEN
@@ -265,7 +261,7 @@ async function initInventoryTables() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS categories (
       id SERIAL PRIMARY KEY,
-      name VARCHAR(100) NOT NULL,
+      name VARCHAR(100) NOT NULL UNIQUE,
       parent_id INTEGER REFERENCES categories(id) ON DELETE SET NULL,
       icon VARCHAR(50),
       created_at TIMESTAMP DEFAULT NOW()
@@ -315,24 +311,127 @@ async function initInventoryTables() {
   `);
 
   // Seed default categories (idempotent)
+// WITH THIS BLOCK (adds translations + dedup protection):
+
+  // Add translations column if not exists
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='categories' AND column_name='translations') THEN
+        ALTER TABLE categories ADD COLUMN translations JSONB DEFAULT '{}';
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='categories' AND column_name='sort_order') THEN
+        ALTER TABLE categories ADD COLUMN sort_order INTEGER DEFAULT 0;
+      END IF;
+    END $$;
+  `);
+
+  // Upsert categories with translations (idempotent — won't create duplicates)
   const categories = [
-    { name: 'General', icon: 'category' },
-    { name: 'Food & Beverages', icon: 'restaurant' },
-    { name: 'Clothing & Apparel', icon: 'checkroom' },
-    { name: 'Electronics', icon: 'devices' },
-    { name: 'Home & Garden', icon: 'home' },
-    { name: 'Health & Beauty', icon: 'healing' },
-    { name: 'Toys & Games', icon: 'toys' },
-    { name: 'Automotive', icon: 'directions_car' },
-    { name: 'Books & Stationery', icon: 'menu_book' },
-    { name: 'Sports & Outdoors', icon: 'sports' }
+    { 
+      name: 'General', 
+      icon: 'category',
+      translations: {
+        ar: 'عام', en: 'General', fr: 'Général', es: 'General', tr: 'Genel',
+        ur: 'عام', hi: 'सामान्य', bn: 'সাধারণ', ru: 'Общее', zh: '一般'
+      }
+    },
+    { 
+      name: 'Food & Beverages', 
+      icon: 'restaurant',
+      translations: {
+        ar: 'الطعام والمشروبات', en: 'Food & Beverages', fr: 'Alimentation', 
+        es: 'Alimentos y Bebidas', tr: 'Yiyecek ve İçecek', ur: 'کھانا اور مشروبات',
+        hi: 'खाद्य और पेय', bn: 'খাদ্য ও পানীয়', ru: 'Еда и напитки', zh: '食品与饮料'
+      }
+    },
+    { 
+      name: 'Clothing & Apparel', 
+      icon: 'checkroom',
+      translations: {
+        ar: 'الملابس والأزياء', en: 'Clothing & Apparel', fr: 'Vêtements',
+        es: 'Ropa y Vestimenta', tr: 'Giyim', ur: 'کپڑے اور لباس',
+        hi: 'वस्त्र और पहनावा', bn: 'পোশাক ও পার্শ্ববর্তী', ru: 'Одежда', zh: '服装与服饰'
+      }
+    },
+    { 
+      name: 'Electronics', 
+      icon: 'devices',
+      translations: {
+        ar: 'الإلكترونيات', en: 'Electronics', fr: 'Électronique',
+        es: 'Electrónica', tr: 'Elektronik', ur: 'الیکٹرانکس',
+        hi: 'इलेक्ट्रॉनिक्स', bn: 'ইলেকট্রনিক্স', ru: 'Электроника', zh: '电子产品'
+      }
+    },
+    { 
+      name: 'Home & Garden', 
+      icon: 'home',
+      translations: {
+        ar: 'المنزل والحديقة', en: 'Home & Garden', fr: 'Maison et Jardin',
+        es: 'Hogar y Jardín', tr: 'Ev ve Bahçe', ur: 'گھر اور باغ',
+        hi: 'घर और बगीचा', bn: 'বাড়ি ও বাগান', ru: 'Дом и сад', zh: '家居与园艺'
+      }
+    },
+    { 
+      name: 'Health & Beauty', 
+      icon: 'healing',
+      translations: {
+        ar: 'الصحة والجمال', en: 'Health & Beauty', fr: 'Santé et Beauté',
+        es: 'Salud y Belleza', tr: 'Sağlık ve Güzellik', ur: 'صحت اور خوبصورتی',
+        hi: 'स्वास्थ्य और सौंदर्य', bn: 'স্বাস্থ্য ও সৌন্দর্য', ru: 'Здоровье и красота', zh: '健康与美容'
+      }
+    },
+    { 
+      name: 'Toys & Games', 
+      icon: 'toys',
+      translations: {
+        ar: 'الألعاب', en: 'Toys & Games', fr: 'Jouets et Jeux',
+        es: 'Juguetes y Juegos', tr: 'Oyuncaklar ve Oyunlar', ur: 'کھلونے اور کھیل',
+        hi: 'खिलौने और खेल', bn: 'খেলনা ও খেলা', ru: 'Игрушки и игры', zh: '玩具与游戏'
+      }
+    },
+    { 
+      name: 'Automotive', 
+      icon: 'directions_car',
+      translations: {
+        ar: 'السيارات', en: 'Automotive', fr: 'Automobile',
+        es: 'Automotriz', tr: 'Otomotiv', ur: 'آٹوموٹو',
+        hi: 'ऑटोमोटिव', bn: 'অটোমোবাইল', ru: 'Автомобили', zh: '汽车用品'
+      }
+    },
+    { 
+      name: 'Books & Stationery', 
+      icon: 'menu_book',
+      translations: {
+        ar: 'الكتب والقرطاسية', en: 'Books & Stationery', fr: 'Livres et Papeterie',
+        es: 'Libros y Papelería', tr: 'Kitaplar ve Kırtasiye', ur: 'کتابیں اور سٹیشنری',
+        hi: 'पुस्तकें और स्टेशनरी', bn: 'বই ও স্টেশনারি', ru: 'Книги и канцтовары', zh: '书籍与文具'
+      }
+    },
+    { 
+      name: 'Sports & Outdoors', 
+      icon: 'sports',
+      translations: {
+        ar: 'الرياضة والأنشطة الخارجية', en: 'Sports & Outdoors', fr: 'Sports et Plein air',
+        es: 'Deportes y Aire Libre', tr: 'Spor ve Outdoor', ur: 'کھیل اور بیرونی سرگرمیاں',
+        hi: 'खेल और बाहरी गतिविधियाँ', bn: 'খেলাধুলা ও বাহিরে', ru: 'Спорт и отдых', zh: '运动与户外'
+      }
+    },
   ];
-  for (const cat of categories) {
+
+  for (let i = 0; i < categories.length; i++) {
+    const cat = categories[i];
     await pool.query(
-      `INSERT INTO categories (name, icon) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
-      [cat.name, cat.icon]
+      `INSERT INTO categories (name, icon, translations, sort_order)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (name) DO UPDATE SET
+         icon = EXCLUDED.icon,
+         translations = EXCLUDED.translations,
+         sort_order = EXCLUDED.sort_order`,
+      [cat.name, cat.icon, JSON.stringify(cat.translations), i]
     );
   }
+
 
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_products_barcode ON products(barcode);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_products_category ON products(category_id);`);
@@ -1177,7 +1276,7 @@ function cosineSimilarity(a, b) {
 }
 
 // ==================== IMAGE SIMILARITY SEARCH ====================
-async function findSimilarProductsByImage(embedding, limit = 20, minSimilarity = 0.60) {
+async function findSimilarProductsByImage(embedding, limit = 20, minSimilarity = 0.80) {
   let rows = [];
   
   if (pgvectorAvailable) {
@@ -1245,16 +1344,7 @@ async function processProductEmbeddings(productId, imageUrls) {
 // This replaces the /api/search/image-similarity endpoint
 
 // ==================== IMAGE SEARCH ====================
-// ==================== CATEGORIES ====================
-app.get('/api/categories', async (req, res) => {
-  try {
-    const result = await pool.query('SELECT * FROM categories ORDER BY name');
-    res.json(result.rows);
-  } catch (err) {
-    res.status(500).json({ error: 'Failed to load categories' });
-  }
-});
-// ==================== END CATEGORIES ====================
+// ==================== CATEGORIES (see backend extensions below) ====================
 
 // ==================== BARCODE LOOKUP ====================
 app.get('/api/products/barcode/:barcode', requireRealUser, async (req, res) => {
@@ -2223,8 +2313,8 @@ app.post('/api/search/image-similarity', imageSearchLimiter, upload.single('imag
     const filePath = req.file.path;
     const embedding = await generateImageEmbedding(filePath);
 
-    // LOWERED THRESHOLD: 0.60 instead of 0.65 to show more matches
-    const similar = await findSimilarProductsByImage(embedding, 50, 0.60);
+
+    const similar = await findSimilarProductsByImage(embedding, 50, 0.80);
 
     if (similar.length === 0) {
       return res.json({ 
@@ -2418,10 +2508,9 @@ app.use((err, req, res, next) => {
 app.get('/api/categories', async (req, res) => {
   try {
     const result = await pool.query(
-      `SELECT c.*, p.name as parent_name
-       FROM categories c
-       LEFT JOIN categories p ON c.parent_id = p.id
-       ORDER BY c.sort_order, c.name`
+      `SELECT id, name, icon, translations, sort_order, parent_id
+       FROM categories
+       ORDER BY sort_order, name`
     );
     res.json(result.rows);
   } catch (err) {
@@ -2476,7 +2565,7 @@ app.post('/api/products/:id/images', requireRealUser, upload.single('image'), as
 
     // Async embedding generation
     const productId = result.rows[0].id;
-    const allImagesForEmbed = imageUrl ? [imageUrl, ...extraImages] : extraImages;
+    const allImagesForEmbed = imageUrl ? [imageUrl] : [];
     if (allImagesForEmbed.length > 0) {
       setTimeout(() => processProductEmbeddings(productId, allImagesForEmbed).catch(() => {}), 0);
     }
