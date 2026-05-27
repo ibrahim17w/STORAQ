@@ -7,8 +7,9 @@ import '../utils/receipt_helper.dart';
 import '../lang/translations.dart';
 
 class ReceiptScreen extends StatefulWidget {
-  final int orderId;
-  const ReceiptScreen({super.key, required this.orderId});
+  final int? orderId;
+  final Map<String, dynamic>? offlineOrder;
+  const ReceiptScreen({super.key, this.orderId, this.offlineOrder});
 
   @override
   State<ReceiptScreen> createState() => _ReceiptScreenState();
@@ -19,16 +20,48 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
   Map<String, dynamic>? _store;
   Map<String, dynamic>? _settings;
   bool _loading = true;
+  bool _isOffline = false;
 
   @override
   void initState() {
     super.initState();
-    _load();
+    if (widget.offlineOrder != null) {
+      _loadOffline();
+    } else {
+      _loadOnline();
+    }
   }
 
-  Future<void> _load() async {
+  Future<void> _loadOffline() async {
     try {
-      final order = await ApiService.fetchOrder(widget.orderId);
+      final store = await ApiService.getMyStore().catchError((_) => null);
+      final settings = await ApiService.getReceiptSettings().catchError(
+        (_) => null,
+      );
+      if (mounted) {
+        setState(() {
+          _order = widget.offlineOrder;
+          _store = store ?? {'name': t('my_store')};
+          _settings =
+              settings ??
+              {
+                'footer_message': 'Thank you!',
+                'show_logo': false,
+                'show_barcode': false,
+                'currency_symbol': 'SYP',
+              };
+          _loading = false;
+          _isOffline = true;
+        });
+      }
+    } catch (e) {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _loadOnline() async {
+    try {
+      final order = await ApiService.fetchOrder(widget.orderId!);
       final store = await ApiService.getMyStore();
       final settings = await ApiService.getReceiptSettings();
       if (mounted) {

@@ -56,6 +56,25 @@ router.get('/stores', async (req, res) => {
   }
 });
 
+// SPONSORED STORES — MUST come BEFORE /stores/:id so "sponsored" isn't captured as :id
+router.get('/stores/sponsored', async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT s.*, c.display_names as city_display_names
+      FROM stores s
+      LEFT JOIN canonical_cities c ON s.city_id = c.canonical_id
+      WHERE s.is_sponsored = TRUE
+      AND (s.sponsorship_expires_at IS NULL OR s.sponsorship_expires_at > NOW())
+      ORDER BY s.sponsorship_tier DESC, s.rating DESC
+      LIMIT 10
+    `);
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Sponsored stores error:', err);
+    res.status(500).json({ error: 'Failed to load sponsored stores' });
+  }
+});
+
 router.get('/stores/:id', async (req, res) => {
   try {
     const result = await pool.query(`

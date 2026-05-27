@@ -208,6 +208,31 @@ async function initInventoryTables() {
     );
   }
 
+  // Fix missing columns for databases created before these fields existed
+  await pool.query(`
+    DO $$
+    BEGIN
+      -- orders table
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='cashier_id') THEN
+        ALTER TABLE orders ADD COLUMN cashier_id INTEGER REFERENCES users(id);
+      END IF;
+
+      -- stores table (if created elsewhere without these columns)
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='stores' AND column_name='rating') THEN
+        ALTER TABLE stores ADD COLUMN rating DECIMAL(2,1) DEFAULT 5.0;
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='stores' AND column_name='is_sponsored') THEN
+        ALTER TABLE stores ADD COLUMN is_sponsored BOOLEAN DEFAULT FALSE;
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='stores' AND column_name='sponsorship_tier') THEN
+        ALTER TABLE stores ADD COLUMN sponsorship_tier INTEGER DEFAULT 1;
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='stores' AND column_name='sponsorship_expires_at') THEN
+        ALTER TABLE stores ADD COLUMN sponsorship_expires_at TIMESTAMP;
+      END IF;
+    END $$;
+  `);
+
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_products_barcode ON products(barcode);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_products_category ON products(category_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_orders_store ON orders(store_id);`);

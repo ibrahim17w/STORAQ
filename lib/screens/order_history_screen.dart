@@ -52,9 +52,14 @@ class _OrderHistoryScreenState extends State<OrderHistoryScreen> {
     await _load();
   }
 
-  String _fmt(dynamic value) {
-    final d = (value as num?)?.toDouble() ?? 0;
-    return 'SYP ${d.toStringAsFixed(2)}';
+  String _fmt(dynamic value, {String currency = 'SYP'}) {
+    double d = 0;
+    if (value is num) {
+      d = value.toDouble();
+    } else if (value is String) {
+      d = double.tryParse(value.replaceAll(',', '.')) ?? 0;
+    }
+    return '${currency} ${d.toStringAsFixed(2)}';
   }
 
   @override
@@ -142,7 +147,10 @@ class _OrderHistoryScreenState extends State<OrderHistoryScreen> {
                         ],
                       ),
                       trailing: Text(
-                        _fmt(order['total']),
+                        _fmt(
+                          order['total'],
+                          currency: order['currency']?.toString() ?? 'SYP',
+                        ),
                         style: TextStyle(
                           fontWeight: FontWeight.bold,
                           color: theme.colorScheme.primary,

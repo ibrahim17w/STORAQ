@@ -204,15 +204,17 @@ class _BarcodeScannerScreenState extends State<_BarcodeScannerScreen>
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                const Icon(Icons.qr_code_scanner,
-                    color: Colors.white54, size: 64),
+                const Icon(
+                  Icons.qr_code_scanner,
+                  color: Colors.white54,
+                  size: 64,
+                ),
                 const SizedBox(height: 16),
                 Text(
                   t('scanner_not_available'),
-                  style: Theme.of(context)
-                      .textTheme
-                      .titleMedium
-                      ?.copyWith(color: Colors.white),
+                  style: Theme.of(
+                    context,
+                  ).textTheme.titleMedium?.copyWith(color: Colors.white),
                 ),
                 const SizedBox(height: 8),
                 Text(
@@ -236,8 +238,7 @@ class _BarcodeScannerScreenState extends State<_BarcodeScannerScreen>
     if (_controller == null) {
       return const Scaffold(
         backgroundColor: Colors.black,
-        body: Center(
-            child: CircularProgressIndicator(color: Colors.white)),
+        body: Center(child: CircularProgressIndicator(color: Colors.white)),
       );
     }
 
@@ -251,14 +252,18 @@ class _BarcodeScannerScreenState extends State<_BarcodeScannerScreen>
           MobileScanner(
             controller: _controller!,
             onDetect: _onDetect,
-            errorBuilder: (context, error, child) {
+            errorBuilder: (context, error) {
               debugPrint('MobileScanner runtime error: $error');
+
               return Center(
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    const Icon(Icons.error_outline,
-                        color: Colors.white54, size: 48),
+                    const Icon(
+                      Icons.error_outline,
+                      color: Colors.white54,
+                      size: 48,
+                    ),
                     const SizedBox(height: 12),
                     Text(
                       t('camera_error'),
@@ -267,8 +272,10 @@ class _BarcodeScannerScreenState extends State<_BarcodeScannerScreen>
                     const SizedBox(height: 16),
                     TextButton(
                       onPressed: _close,
-                      child: Text(t('close'),
-                          style: const TextStyle(color: Colors.white)),
+                      child: Text(
+                        t('close'),
+                        style: const TextStyle(color: Colors.white),
+                      ),
                     ),
                   ],
                 ),
@@ -280,8 +287,7 @@ class _BarcodeScannerScreenState extends State<_BarcodeScannerScreen>
             top: topPadding + 16,
             right: 16,
             child: IconButton(
-              icon: const Icon(Icons.close,
-                  color: Colors.white, size: 28),
+              icon: const Icon(Icons.close, color: Colors.white, size: 28),
               onPressed: _close,
             ),
           ),
@@ -304,8 +310,10 @@ class _BarcodeScannerScreenState extends State<_BarcodeScannerScreen>
             right: 0,
             child: Center(
               child: Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 8,
+                ),
                 decoration: BoxDecoration(
                   color: Colors.black54,
                   borderRadius: BorderRadius.circular(8),

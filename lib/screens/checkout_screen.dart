@@ -1,12 +1,14 @@
 // lib/screens/checkout_screen.dart
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
 import '../services/api_service.dart';
 import '../utils/barcode_helper.dart';
 import '../screens/barcode_scanner_screen.dart';
 import '../screens/receipt_screen.dart';
 import '../lang/translations.dart';
 import '../widgets/gradient_button.dart';
+import '../services/offline_service.dart';
 
 class CartItem {
   final int? productId;
@@ -15,6 +17,7 @@ class CartItem {
   int quantity;
   final String? barcode;
   final int? stock;
+  final String currency;
 
   CartItem({
     this.productId,
@@ -23,6 +26,7 @@ class CartItem {
     this.quantity = 1,
     this.barcode,
     this.stock,
+    this.currency = 'SYP',
   });
 
   double get total => unitPrice * quantity;
@@ -46,8 +50,10 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
 
   bool _isLoading = false;
   bool _isSearching = false;
+  List<dynamic> _allProducts = []; // full store inventory
   List<dynamic> _searchResults = [];
   String? _cashierName;
+  int? _storeId;
 
   double get _subtotal => _cart.fold(0, (sum, item) => sum + item.total);
   double get _discount => double.tryParse(_discountCtrl.text) ?? 0;
@@ -58,6 +64,43 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
   void initState() {
     super.initState();
     _loadCashier();
+    _loadStoreProducts();
+  }
+
+  Future<void> _loadStoreProducts() async {
+    setState(() => _isLoading = true);
+    try {
+      // Try to get my store first
+      final store = await ApiService.getMyStore();
+      _storeId = store['id'];
+      final products = await ApiService.fetchProducts(
+        _storeId!,
+        useCache: true,
+      );
+      if (mounted) {
+        setState(() {
+          _allProducts = products;
+          _searchResults = products; // show all by default
+          _isLoading = false;
+        });
+      }
+      // Also cache to local DB for offline
+      await OfflineService.cacheProducts(_storeId!, products);
+    } catch (e) {
+      // Fallback: load from local cache if offline
+      try {
+        final cached = await OfflineService.getCachedProducts();
+        if (mounted && cached.isNotEmpty) {
+          setState(() {
+            _allProducts = cached;
+            _searchResults = cached;
+            _isLoading = false;
+          });
+        }
+      } catch (_) {
+        if (mounted) setState(() => _isLoading = false);
+      }
+    }
   }
 
   Future<void> _loadCashier() async {
@@ -108,9 +151,10 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
           CartItem(
             productId: product['id'],
             name: product['name']?.toString() ?? t('unknown_product'),
-            unitPrice: (product['price'] as num?)?.toDouble() ?? 0,
+            unitPrice: _parsePrice(product['price']),
             barcode: product['barcode']?.toString(),
             stock: stock,
+            currency: product['currency']?.toString() ?? 'SYP',
           ),
         ),
       );
@@ -118,20 +162,58 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
   }
 
   Future<void> _searchProducts() async {
-    final query = _searchCtrl.text.trim();
-    if (query.length < 2) {
-      setState(() => _searchResults = []);
+    final query = _searchCtrl.text.trim().toLowerCase();
+    if (query.isEmpty) {
+      setState(() => _searchResults = _allProducts);
       return;
     }
-    setState(() => _isSearching = true);
-    try {
-      final results = await ApiService.searchStoreProducts(query: query);
-      if (mounted) setState(() => _searchResults = results);
-    } catch (_) {
-      setState(() => _searchResults = []);
-    } finally {
-      if (mounted) setState(() => _isSearching = false);
+    // Local filter first (works offline)
+    final localFiltered = _allProducts.where((p) {
+      final name = p['name']?.toString().toLowerCase() ?? '';
+      final barcode = p['barcode']?.toString().toLowerCase() ?? '';
+      return name.contains(query) || barcode.contains(query);
+    }).toList();
+
+    setState(() {
+      _searchResults = localFiltered;
+      _isSearching = false;
+    });
+
+    // Also try server search for broader results
+    if (query.length >= 2) {
+      setState(() => _isSearching = true);
+      try {
+        final results = await ApiService.searchStoreProducts(
+          query: query,
+          storeId: _storeId,
+        );
+        // Merge server results with local, preferring local data for stock accuracy
+        final merged = _mergeWithLocal(results);
+        if (mounted) setState(() => _searchResults = merged);
+      } catch (_) {
+        // Keep local results on error
+      } finally {
+        if (mounted) setState(() => _isSearching = false);
+      }
     }
+  }
+
+  List<dynamic> _mergeWithLocal(List<dynamic> serverResults) {
+    final localMap = {for (var p in _allProducts) p['id']: p};
+    return serverResults.map((s) {
+      final local = localMap[s['id']];
+      if (local != null) {
+        // Use local stock if more recent
+        return local['updated_at'] != null &&
+                s['updated_at'] != null &&
+                DateTime.parse(
+                  local['updated_at'],
+                ).isAfter(DateTime.parse(s['updated_at']))
+            ? local
+            : s;
+      }
+      return s;
+    }).toList();
   }
 
   void _adjustQty(int index, int delta) {
@@ -178,6 +260,73 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     if (confirm != true) return;
 
     setState(() => _isLoading = true);
+
+    // Update local stock first (works offline)
+    for (final item in _cart) {
+      if (item.productId != null) {
+        await OfflineService.updateLocalStock(item.productId!, -item.quantity);
+      }
+    }
+
+    // Check connectivity
+    final connectivity = await Connectivity().checkConnectivity();
+    final isOnline = connectivity != ConnectivityResult.none;
+
+    if (!isOnline) {
+      // Queue order for later sync
+      final orderData = {
+        'items': _cart
+            .map(
+              (c) => {
+                'product_id': c.productId,
+                'product_name': c.name,
+                'quantity': c.quantity,
+                'unit_price': c.unitPrice,
+                'total_price': c.total,
+                'barcode': c.barcode,
+                'currency': c.currency,
+              },
+            )
+            .toList(),
+        'customer_name': _customerNameCtrl.text.trim().isEmpty
+            ? null
+            : _customerNameCtrl.text.trim(),
+        'customer_phone': _customerPhoneCtrl.text.trim().isEmpty
+            ? null
+            : _customerPhoneCtrl.text.trim(),
+        'discount': _discount,
+        'tax': _tax,
+        'total': _total,
+        'notes': _notesCtrl.text.trim().isEmpty ? null : _notesCtrl.text.trim(),
+        'payment_method': 'cash',
+        'created_at': DateTime.now().toIso8601String(),
+      };
+
+      await OfflineService.queueOrder(orderData);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              '${t('order_saved_offline')} — ${t('sync_when_online')}',
+            ),
+            backgroundColor: Colors.orange,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+        // Show local receipt instead of server receipt
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(
+            builder: (_) => ReceiptScreen(offlineOrder: orderData),
+          ),
+        );
+      }
+      setState(() => _isLoading = false);
+      return;
+    }
+
+    // Online: send to server
     try {
       final items = _cart
           .map(
@@ -214,7 +363,57 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
         );
       }
     } catch (e) {
-      if (mounted) _showError(e.toString());
+      // Server failed — queue locally and show offline receipt
+      final orderData = {
+        'items': _cart
+            .map(
+              (c) => {
+                'product_id': c.productId,
+                'product_name': c.name,
+                'quantity': c.quantity,
+                'unit_price': c.unitPrice,
+                'total_price': c.total,
+                'barcode': c.barcode,
+                'currency': c.currency,
+              },
+            )
+            .toList(),
+        'customer_name': _customerNameCtrl.text.trim().isEmpty
+            ? null
+            : _customerNameCtrl.text.trim(),
+        'customer_phone': _customerPhoneCtrl.text.trim().isEmpty
+            ? null
+            : _customerPhoneCtrl.text.trim(),
+        'discount': _discount,
+        'tax': _tax,
+        'total': _total,
+        'notes': _notesCtrl.text.trim().isEmpty ? null : _notesCtrl.text.trim(),
+        'payment_method': 'cash',
+        'created_at': DateTime.now().toIso8601String(),
+      };
+      await OfflineService.queueOrder(orderData);
+
+      if (mounted) {
+        final errMsg = e.toString();
+        final shortErr = errMsg.length > 60
+            ? '${errMsg.substring(0, 60)}...'
+            : errMsg;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              '${t('server_error') ?? 'Server error'} — ${t('order_saved_offline') ?? 'Saved locally'}',
+            ),
+            backgroundColor: Colors.orange,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(
+            builder: (_) => ReceiptScreen(offlineOrder: orderData),
+          ),
+        );
+      }
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -226,7 +425,17 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     ).showSnackBar(SnackBar(content: Text(msg), backgroundColor: Colors.red));
   }
 
-  String _fmt(double value) => '${value.toStringAsFixed(2)} SYP';
+  String _fmt(double value, {String currency = 'SYP'}) =>
+      '${value.toStringAsFixed(2)} $currency';
+
+  double _parsePrice(dynamic value) {
+    if (value == null) return 0;
+    if (value is num) return value.toDouble();
+    if (value is String) {
+      return double.tryParse(value.replaceAll(',', '.')) ?? 0;
+    }
+    return 0;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -291,7 +500,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                       ],
                     ),
                     const SizedBox(height: 12),
-                    // Search results
+                    // Product list (all inventory or filtered search)
                     if (_isSearching)
                       const LinearProgressIndicator()
                     else if (_searchResults.isNotEmpty)
@@ -301,6 +510,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                           itemBuilder: (_, i) {
                             final p = _searchResults[i];
                             final stock = (p['quantity'] as num?)?.toInt() ?? 0;
+                            final isOutOfStock = stock <= 0;
                             return Card(
                               margin: const EdgeInsets.only(bottom: 8),
                               child: ListTile(
@@ -315,38 +525,57 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                                         '?',
                                   ),
                                 ),
-                                title: Text(p['name']?.toString() ?? ''),
+                                title: Text(
+                                  p['name']?.toString() ?? '',
+                                  style: isOutOfStock
+                                      ? TextStyle(
+                                          color: theme.colorScheme.outline,
+                                          decoration:
+                                              TextDecoration.lineThrough,
+                                        )
+                                      : null,
+                                ),
                                 subtitle: Text(
-                                  '${_fmt((p['price'] as num?)?.toDouble() ?? 0)} • $stock ${t('in_stock')}',
+                                  '${_fmt(_parsePrice(p['price']), currency: p['currency']?.toString() ?? 'SYP')} • $stock ${t('in_stock')}',
+                                  style: isOutOfStock
+                                      ? TextStyle(
+                                          color: theme.colorScheme.error,
+                                        )
+                                      : null,
                                 ),
-                                trailing: IconButton(
-                                  icon: const Icon(
-                                    Icons.add_circle,
-                                    color: Colors.green,
-                                  ),
-                                  onPressed: () => _addProductToCart(p),
-                                ),
+                                trailing: isOutOfStock
+                                    ? const Icon(
+                                        Icons.block,
+                                        color: Colors.grey,
+                                      )
+                                    : IconButton(
+                                        icon: const Icon(
+                                          Icons.add_circle,
+                                          color: Colors.green,
+                                        ),
+                                        onPressed: () => _addProductToCart(p),
+                                      ),
                               ),
                             );
                           },
                         ),
                       )
-                    else if (_searchCtrl.text.length >= 2)
+                    else if (_searchCtrl.text.isNotEmpty)
                       Center(child: Text(t('no_results_found')))
-                    else
+                    else if (_allProducts.isEmpty && !_isLoading)
                       Expanded(
                         child: Center(
                           child: Column(
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: [
                               Icon(
-                                Icons.search,
+                                Icons.inventory_2_outlined,
                                 size: 48,
                                 color: theme.colorScheme.outline,
                               ),
                               const SizedBox(height: 8),
                               Text(
-                                t('type_to_search'),
+                                t('no_products_in_store'),
                                 style: TextStyle(
                                   color: theme.colorScheme.outline,
                                 ),
@@ -354,7 +583,9 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                             ],
                           ),
                         ),
-                      ),
+                      )
+                    else
+                      const SizedBox.shrink(),
                   ],
                 ),
               ),
@@ -479,7 +710,10 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                                             ),
                                             const Spacer(),
                                             Text(
-                                              _fmt(item.total),
+                                              _fmt(
+                                                item.total,
+                                                currency: item.currency,
+                                              ),
                                               style: TextStyle(
                                                 fontWeight: FontWeight.bold,
                                                 color:
@@ -593,15 +827,19 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
   }
 
   Widget _qtyButton(IconData icon, VoidCallback onTap) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
     return Material(
-      color: Colors.grey.shade200,
+      color: isDark
+          ? theme.colorScheme.surfaceContainerHighest
+          : Colors.grey.shade300,
       borderRadius: BorderRadius.circular(8),
       child: InkWell(
         onTap: onTap,
         borderRadius: BorderRadius.circular(8),
         child: Padding(
-          padding: const EdgeInsets.all(6),
-          child: Icon(icon, size: 18),
+          padding: const EdgeInsets.all(8),
+          child: Icon(icon, size: 18, color: theme.colorScheme.onSurface),
         ),
       ),
     );

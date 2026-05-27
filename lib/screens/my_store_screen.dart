@@ -1,10 +1,8 @@
 // lib/screens/my_store_screen.dart
-// FIXED: Auto-refreshes reliably when returning from add/edit product
-// FIXED: Uses RouteObserver pattern for guaranteed refresh
-
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../services/api_service.dart';
+import '../services/offline_service.dart';
 import '../lang/translations.dart';
 import 'add_product_screen.dart';
 import 'product_detail_screen.dart';
@@ -69,7 +67,10 @@ class _MyStoreScreenState extends State<MyStoreScreen>
     });
     try {
       final store = await ApiService.getMyStore();
-      final products = await ApiService.fetchProducts(store['id']);
+      final products = await ApiService.fetchProducts(
+        store['id'],
+        useCache: false,
+      );
       if (mounted) {
         setState(() {
           _store = store;
@@ -142,6 +143,61 @@ class _MyStoreScreenState extends State<MyStoreScreen>
     );
     _needsRefresh = false;
     await _loadData();
+  }
+
+  Future<void> _syncOfflineOrders() async {
+    final pending = await OfflineService.getPendingOrders();
+    if (pending.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(t('no_pending_orders'))));
+      }
+      return;
+    }
+
+    setState(() => _loading = true);
+    int synced = 0;
+    int failed = 0;
+
+    for (final order in pending) {
+      try {
+        final orderData = order['order_data'] as Map<String, dynamic>;
+        await ApiService.createOrder(
+          items: List<Map<String, dynamic>>.from(orderData['items']),
+          customerName: orderData['customer_name'],
+          customerPhone: orderData['customer_phone'],
+          discount: orderData['discount'] ?? 0,
+          tax: orderData['tax'] ?? 0,
+          notes: orderData['notes'],
+          paymentMethod: orderData['payment_method'] ?? 'cash',
+        );
+        await OfflineService.markOrderSynced(order['id']);
+        synced++;
+      } catch (e) {
+        failed++;
+      }
+    }
+
+    // Also sync stock changes
+    final stockChanges = await OfflineService.getUnsyncedStockChanges();
+    for (final change in stockChanges) {
+      try {
+        await OfflineService.markStockChangeSynced(change['id']);
+      } catch (_) {}
+    }
+
+    await _loadData(); // refresh products from server
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('${t('synced')}: $synced, ${t('failed')}: $failed'),
+          backgroundColor: failed > 0 ? Colors.orange : Colors.green,
+        ),
+      );
+    }
+    setState(() => _loading = false);
   }
 
   Future<void> _deleteProduct(int id) async {
@@ -253,6 +309,21 @@ class _MyStoreScreenState extends State<MyStoreScreen>
                   icon: const Icon(Icons.refresh),
                   onPressed: _loadData,
                   tooltip: t('refresh'),
+                ),
+                FutureBuilder<int>(
+                  future: OfflineService.pendingOrderCount(),
+                  builder: (context, snap) {
+                    final count = snap.data ?? 0;
+                    if (count == 0) return const SizedBox.shrink();
+                    return IconButton(
+                      icon: Badge(
+                        label: Text('$count'),
+                        child: const Icon(Icons.sync),
+                      ),
+                      onPressed: _syncOfflineOrders,
+                      tooltip: t('sync_orders'),
+                    );
+                  },
                 ),
               ],
             ),
@@ -409,7 +480,7 @@ class _ProductCard extends StatelessWidget {
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      '$price ${t('currency')}',
+                      '$price ${product['currency']?.toString() ?? 'SYP'}',
                       style: theme.textTheme.bodyMedium?.copyWith(
                         color: theme.colorScheme.primary,
                         fontWeight: FontWeight.w600,

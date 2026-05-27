@@ -72,12 +72,13 @@ const schemas = {
   }),
   createOrder: z.object({
     items: z.array(z.object({
-      product_id: numField().refine(n => Number.isInteger(n) && n > 0, { message: 'product_id must be a positive integer' }),
+      product_id: numField({ optional: true }).refine(n => n === undefined || n === null || Number.isInteger(n), { message: 'product_id must be an integer' }),
       quantity: numField().refine(n => Number.isInteger(n) && n > 0, { message: 'quantity must be a positive integer' }),
       unit_price: numField({ optional: true }).refine(n => n === undefined || n === null || n >= 0, { message: 'unit_price must be non-negative' }),
       total_price: numField({ optional: true }).refine(n => n === undefined || n === null || n >= 0, { message: 'total_price must be non-negative' }),
       product_name: z.string().max(200).optional(),
-      barcode: z.string().max(50).optional(),
+      barcode: z.string().max(50).nullish().transform(v => v ?? undefined),
+      currency: z.string().max(10).optional(),
     })).min(1),
     customer_name: z.string().max(100).optional(),
     customer_phone: z.string().max(50).optional(),
@@ -105,6 +106,7 @@ const schemas = {
     barcode: z.string().max(50).optional(),
     category_id: numField({ optional: true }).refine(n => n === undefined || n === null || (Number.isInteger(n) && n > 0), { message: 'category_id must be a positive integer' }),
     low_stock_threshold: numField({ optional: true }).refine(n => n === undefined || n === null || (Number.isInteger(n) && n >= 0), { message: 'low_stock_threshold must be a non-negative integer' }),
+    currency: z.string().max(10).optional(),
   }),
   updateProduct: z.object({
     name: z.string().max(200).optional(),
@@ -115,6 +117,7 @@ const schemas = {
     category_id: numField({ optional: true }).refine(n => n === undefined || n === null || (Number.isInteger(n) && n > 0), { message: 'category_id must be a positive integer' }),
     low_stock_threshold: numField({ optional: true }).refine(n => n === undefined || n === null || (Number.isInteger(n) && n >= 0), { message: 'low_stock_threshold must be a non-negative integer' }),
     existing_images: z.string().optional(),
+    currency: z.string().max(10).optional(),
   }),
   sponsorStore: z.object({
     tier: z.number().optional(),

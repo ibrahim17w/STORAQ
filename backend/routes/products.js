@@ -80,9 +80,11 @@ router.post('/products', requireRealUser, productUpload, validate(schemas.create
     const extraImages = req.files?.['extra_images']?.map(f => `${getBaseUrl(req)}/uploads/${f.filename}`) || [];
     const allImages = imageUrl ? [imageUrl, ...extraImages] : extraImages;
 
+    const currency = req.body.currency ? sanitizeString(req.body.currency, 10) : 'SYP';
+
     const result = await pool.query(
-      `INSERT INTO products (store_id, name, price, quantity, description, barcode, category_id, images, image_url, low_stock_threshold)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+      `INSERT INTO products (store_id, name, price, quantity, description, barcode, category_id, images, image_url, low_stock_threshold, currency)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
       [
         storeId,
         sanitizeString(name, 200),
@@ -93,7 +95,8 @@ router.post('/products', requireRealUser, productUpload, validate(schemas.create
         category_id ? parseInt(category_id) : null,
         JSON.stringify(allImages),
         imageUrl,
-        parseInt(low_stock_threshold) || 5
+        parseInt(low_stock_threshold) || 5,
+        currency
       ]
     );
     res.status(201).json(result.rows[0]);
@@ -138,6 +141,7 @@ router.put('/products/:id', requireRealUser, productUpload, validate(schemas.upd
     const barcode = req.body.barcode !== undefined ? (req.body.barcode ? sanitizeString(req.body.barcode, 50) : null) : old.barcode;
     const category_id = req.body.category_id !== undefined ? (req.body.category_id ? parseInt(req.body.category_id) : null) : old.category_id;
     const low_stock_threshold = req.body.low_stock_threshold !== undefined ? parseInt(req.body.low_stock_threshold) : old.low_stock_threshold;
+    const currency = req.body.currency !== undefined ? (req.body.currency ? sanitizeString(req.body.currency, 10) : null) : old.currency;
 
     if (barcode && barcode !== old.barcode) {
       const bcCheck = await pool.query('SELECT id FROM products WHERE barcode=$1 AND id != $2', [barcode, req.params.id]);
@@ -160,8 +164,8 @@ router.put('/products/:id', requireRealUser, productUpload, validate(schemas.upd
     }
 
     const result = await pool.query(
-      `UPDATE products SET name=$1, price=$2, quantity=$3, description=$4, barcode=$5, category_id=$6, low_stock_threshold=$7, image_url=$8, images=$9, updated_at=NOW() WHERE id=$10 RETURNING *`,
-      [name, price, quantity, description, barcode, category_id, low_stock_threshold, imageUrl, JSON.stringify(allImages), req.params.id]
+      `UPDATE products SET name=$1, price=$2, quantity=$3, description=$4, barcode=$5, category_id=$6, low_stock_threshold=$7, image_url=$8, images=$9, currency=$10, updated_at=NOW() WHERE id=$11 RETURNING *`,
+      [name, price, quantity, description, barcode, category_id, low_stock_threshold, imageUrl, JSON.stringify(allImages), currency, req.params.id]
     );
     res.json(result.rows[0]);
 

@@ -32,6 +32,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
   final _qtyCtrl = TextEditingController();
   final _descCtrl = TextEditingController();
   final _barcodeCtrl = TextEditingController();
+  final _currencyCtrl = TextEditingController(text: 'SYP');
   final _formKey = GlobalKey<FormState>();
 
   List<File> _newImages = [];
@@ -80,6 +81,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
 
     _descCtrl.text = product['description']?.toString() ?? '';
     _barcodeCtrl.text = product['barcode']?.toString() ?? '';
+    _currencyCtrl.text = product['currency']?.toString() ?? 'SYP';
 
     // Images: handle multiple possible field names from backend
     List<String> images = [];
@@ -243,6 +245,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
         'description': _descCtrl.text.trim(),
         'barcode': barcode,
         'category_ids': _categoryIds,
+        'currency': _currencyCtrl.text.trim(),
         'image_paths': _newImages.map((f) => f.path).toList(),
       });
       if (mounted) {
@@ -270,6 +273,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
           barcode: barcode,
           categoryId: _categoryIds.isNotEmpty ? _categoryIds.first : null,
           lowStockThreshold: 5,
+          currency: _currencyCtrl.text.trim(),
           image: _newImages.isNotEmpty ? _newImages.first : null,
           extraImages: _newImages.length > 1 ? _newImages.sublist(1) : null,
           existingImages: _existingImages,
@@ -283,6 +287,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
           barcode: barcode,
           categoryId: _categoryIds.isNotEmpty ? _categoryIds.first : null,
           lowStockThreshold: 5,
+          currency: _currencyCtrl.text.trim(),
           image: _newImages.isNotEmpty ? _newImages.first : null,
           extraImages: _newImages.length > 1 ? _newImages.sublist(1) : null,
         );
@@ -538,7 +543,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
                           ),
                           const SizedBox(height: 16),
 
-                          // Price & Quantity Row
+                          // Price, Currency & Quantity Row
                           Row(
                             children: [
                               Expanded(
@@ -572,6 +577,21 @@ class _AddProductScreenState extends State<AddProductScreen> {
                                       return t('negative_price_not_allowed');
                                     return null;
                                   },
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                flex: 2,
+                                child: TextFormField(
+                                  controller: _currencyCtrl,
+                                  textCapitalization:
+                                      TextCapitalization.characters,
+                                  decoration: _modernInputDecoration(
+                                    context,
+                                    t('currency'),
+                                    icon: Icons.currency_exchange,
+                                    helper: 'SYP, USD, TRY, EUR...',
+                                  ),
                                 ),
                               ),
                               const SizedBox(width: 12),
@@ -757,6 +777,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
     _qtyCtrl.dispose();
     _descCtrl.dispose();
     _barcodeCtrl.dispose();
+    _currencyCtrl.dispose();
     super.dispose();
   }
 }

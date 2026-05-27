@@ -482,11 +482,14 @@ class ApiService {
   // PRODUCTS
   // ============================================================
 
-  static Future<List<dynamic>> fetchProducts(int storeId) async {
+  static Future<List<dynamic>> fetchProducts(
+    int storeId, {
+    bool useCache = true,
+  }) async {
     final response = await _getWithTimeout(
       '$baseUrl/api/products/$storeId',
       headers: publicHeaders,
-      useCache: true,
+      useCache: useCache,
     );
     if (response.statusCode == 200) {
       final body = jsonDecode(response.body) as Map<String, dynamic>;
@@ -508,6 +511,7 @@ class ApiService {
     int? lowStockThreshold,
     File? image,
     List<File>? extraImages,
+    String? currency,
   }) async {
     final request = http.MultipartRequest(
       'POST',
@@ -523,6 +527,7 @@ class ApiService {
       request.fields['category_id'] = categoryId.toString();
     if (lowStockThreshold != null)
       request.fields['low_stock_threshold'] = lowStockThreshold.toString();
+    if (currency != null) request.fields['currency'] = currency;
     if (image != null) {
       request.files.add(await http.MultipartFile.fromPath('image', image.path));
     }
@@ -553,6 +558,7 @@ class ApiService {
     File? image,
     List<File>? extraImages,
     List<String>? existingImages,
+    String? currency,
   }) async {
     final request = http.MultipartRequest(
       'PUT',
@@ -568,6 +574,7 @@ class ApiService {
       request.fields['category_id'] = categoryId.toString();
     if (lowStockThreshold != null)
       request.fields['low_stock_threshold'] = lowStockThreshold.toString();
+    if (currency != null) request.fields['currency'] = currency;
     if (existingImages != null)
       request.fields['existing_images'] = jsonEncode(existingImages);
     if (image != null) {
