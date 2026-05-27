@@ -446,9 +446,15 @@ class ApiService {
       useCache: true,
     );
     if (response.statusCode == 200) {
-      return jsonDecode(response.body) as List<dynamic>;
+      final body = jsonDecode(response.body) as Map<String, dynamic>;
+      // Handle both paginated and raw array responses for backward compatibility
+      if (body.containsKey('data')) {
+        return body['data'] as List<dynamic>;
+      }
+      // Fallback: if backend ever returns raw array
+      return body as List<dynamic>? ?? [];
     }
-    throw Exception('Failed');
+    throw Exception('Failed to load stores');
   }
 
   static Future<Map<String, dynamic>> fetchStore(int id) async {
@@ -483,9 +489,13 @@ class ApiService {
       useCache: true,
     );
     if (response.statusCode == 200) {
-      return jsonDecode(response.body) as List<dynamic>;
+      final body = jsonDecode(response.body) as Map<String, dynamic>;
+      if (body.containsKey('data')) {
+        return body['data'] as List<dynamic>;
+      }
+      return body as List<dynamic>? ?? [];
     }
-    throw Exception('Failed');
+    throw Exception('Failed to load products');
   }
 
   static Future<Map<String, dynamic>> createProduct({
@@ -736,7 +746,11 @@ class ApiService {
       headers: await authHeaders,
     );
     if (response.statusCode == 200) {
-      return jsonDecode(response.body) as List<dynamic>;
+      final body = jsonDecode(response.body) as Map<String, dynamic>;
+      if (body.containsKey('data')) {
+        return body['data'] as List<dynamic>;
+      }
+      return body as List<dynamic>? ?? [];
     }
     throw Exception('Failed to load orders');
   }
@@ -843,9 +857,13 @@ class ApiService {
       useCache: true,
     );
     if (response.statusCode == 200) {
-      return jsonDecode(response.body) as List<dynamic>;
+      final body = jsonDecode(response.body) as Map<String, dynamic>;
+      if (body.containsKey('data')) {
+        return body['data'] as List<dynamic>;
+      }
+      return body as List<dynamic>? ?? [];
     }
-    throw Exception('Failed');
+    throw Exception('Failed to load marketplace feed');
   }
 
   static Future<void> trackProductView(int productId) async {

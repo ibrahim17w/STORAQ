@@ -693,16 +693,18 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _loadStores() async {
     try {
       final stores = await ApiService.fetchStores();
-      if (mounted)
+      if (mounted) {
         setState(() {
           _stores = stores;
           _storesLoading = false;
         });
-      // Re-infer location now that stores are available
-      if (mounted && _userPosition != null && _stores.isNotEmpty) {
-        _inferUserLocationFromStores();
+        // Re-infer location now that stores are available
+        if (_userPosition != null && _stores.isNotEmpty) {
+          _inferUserLocationFromStores();
+        }
       }
-    } catch (_) {
+    } catch (e) {
+      print('>>> HomeScreen _loadStores error: $e');
       if (mounted) setState(() => _storesLoading = false);
     }
   }

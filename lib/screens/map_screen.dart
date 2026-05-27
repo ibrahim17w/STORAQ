@@ -40,7 +40,7 @@ class _MapScreenState extends State<MapScreen> {
   void initState() {
     super.initState();
 
-    // CHANGED: use passed stores immediately — no network delay, no cache bugs
+    // Use passed stores if available and non-empty
     if (widget.stores != null && widget.stores!.isNotEmpty) {
       _stores = widget.stores!
           .where((s) => s['lat'] != null && s['lng'] != null)
@@ -58,10 +58,9 @@ class _MapScreenState extends State<MapScreen> {
       });
     }
 
-    // Only fetch from network if we weren't given stores
-    if (widget.stores == null || widget.stores!.isEmpty) {
-      _loadStores();
-    }
+    // ALWAYS fetch from network as fallback/refresh, even if stores were passed
+    // This ensures we have data even if the passed list was empty
+    _loadStores();
   }
 
   Future<void> _moveToCurrentLocation() async {
@@ -115,6 +114,12 @@ class _MapScreenState extends State<MapScreen> {
       }
     } catch (e) {
       print('>>> MapScreen _loadStores error: $e');
+      // Don't crash — just show empty state
+      if (mounted) {
+        setState(() {
+          // Keep whatever we have, or empty if nothing
+        });
+      }
     }
   }
 

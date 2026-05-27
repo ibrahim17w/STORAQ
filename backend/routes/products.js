@@ -1,0 +1,300 @@
+//routes/products.js
+const express = require('express');
+const router = express.Router();
+
+const { pool } = require('../config/database');
+const { upload, productUpload, cleanupUploadedFiles } = require('../config/upload');
+const { authenticateToken, optionalAuth, requireRealUser } = require('../middleware/auth');
+const { schemas, validate, validateQuery } = require('../middleware/validation');
+const { sanitizeString, getPagination, getBaseUrl } = require('../middleware/helpers');
+const { processProductEmbeddings } = require('../services/embedding');
+
+// PRODUCTS — specific routes MUST come before parameterized routes
+router.get('/products/search', validateQuery(schemas.search), async (req, res) => {
+  try {
+    const { q, limit } = req.validatedQuery;
+    const finalLimit = Math.min(limit || 20, 50);
+    if (!q) return res.json([]);
+
+    const result = await pool.query(
+      `SELECT p.*, s.name as shop_name FROM products p
+       JOIN stores s ON p.store_id = s.id
+       WHERE p.name ILIKE $1 OR p.barcode ILIKE $1
+       ORDER BY p.name
+       LIMIT $2`,
+      [`%${q}%`, finalLimit]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed' });
+  }
+});
+
+router.get('/products/:storeId', async (req, res) => {
+  try {
+    const storeId = parseInt(req.params.storeId);
+    if (isNaN(storeId) || storeId <= 0) {
+      return res.status(400).json({ error: 'Invalid store ID' });
+    }
+    const { page, limit, offset } = getPagination(req, 20, 100);
+
+    const countResult = await pool.query('SELECT COUNT(*) as total FROM products WHERE store_id = $1', [storeId]);
+    const total = parseInt(countResult.rows[0].total);
+
+    const result = await pool.query(
+      'SELECT * FROM products WHERE store_id=$1 ORDER BY created_at DESC LIMIT $2 OFFSET $3',
+      [storeId, limit, offset]
+    );
+
+    res.json({
+      data: result.rows,
+      pagination: { page, limit, total, total_pages: Math.ceil(total / limit) }
+    });
+  } catch (err) {
+    console.error('Products list error:', err);
+    res.status(500).json({ error: 'Failed to load products' });
+  }
+});
+
+// CREATE PRODUCT (with barcode, category, multiple images)
+router.post('/products', requireRealUser, productUpload, validate(schemas.createProduct), async (req, res) => {
+  try {
+    const storeResult = await pool.query('SELECT id FROM stores WHERE owner_id=$1', [req.user.userId]);
+    if (storeResult.rows.length === 0) {
+      cleanupUploadedFiles(req);
+      return res.status(403).json({ error: 'You do not own a store' });
+    }
+    const storeId = storeResult.rows[0].id;
+
+    const { name, price, quantity, description, barcode, category_id, low_stock_threshold } = req.body;
+
+    if (barcode) {
+      const existing = await pool.query('SELECT id FROM products WHERE barcode=$1', [barcode]);
+      if (existing.rows.length > 0) {
+        cleanupUploadedFiles(req);
+        return res.status(409).json({ error: 'Barcode already exists', product_id: existing.rows[0].id });
+      }
+    }
+
+    const imageUrl = req.files?.['image']?.[0] ? `${getBaseUrl(req)}/uploads/${req.files['image'][0].filename}` : null;
+    const extraImages = req.files?.['extra_images']?.map(f => `${getBaseUrl(req)}/uploads/${f.filename}`) || [];
+    const allImages = imageUrl ? [imageUrl, ...extraImages] : extraImages;
+
+    const result = await pool.query(
+      `INSERT INTO products (store_id, name, price, quantity, description, barcode, category_id, images, image_url, low_stock_threshold)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+      [
+        storeId,
+        sanitizeString(name, 200),
+        parseFloat(price) || 0,
+        parseInt(quantity) || 0,
+        description ? sanitizeString(description, 1000) : null,
+        barcode ? sanitizeString(barcode, 50) : null,
+        category_id ? parseInt(category_id) : null,
+        JSON.stringify(allImages),
+        imageUrl,
+        parseInt(low_stock_threshold) || 5
+      ]
+    );
+    res.status(201).json(result.rows[0]);
+
+    const productId = result.rows[0].id;
+    const imagesForEmbed = allImages.filter(url => url != null && url.length > 0);
+    if (imagesForEmbed.length > 0) {
+      setTimeout(() => processProductEmbeddings(productId, imagesForEmbed).catch((e) => {
+        console.error('Background embedding error for product', productId, e.message);
+      }), 0);
+    }
+  } catch (err) {
+    console.error(err);
+    cleanupUploadedFiles(req);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Something went wrong. Please try again later.' });
+    }
+  }
+});
+
+// UPDATE PRODUCT
+router.put('/products/:id', requireRealUser, productUpload, validate(schemas.updateProduct), async (req, res) => {
+  try {
+    const storeResult = await pool.query('SELECT id FROM stores WHERE owner_id=$1', [req.user.userId]);
+    if (storeResult.rows.length === 0) {
+      cleanupUploadedFiles(req);
+      return res.status(403).json({ error: 'No store found' });
+    }
+    const storeId = storeResult.rows[0].id;
+
+    const existing = await pool.query('SELECT * FROM products WHERE id=$1 AND store_id=$2', [req.params.id, storeId]);
+    if (existing.rows.length === 0) {
+      cleanupUploadedFiles(req);
+      return res.status(404).json({ error: 'Product not found' });
+    }
+
+    const old = existing.rows[0];
+    const name = req.body.name !== undefined ? sanitizeString(req.body.name, 200) : old.name;
+    const price = req.body.price !== undefined ? parseFloat(req.body.price) : old.price;
+    const quantity = req.body.quantity !== undefined ? parseInt(req.body.quantity) : old.quantity;
+    const description = req.body.description !== undefined ? (req.body.description ? sanitizeString(req.body.description, 1000) : null) : old.description;
+    const barcode = req.body.barcode !== undefined ? (req.body.barcode ? sanitizeString(req.body.barcode, 50) : null) : old.barcode;
+    const category_id = req.body.category_id !== undefined ? (req.body.category_id ? parseInt(req.body.category_id) : null) : old.category_id;
+    const low_stock_threshold = req.body.low_stock_threshold !== undefined ? parseInt(req.body.low_stock_threshold) : old.low_stock_threshold;
+
+    if (barcode && barcode !== old.barcode) {
+      const bcCheck = await pool.query('SELECT id FROM products WHERE barcode=$1 AND id != $2', [barcode, req.params.id]);
+      if (bcCheck.rows.length > 0) {
+        cleanupUploadedFiles(req);
+        return res.status(409).json({ error: 'Barcode already exists', product_id: bcCheck.rows[0].id });
+      }
+    }
+
+    const imageUrl = req.files?.['image']?.[0] ? `${getBaseUrl(req)}/uploads/${req.files['image'][0].filename}` : old.image_url;
+
+    let allImages = old.images || [];
+    if (req.body.existing_images) {
+      try { allImages = JSON.parse(req.body.existing_images); } catch (_) { }
+    }
+    const newImages = req.files?.['extra_images']?.map(f => `${getBaseUrl(req)}/uploads/${f.filename}`) || [];
+    allImages = [...allImages, ...newImages];
+    if (imageUrl && !allImages.includes(imageUrl)) {
+      allImages.unshift(imageUrl);
+    }
+
+    const result = await pool.query(
+      `UPDATE products SET name=$1, price=$2, quantity=$3, description=$4, barcode=$5, category_id=$6, low_stock_threshold=$7, image_url=$8, images=$9, updated_at=NOW() WHERE id=$10 RETURNING *`,
+      [name, price, quantity, description, barcode, category_id, low_stock_threshold, imageUrl, JSON.stringify(allImages), req.params.id]
+    );
+    res.json(result.rows[0]);
+
+    const updatedImages = allImages.filter(url => url != null && url.length > 0);
+    if (updatedImages.length > 0) {
+      setTimeout(() => processProductEmbeddings(req.params.id, updatedImages).catch((e) => {
+        console.error('Background embedding error for product', req.params.id, e.message);
+      }), 0);
+    }
+  } catch (err) {
+    console.error(err);
+    cleanupUploadedFiles(req);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Something went wrong. Please try again later.' });
+    }
+  }
+});
+
+router.delete('/products/:id', requireRealUser, async (req, res) => {
+  try {
+    const storeResult = await pool.query('SELECT id FROM stores WHERE owner_id=$1', [req.user.userId]);
+    if (storeResult.rows.length === 0) return res.status(403).json({ error: 'No store found' });
+    const storeId = storeResult.rows[0].id;
+
+    // Clean up embeddings first (FK CASCADE handles DB side, but explicit is safer for file cleanup logic later)
+    await pool.query('DELETE FROM image_embeddings WHERE product_id=$1', [req.params.id]);
+    await pool.query('DELETE FROM product_images WHERE product_id=$1', [req.params.id]);
+
+    const result = await pool.query('DELETE FROM products WHERE id=$1 AND store_id=$2 RETURNING id', [req.params.id, storeId]);
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Product not found' });
+    res.json({ message: 'Product deleted successfully' });
+  } catch (err) {
+    console.error('Delete product error:', err);
+    res.status(500).json({ error: 'Something went wrong. Please try again later.' });
+  }
+});
+
+router.post('/upload', requireRealUser, upload.single('image'), (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No image uploaded' });
+    res.json({ url: `${getBaseUrl(req)}/uploads/${req.file.filename}` });
+  } catch (err) {
+    console.error('Upload error:', err);
+    res.status(500).json({ error: 'Upload failed' });
+  }
+});
+
+// ==================== PRODUCT IMAGES ====================
+router.get('/products/:id/images', async (req, res) => {
+  try {
+    const result = await pool.query(
+      'SELECT * FROM product_images WHERE product_id = $1 ORDER BY sort_order, id',
+      [req.params.id]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed' });
+  }
+});
+
+router.post('/products/:id/images', requireRealUser, upload.single('image'), async (req, res) => {
+  try {
+    const storeResult = await pool.query('SELECT id FROM stores WHERE owner_id=$1', [req.user.userId]);
+    if (storeResult.rows.length === 0) return res.status(403).json({ error: 'No store found' });
+
+    const productCheck = await pool.query(
+      'SELECT p.id FROM products p JOIN stores s ON p.store_id = s.id WHERE p.id=$1 AND s.owner_id=$2',
+      [req.params.id, req.user.userId]
+    );
+    if (productCheck.rows.length === 0) return res.status(403).json({ error: 'Not your product' });
+
+    if (!req.file) return res.status(400).json({ error: 'No image' });
+    const imageUrl = `${getBaseUrl(req)}/uploads/${req.file.filename}`;
+
+    const result = await pool.query(
+      'INSERT INTO product_images (product_id, image_url) VALUES ($1, $2) RETURNING *',
+      [req.params.id, imageUrl]
+    );
+    res.status(201).json(result.rows[0]);
+
+    // Async embedding generation — use req.params.id, NOT result.rows[0].id
+    const productId = req.params.id;
+    const allImagesForEmbed = imageUrl ? [imageUrl] : [];
+    if (allImagesForEmbed.length > 0) {
+      setTimeout(() => processProductEmbeddings(productId, allImagesForEmbed).catch(() => { }), 0);
+    }
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed' });
+  }
+});
+
+router.delete('/products/:id/images/:imageId', requireRealUser, async (req, res) => {
+  try {
+    const storeResult = await pool.query('SELECT id FROM stores WHERE owner_id=$1', [req.user.userId]);
+    if (storeResult.rows.length === 0) return res.status(403).json({ error: 'No store found' });
+
+    const result = await pool.query(
+      `DELETE FROM product_images pi
+       USING products p, stores s
+       WHERE pi.id=$1 AND pi.product_id=$2 AND p.id=pi.product_id AND s.id=p.store_id AND s.owner_id=$3
+       RETURNING pi.*`,
+      [req.params.imageId, req.params.id, req.user.userId]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Image not found' });
+    res.json({ message: 'Deleted' });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed' });
+  }
+});
+
+// ==================== PRODUCT SEARCH ====================
+router.get('/products/:storeId/search', validateQuery(schemas.productSearch), async (req, res) => {
+  try {
+    const storeId = parseInt(req.params.storeId);
+    if (isNaN(storeId) || storeId <= 0) {
+      return res.status(400).json({ error: 'Invalid store ID' });
+    }
+    const { q, limit } = req.validatedQuery;
+    const finalLimit = Math.min(limit || 20, 50);
+    if (!q) return res.json([]);
+
+    const result = await pool.query(
+      `SELECT p.* FROM products p
+       WHERE p.store_id = $1 AND (p.name ILIKE $2 OR p.barcode ILIKE $2)
+       ORDER BY p.name
+       LIMIT $3`,
+      [storeId, `%${q}%`, finalLimit]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed' });
+  }
+});
+
+module.exports = router;
