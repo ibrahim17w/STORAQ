@@ -1,6 +1,8 @@
-//middleware/helpers.js
 const { pool } = require('../config/database');
 const { PORT } = require('../config/constants');
+const fs = require('fs');
+const path = require('path');
+const { uploadsDir } = require('../config/upload');
 
 function getBaseUrl(req) {
   const forwardedProto = req.headers['x-forwarded-proto'];
@@ -11,7 +13,6 @@ function getBaseUrl(req) {
   if (forwardedHost && !forwardedProto) {
     return `${req.secure ? 'https' : 'http'}://${forwardedHost}`;
   }
-  // If client connects by IP (mobile/emulator), use that IP instead of localhost
   const clientHost = req.headers['host'];
   if (clientHost && !clientHost.includes('localhost')) {
     const proto = req.secure ? 'https' : 'http';
@@ -50,4 +51,29 @@ function formatWaitTime(totalSeconds) {
   return `${mins} minute${mins !== 1 ? 's' : ''} ${secs} second${secs !== 1 ? 's' : ''}`;
 }
 
-module.exports = { sanitizeString, getPagination, isValidEmail, serverNow, formatWaitTime, getBaseUrl };
+function extractFilenameFromUrl(url) {
+  if (!url || typeof url !== 'string') return null;
+  const parts = url.split('/');
+  const filename = parts[parts.length - 1];
+  if (!filename || filename.includes('/') || filename.includes('\\')) return null;
+  return filename;
+}
+
+function deleteUploadFiles(urls) {
+  if (!urls) return;
+  const urlArray = Array.isArray(urls) ? urls : [urls];
+  for (const url of urlArray) {
+    const filename = extractFilenameFromUrl(url);
+    if (!filename) continue;
+    const filePath = path.join(uploadsDir, filename);
+    try {
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+      }
+    } catch (err) {
+      console.error('Failed to delete upload file:', filePath, err.message);
+    }
+  }
+}
+
+module.exports = { sanitizeString, getPagination, isValidEmail, serverNow, formatWaitTime, getBaseUrl, deleteUploadFiles };

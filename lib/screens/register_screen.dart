@@ -14,6 +14,8 @@ import '../lang/translations.dart';
 import 'login_screen.dart';
 import 'map_picker_screen.dart';
 import '../utils/error_mapper.dart';
+import '../services/auth_service.dart';
+import '../services/location_service.dart';
 
 enum PasswordStrength { weak, medium, strong }
 
@@ -32,6 +34,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
   final _passwordCtrl = TextEditingController();
   final _confirmCtrl = TextEditingController();
 
+  // Store owner fields
   final _storeNameCtrl = TextEditingController();
   final _storeCityCtrl = TextEditingController();
   final _storeVillageCtrl = TextEditingController();
@@ -224,7 +227,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
     setState(() => _geocoding = true);
     try {
       final lang = localeNotifier.value.languageCode;
-      final geo = await ApiService.reverseGeocode(lat, lng, lang);
+      final geo = await LocationService.reverseGeocode(lat, lng, lang);
       if (geo != null && mounted) {
         setState(() {
           _selectedCityId = geo['canonical_id']?.toString();
@@ -252,7 +255,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
     setState(() => _geocoding = true);
     try {
       final lang = localeNotifier.value.languageCode;
-      final results = await ApiService.geocodeSearch(query, lang);
+      final results = await LocationService.geocodeSearch(query, lang);
       if (mounted) {
         setState(() {
           _geocodeResults = results;
@@ -479,7 +482,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
     setState(() => _isLoading = true);
     try {
-      await ApiService.register(
+      await AuthService.register(
         fullName: _nameCtrl.text.trim(),
         email: _emailCtrl.text.trim(),
         phone: _phoneCtrl.text.trim(),
@@ -535,7 +538,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
     Future<void> resendCode() async {
       try {
-        await ApiService.resendVerification(email).timeout(
+        await AuthService.resendVerification(email).timeout(
           const Duration(seconds: 10),
           onTimeout: () => throw TimeoutException(t('request_timeout')),
         );
@@ -567,7 +570,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
       }
       verifying = true;
       try {
-        await ApiService.verifyEmail(
+        await AuthService.verifyEmail(
           email: email,
           code: otpCtrl.text.trim(),
         ).timeout(

@@ -1,4 +1,4 @@
-//cached_image.dart
+// lib/widgets/cached_image.dart
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 
@@ -9,80 +9,69 @@ class CachedAppImage extends StatelessWidget {
   final BoxFit fit;
   final int? memCacheWidth;
   final BorderRadius? borderRadius;
+  final Widget? placeholder;
+  final Widget? errorWidget;
 
   const CachedAppImage({
     super.key,
-    required this.imageUrl,
+    this.imageUrl,
     this.width,
     this.height,
     this.fit = BoxFit.cover,
     this.memCacheWidth,
     this.borderRadius,
+    this.placeholder,
+    this.errorWidget,
   });
 
   @override
   Widget build(BuildContext context) {
-    if (imageUrl == null || imageUrl!.isEmpty) {
-      return _Placeholder(
-        width: width,
-        height: height,
-        borderRadius: borderRadius,
-      );
+    final theme = Theme.of(context);
+
+    // Handle local file paths (offline pending images)
+    if (imageUrl != null &&
+        (imageUrl!.startsWith('file:') || imageUrl!.startsWith('/'))) {
+      // Try to show a local file icon since we can't easily display local files in web/desktop
+      // without additional dependencies
+      return _buildPlaceholder(context, Icons.image);
     }
 
-    final img = CachedNetworkImage(
+    // Handle empty/null URL
+    if (imageUrl == null || imageUrl!.isEmpty) {
+      return _buildPlaceholder(context, Icons.image_not_supported);
+    }
+
+    final image = CachedNetworkImage(
       imageUrl: imageUrl!,
       width: width,
       height: height,
       fit: fit,
       memCacheWidth: memCacheWidth,
-      placeholder: (context, url) => _Placeholder(
-        width: width,
-        height: height,
-        borderRadius: borderRadius,
-        isLoading: true,
-      ),
-      errorWidget: (context, url, error) => _Placeholder(
-        width: width,
-        height: height,
-        borderRadius: borderRadius,
-      ),
+      placeholder: (context, url) =>
+          placeholder ?? _buildPlaceholder(context, Icons.image),
+      errorWidget: (context, url, error) =>
+          errorWidget ?? _buildPlaceholder(context, Icons.broken_image),
     );
 
     if (borderRadius != null) {
-      return ClipRRect(borderRadius: borderRadius!, child: img);
+      return ClipRRect(borderRadius: borderRadius!, child: image);
     }
-    return img;
+    return image;
   }
-}
 
-class _Placeholder extends StatelessWidget {
-  final double? width;
-  final double? height;
-  final BorderRadius? borderRadius;
-  final bool isLoading;
-
-  const _Placeholder({
-    this.width,
-    this.height,
-    this.borderRadius,
-    this.isLoading = false,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final widget = Container(
+  Widget _buildPlaceholder(BuildContext context, IconData icon) {
+    final theme = Theme.of(context);
+    return Container(
       width: width,
       height: height,
-      color: Colors.grey.shade200,
-      child: isLoading
-          ? const Center(child: CircularProgressIndicator(strokeWidth: 2))
-          : Icon(Icons.image_not_supported, color: Colors.grey.shade400),
+      color: theme.colorScheme.surfaceContainerHighest,
+      child: Icon(
+        icon,
+        color: theme.colorScheme.onSurfaceVariant.withOpacity(0.4),
+        size: (width != null && height != null)
+            ? (width! < height! ? width! : height!) * 0.3
+            : 32,
+      ),
     );
-
-    if (borderRadius != null) {
-      return ClipRRect(borderRadius: borderRadius!, child: widget);
-    }
-    return widget;
   }
 }

@@ -4,18 +4,21 @@ const router = express.Router();
 
 const { pool } = require('../config/database');
 const { upload } = require('../config/upload');
-const { authenticateToken, optionalAuth, requireRealUser } = require('../middleware/auth');
+const { authenticateToken, optionalAuth, requireRealUser, attachStoreContext, requireStoreOwner, requireStoreAccess, requireInventoryAccess } = require('../middleware/auth');
 const { sanitizeString, getPagination, getBaseUrl } = require('../middleware/helpers');
 
-// MY STORE — MUST come BEFORE /api/stores/:id so "my-store" isn't captured as :id
-router.get('/my-store', requireRealUser, async (req, res) => {
+// ============================================================
+// MY STORE (Owner + Accepted Worker)
+// ============================================================
+
+router.get('/my-store', authenticateToken, requireRealUser, attachStoreContext, requireStoreAccess, async (req, res) => {
   try {
     const result = await pool.query(`
       SELECT s.*, c.display_names as city_display_names
       FROM stores s
       LEFT JOIN canonical_cities c ON s.city_id = c.canonical_id
-      WHERE s.owner_id=$1
-    `, [req.user.userId]);
+      WHERE s.id=$1
+    `, [req.storeContext.store_id]);
     if (result.rows.length === 0) return res.status(404).json({ error: 'No store found' });
 
     const store = result.rows[0];
@@ -32,68 +35,9 @@ router.get('/my-store', requireRealUser, async (req, res) => {
   }
 });
 
-router.get('/stores', async (req, res) => {
+router.put('/my-store', authenticateToken, requireRealUser, attachStoreContext, requireStoreOwner, upload.single('image'), async (req, res) => {
   try {
-    const { page, limit, offset } = getPagination(req, 20, 100);
-    const countResult = await pool.query('SELECT COUNT(*) as total FROM stores');
-    const total = parseInt(countResult.rows[0].total);
-
-    const result = await pool.query(`
-      SELECT s.*, c.display_names as city_display_names
-      FROM stores s
-      LEFT JOIN canonical_cities c ON s.city_id = c.canonical_id
-      ORDER BY s.id DESC
-      LIMIT $1 OFFSET $2
-    `, [limit, offset]);
-
-    res.json({
-      data: result.rows,
-      pagination: { page, limit, total, total_pages: Math.ceil(total / limit) }
-    });
-  } catch (err) {
-    console.error('Stores list error:', err);
-    res.status(500).json({ error: 'Failed to load stores' });
-  }
-});
-
-// SPONSORED STORES — MUST come BEFORE /stores/:id so "sponsored" isn't captured as :id
-router.get('/stores/sponsored', async (req, res) => {
-  try {
-    const result = await pool.query(`
-      SELECT s.*, c.display_names as city_display_names
-      FROM stores s
-      LEFT JOIN canonical_cities c ON s.city_id = c.canonical_id
-      WHERE s.is_sponsored = TRUE
-      AND (s.sponsorship_expires_at IS NULL OR s.sponsorship_expires_at > NOW())
-      ORDER BY s.sponsorship_tier DESC, s.rating DESC
-      LIMIT 10
-    `);
-    res.json(result.rows);
-  } catch (err) {
-    console.error('Sponsored stores error:', err);
-    res.status(500).json({ error: 'Failed to load sponsored stores' });
-  }
-});
-
-router.get('/stores/:id', async (req, res) => {
-  try {
-    const result = await pool.query(`
-      SELECT s.*, c.display_names as city_display_names
-      FROM stores s
-      LEFT JOIN canonical_cities c ON s.city_id = c.canonical_id
-      WHERE s.id=$1
-    `, [req.params.id]);
-    if (result.rows.length === 0) return res.status(404).json({ error: 'Store not found' });
-    res.json(result.rows[0]);
-  } catch (err) {
-    console.error('Get store error:', err);
-    res.status(500).json({ error: 'Failed to load store' });
-  }
-});
-
-router.put('/my-store', requireRealUser, upload.single('image'), async (req, res) => {
-  try {
-    const storeResult = await pool.query('SELECT * FROM stores WHERE owner_id=$1', [req.user.userId]);
+    const storeResult = await pool.query('SELECT * FROM stores WHERE id=$1', [req.storeContext.store_id]);
     if (storeResult.rows.length === 0) return res.status(404).json({ error: 'No store found' });
 
     const existing = storeResult.rows[0];
@@ -136,7 +80,315 @@ router.put('/my-store', requireRealUser, upload.single('image'), async (req, res
   }
 });
 
-// ADMIN: Set store as sponsored
+// ============================================================
+// WORKER INVITATIONS — MUST come BEFORE /stores/:id
+// ============================================================
+
+router.get('/stores/my-invitations', authenticateToken, requireRealUser, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT ss.id, ss.store_id, ss.can_manage_inventory, ss.status, ss.invited_at, ss.responded_at,
+              s.name AS store_name, s.city AS store_city, s.image_url AS store_image,
+              inviter.full_name AS invited_by_name
+       FROM store_staff ss
+       JOIN stores s ON s.id = ss.store_id
+       LEFT JOIN users inviter ON inviter.id = ss.invited_by
+       WHERE ss.user_id = $1 AND ss.status = 'pending'
+       ORDER BY ss.invited_at DESC`,
+      [req.user.userId]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Fetch invitations error:', err);
+    res.status(500).json({ error: 'Failed to load invitations' });
+  }
+});
+
+router.post('/stores/my-invitations/:id/accept', authenticateToken, requireRealUser, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const invitationId = parseInt(req.params.id);
+    if (isNaN(invitationId)) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'Invalid invitation ID' });
+    }
+
+    const checkResult = await client.query(
+      'SELECT id, store_id, can_manage_inventory FROM store_staff WHERE id = $1 AND user_id = $2 AND status = $3',
+      [invitationId, req.user.userId, 'pending']
+    );
+    if (checkResult.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Invitation not found or already responded to.' });
+    }
+
+    const invitation = checkResult.rows[0];
+
+    await client.query(
+      "UPDATE store_staff SET status = 'rejected', responded_at = NOW() WHERE user_id = $1 AND id != $2 AND status = 'pending'",
+      [req.user.userId, invitationId]
+    );
+
+    await client.query(
+      "UPDATE store_staff SET status = 'accepted', responded_at = NOW() WHERE id = $1",
+      [invitationId]
+    );
+
+    await client.query('COMMIT');
+
+    res.json({
+      message: 'Invitation accepted successfully.',
+      store: {
+        store_id: invitation.store_id,
+        role: 'worker',
+        can_manage_inventory: invitation.can_manage_inventory
+      }
+    });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Accept invitation error:', err);
+    res.status(500).json({ error: 'Failed to accept invitation.' });
+  } finally {
+    client.release();
+  }
+});
+
+router.post('/stores/my-invitations/:id/reject', authenticateToken, requireRealUser, async (req, res) => {
+  try {
+    const invitationId = parseInt(req.params.id);
+    if (isNaN(invitationId)) return res.status(400).json({ error: 'Invalid invitation ID' });
+
+    const checkResult = await pool.query(
+      'SELECT id FROM store_staff WHERE id = $1 AND user_id = $2 AND status = $3',
+      [invitationId, req.user.userId, 'pending']
+    );
+    if (checkResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Invitation not found or already responded to.' });
+    }
+
+    await pool.query(
+      "UPDATE store_staff SET status = 'rejected', responded_at = NOW() WHERE id = $1",
+      [invitationId]
+    );
+
+    res.json({ message: 'Invitation rejected.' });
+  } catch (err) {
+    console.error('Reject invitation error:', err);
+    res.status(500).json({ error: 'Failed to reject invitation.' });
+  }
+});
+
+// ============================================================
+// PUBLIC STORES — /stores/sponsored MUST come BEFORE /stores/:id
+// ============================================================
+
+router.get('/stores', async (req, res) => {
+  try {
+    const { page, limit, offset } = getPagination(req, 20, 100);
+    const countResult = await pool.query('SELECT COUNT(*) as total FROM stores');
+    const total = parseInt(countResult.rows[0].total);
+
+    const result = await pool.query(`
+      SELECT s.*, c.display_names as city_display_names
+      FROM stores s
+      LEFT JOIN canonical_cities c ON s.city_id = c.canonical_id
+      ORDER BY s.id DESC
+      LIMIT $1 OFFSET $2
+    `, [limit, offset]);
+
+    res.json({
+      data: result.rows,
+      pagination: { page, limit, total, total_pages: Math.ceil(total / limit) }
+    });
+  } catch (err) {
+    console.error('Stores list error:', err);
+    res.status(500).json({ error: 'Failed to load stores' });
+  }
+});
+
+router.get('/stores/sponsored', async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT s.*, c.display_names as city_display_names
+      FROM stores s
+      LEFT JOIN canonical_cities c ON s.city_id = c.canonical_id
+      WHERE s.is_sponsored = TRUE
+      AND (s.sponsorship_expires_at IS NULL OR s.sponsorship_expires_at > NOW())
+      ORDER BY s.sponsorship_tier DESC, s.rating DESC
+      LIMIT 10
+    `);
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Sponsored stores error:', err);
+    res.status(500).json({ error: 'Failed to load sponsored stores' });
+  }
+});
+
+router.get('/stores/:id', async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT s.*, c.display_names as city_display_names
+      FROM stores s
+      LEFT JOIN canonical_cities c ON s.city_id = c.canonical_id
+      WHERE s.id=$1
+    `, [req.params.id]);
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Store not found' });
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('Get store error:', err);
+    res.status(500).json({ error: 'Failed to load store' });
+  }
+});
+
+// ============================================================
+// STAFF MANAGEMENT (Owner Only)
+// ============================================================
+
+router.get('/my-store/staff', authenticateToken, requireRealUser, attachStoreContext, requireStoreOwner, async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT ss.id, ss.user_id, ss.can_manage_inventory, ss.status, ss.invited_at, ss.responded_at, u.full_name, u.email, u.phone
+      FROM store_staff ss
+      JOIN users u ON ss.user_id = u.id
+      WHERE ss.store_id = $1
+      ORDER BY ss.created_at DESC
+    `, [req.storeContext.store_id]);
+    res.json(result.rows);
+  } catch (err) {
+    console.error('List staff error:', err);
+    res.status(500).json({ error: 'Failed to load staff members' });
+  }
+});
+
+router.post('/my-store/staff', authenticateToken, requireRealUser, attachStoreContext, requireStoreOwner, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { email, can_manage_inventory } = req.body;
+    const normalizedEmail = (email || '').toLowerCase().trim();
+
+    if (!normalizedEmail) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'Email is required' });
+    }
+
+    const userResult = await client.query('SELECT id, email_verified, full_name FROM users WHERE email = $1', [normalizedEmail]);
+    if (userResult.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'No user found with this email. They must register first.' });
+    }
+    const targetUser = userResult.rows[0];
+    if (!targetUser.email_verified) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'This user has not verified their email yet.' });
+    }
+
+    const ownerId = parseInt(req.user.userId, 10);
+    if (targetUser.id === ownerId) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'You cannot add yourself as staff.' });
+    }
+
+    const existingInThisStore = await client.query(
+      'SELECT id, status FROM store_staff WHERE store_id = $1 AND user_id = $2',
+      [req.storeContext.store_id, targetUser.id]
+    );
+    if (existingInThisStore.rows.length > 0) {
+      const existing = existingInThisStore.rows[0];
+      if (existing.status === 'accepted') {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ error: 'This user is already a staff member.' });
+      }
+      if (existing.status === 'pending') {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ error: 'This user already has a pending invitation.' });
+      }
+      await client.query(
+        'UPDATE store_staff SET status = $1, can_manage_inventory = $2, invited_by = $3, invited_at = NOW(), responded_at = NULL WHERE id = $4',
+        ['pending', can_manage_inventory === true, ownerId, existing.id]
+      );
+    } else {
+      const alreadyOtherStore = await client.query(
+        'SELECT id FROM store_staff WHERE user_id = $1 AND status = $2',
+        [targetUser.id, 'accepted']
+      );
+      if (alreadyOtherStore.rows.length > 0) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ error: 'This user is already assigned to another store.' });
+      }
+
+      await client.query(
+        'INSERT INTO store_staff (store_id, user_id, can_manage_inventory, status, invited_by, invited_at) VALUES ($1, $2, $3, $4, $5, NOW()) RETURNING *',
+        [req.storeContext.store_id, targetUser.id, can_manage_inventory === true, 'pending', ownerId]
+      );
+    }
+
+    await client.query('COMMIT');
+    res.status(201).json({
+      message: 'Invitation sent successfully.',
+      user: { id: targetUser.id, full_name: targetUser.full_name, email: normalizedEmail }
+    });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    if (err.code === '23505') {
+      return res.status(400).json({ error: 'This user is already a staff member.' });
+    }
+    console.error('Add staff error:', err);
+    res.status(500).json({ error: 'Failed to add staff member' });
+  } finally {
+    client.release();
+  }
+});
+
+router.delete('/my-store/staff/:id', authenticateToken, requireRealUser, attachStoreContext, requireStoreOwner, async (req, res) => {
+  try {
+    const staffId = parseInt(req.params.id);
+    if (isNaN(staffId)) {
+      return res.status(400).json({ error: 'Invalid staff ID' });
+    }
+
+    const result = await pool.query(
+      'DELETE FROM store_staff WHERE id = $1 AND store_id = $2 RETURNING *',
+      [staffId, req.storeContext.store_id]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Staff member not found' });
+    }
+    res.json({ message: 'Staff member removed' });
+  } catch (err) {
+    console.error('Remove staff error:', err);
+    res.status(500).json({ error: 'Failed to remove staff member' });
+  }
+});
+
+router.put('/my-store/staff/:id/permissions', authenticateToken, requireRealUser, attachStoreContext, requireStoreOwner, async (req, res) => {
+  try {
+    const staffId = parseInt(req.params.id);
+    if (isNaN(staffId)) {
+      return res.status(400).json({ error: 'Invalid staff ID' });
+    }
+    const { can_manage_inventory } = req.body;
+
+    const result = await pool.query(
+      'UPDATE store_staff SET can_manage_inventory = $1 WHERE id = $2 AND store_id = $3 RETURNING *',
+      [can_manage_inventory === true, staffId, req.storeContext.store_id]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Staff member not found' });
+    }
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('Update permissions error:', err);
+    res.status(500).json({ error: 'Failed to update permissions' });
+  }
+});
+
+// ============================================================
+// ADMIN
+// ============================================================
+
 router.put('/admin/stores/:id/sponsor', authenticateToken, async (req, res) => {
   try {
     const userResult = await pool.query('SELECT role FROM users WHERE id = $1', [req.user.userId]);

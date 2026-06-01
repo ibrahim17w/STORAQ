@@ -40,7 +40,7 @@ class ReceiptHelper {
     required double total,
     required String currency,
     String? footer,
-    String? storeLogoBase64, // future: embed in PDF
+    String? storeLogoBase64,
   }) {
     final buf = StringBuffer();
     final dateFmt = DateFormat('yyyy-MM-dd HH:mm');
@@ -72,7 +72,8 @@ class ReceiptHelper {
       // Product name (truncated if too long)
       buf.writeln(_truncate(name, _thermalWidth));
       // Qty x unit price = total
-      final right = '\${qty}x\${_fmt(unit, currency)} = \${_fmt(lineTotal, currency)}';
+      final right =
+          '${qty}x${_fmt(unit, currency)} = ${_fmt(lineTotal, currency)}';
       buf.writeln(_twoCol('', right, _thermalWidth));
     }
 
@@ -81,7 +82,9 @@ class ReceiptHelper {
     // Totals
     buf.writeln(_twoCol('Subtotal', _fmt(subtotal, currency), _thermalWidth));
     if (discount > 0) {
-      buf.writeln(_twoCol('Discount', '-\${_fmt(discount, currency)}', _thermalWidth));
+      buf.writeln(
+        _twoCol('Discount', '-${_fmt(discount, currency)}', _thermalWidth),
+      );
     }
     if (tax > 0) {
       buf.writeln(_twoCol('Tax', _fmt(tax, currency), _thermalWidth));
@@ -96,7 +99,7 @@ class ReceiptHelper {
       buf.writeln(_center(footer, _thermalWidth));
     }
 
-    // Barcode line (future: actual barcode bytes)
+    // Barcode line
     buf.writeln();
     buf.writeln(_center('*' * 20, _thermalWidth));
     buf.writeln(_center(receiptNumber, _thermalWidth));
@@ -135,12 +138,12 @@ class ReceiptHelper {
       final lineTotal = (item['total_price'] as num).toDouble();
       return '''
         <tr>
-          <td style="padding:6px 0;border-bottom:1px dashed #ccc;\$align">
-            <div style="font-weight:600;">\$name</div>
-            <div style="font-size:12px;color:#666;">\$qty x \${_fmt(unit, currency)}</div>
+          <td style="padding:6px 0;border-bottom:1px dashed #ccc;$align">
+            <div style="font-weight:600;">$name</div>
+            <div style="font-size:12px;color:#666;">$qty x ${_fmt(unit, currency)}</div>
           </td>
-          <td style="padding:6px 0;border-bottom:1px dashed #ccc;text-align:\$totalAlign;font-weight:600;">
-            \${_fmt(lineTotal, currency)}
+          <td style="padding:6px 0;border-bottom:1px dashed #ccc;text-align:$totalAlign;font-weight:600;">
+            ${_fmt(lineTotal, currency)}
           </td>
         </tr>
       ''';
@@ -148,11 +151,11 @@ class ReceiptHelper {
 
     return '''
 <!DOCTYPE html>
-<html lang="en" dir="\$dir">
+<html lang="en" dir="$dir">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Receipt \$receiptNumber</title>
+<title>Receipt $receiptNumber</title>
 <style>
   @media print {
     body { margin:0; }
@@ -177,29 +180,29 @@ class ReceiptHelper {
 <body>
 <div class="receipt">
   <div class="header">
-    \${storeLogoUrl != null ? '<img src="\$storeLogoUrl" alt="logo" />' : ''}
-    <div class="store-name">\${_escapeHtml(storeName)}</div>
-    <div class="store-info">\${_escapeHtml(storeAddress)}\${storePhone != null ? '<br/>\$storePhone' : ''}</div>
+    ${storeLogoUrl != null ? '<img src="$storeLogoUrl" alt="logo" />' : ''}
+    <div class="store-name">${_escapeHtml(storeName)}</div>
+    <div class="store-info">${_escapeHtml(storeAddress)}${storePhone != null ? '<br/>$storePhone' : ''}</div>
   </div>
   <div class="meta">
-    <div class="meta-row"><span>Receipt #</span><span>\$receiptNumber</span></div>
-    <div class="meta-row"><span>Date</span><span>\${dateFmt.format(date)}</span></div>
-    <div class="meta-row"><span>Cashier</span><span>\${_escapeHtml(cashierName)}</span></div>
+    <div class="meta-row"><span>Receipt #</span><span>$receiptNumber</span></div>
+    <div class="meta-row"><span>Date</span><span>${dateFmt.format(date)}</span></div>
+    <div class="meta-row"><span>Cashier</span><span>${_escapeHtml(cashierName)}</span></div>
   </div>
   <table>
-    <tbody>\$rows</tbody>
+    <tbody>$rows</tbody>
   </table>
   <div class="totals">
-    <div class="total-row"><span>Subtotal</span><span>\${_fmt(subtotal, currency)}</span></div>
-    \${discount > 0 ? '<div class="total-row"><span>Discount</span><span>-\${_fmt(discount, currency)}</span></div>' : ''}
-    \${tax > 0 ? '<div class="total-row"><span>Tax</span><span>\${_fmt(tax, currency)}</span></div>' : ''}
-    <div class="grand-total"><span>TOTAL</span><span>\${_fmt(total, currency)}</span></div>
+    <div class="total-row"><span>Subtotal</span><span>${_fmt(subtotal, currency)}</span></div>
+    ${discount > 0 ? '<div class="total-row"><span>Discount</span><span>-${_fmt(discount, currency)}</span></div>' : ''}
+    ${tax > 0 ? '<div class="total-row"><span>Tax</span><span>${_fmt(tax, currency)}</span></div>' : ''}
+    <div class="grand-total"><span>TOTAL</span><span>${_fmt(total, currency)}</span></div>
   </div>
-  \${footer != null && footer.isNotEmpty ? '<div class="footer">\${_escapeHtml(footer)}</div>' : ''}
+  ${footer != null && footer.isNotEmpty ? '<div class="footer">${_escapeHtml(footer)}</div>' : ''}
   <div class="barcode-area">
     <svg style="max-width:200px;" viewBox="0 0 200 60">
       <rect x="0" y="0" width="200" height="60" fill="white"/>
-      <text x="100" y="35" text-anchor="middle" font-family="monospace" font-size="14">\$receiptNumber</text>
+      <text x="100" y="35" text-anchor="middle" font-family="monospace" font-size="14">$receiptNumber</text>
     </svg>
   </div>
 </div>
@@ -217,8 +220,15 @@ class ReceiptHelper {
   }
 
   static String _twoCol(String left, String right, int width) {
-    final avail = width - right.length;
-    if (left.length > avail) {
+    final rightLen = right.length;
+    final avail = width - rightLen;
+    if (avail <= 1) {
+      if (rightLen > width) {
+        return right.substring(0, width);
+      }
+      return ' ' * (width - rightLen) + right;
+    }
+    if (left.length >= avail) {
       return left.substring(0, avail - 1) + ' ' + right;
     }
     return left + ' ' * (avail - left.length) + right;
@@ -232,7 +242,7 @@ class ReceiptHelper {
   }
 
   static String _fmt(double value, String currency) {
-    return '\$currency \${value.toStringAsFixed(2)}';
+    return '$currency ${value.toStringAsFixed(2)}';
   }
 
   static String _escapeHtml(String text) {

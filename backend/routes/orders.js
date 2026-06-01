@@ -3,7 +3,7 @@ const express = require('express');
 const router = express.Router();
 
 const { pool } = require('../config/database');
-const { authenticateToken, optionalAuth, requireRealUser } = require('../middleware/auth');
+const { authenticateToken, optionalAuth, requireRealUser, attachStoreContext, requireStoreAccess, requireStoreOwner } = require('../middleware/auth');
 const { schemas, validate, validateQuery } = require('../middleware/validation');
 const { sanitizeString, getPagination, getBaseUrl } = require('../middleware/helpers');
 
@@ -20,14 +20,16 @@ function generateReceiptNumber() {
 }
 
 // ==================== CHECKOUT & ORDERS ====================
-router.post('/checkout', requireRealUser, validate(schemas.checkout), async (req, res) => {
+router.post('/checkout', authenticateToken, requireRealUser, attachStoreContext, requireStoreAccess, validate(schemas.checkout), async (req, res) => {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
 
+    const storeId = req.storeContext.store_id;
+
     const storeResult = await client.query(
-      'SELECT id, name, city, country, phone, image_url FROM stores WHERE owner_id=$1',
-      [req.user.userId]
+      'SELECT id, name, city, country, phone, image_url FROM stores WHERE id=$1',
+      [storeId]
     );
     if (storeResult.rows.length === 0) throw new Error('No store found');
     const store = storeResult.rows[0];
@@ -64,18 +66,25 @@ router.post('/checkout', requireRealUser, validate(schemas.checkout), async (req
       });
     }
 
+    // Get cashier name for receipt (survives account deletion)
+    const cashierResult = await client.query(
+      'SELECT full_name FROM users WHERE id = $1',
+      [req.user.userId]
+    );
+    const cashierName = cashierResult.rows[0]?.full_name || 'Unknown';
+
     const orderResult = await client.query(
-      `INSERT INTO orders (store_id, receipt_number, total, status, payment_method, notes)
-       VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
-      [store.id, receiptNumber, total, 'completed', payment_method || 'cash', notes || null]
+      `INSERT INTO orders (store_id, cashier_id, cashier_name, customer_name, receipt_number, total, status, payment_method, notes)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+      [store.id, req.user.userId, cashierName, req.validatedBody.customer_name || null, receiptNumber, total, 'completed', payment_method || 'cash', notes || null]
     );
     const order = orderResult.rows[0];
 
     for (const item of validatedItems) {
       await client.query(
-        `INSERT INTO order_items (order_id, product_id, quantity, unit_price, total_price)
-         VALUES ($1,$2,$3,$4,$5)`,
-        [order.id, item.product_id, item.quantity, item.unit_price, item.total_price]
+        `INSERT INTO order_items (order_id, product_id, product_name, quantity, unit_price, total_price)
+         VALUES ($1,$2,$3,$4,$5,$6)`,
+        [order.id, item.product_id, item.product_name, item.quantity, item.unit_price, item.total_price]
       );
       await client.query(
         'UPDATE products SET quantity = quantity - $1 WHERE id = $2',
@@ -106,11 +115,9 @@ router.post('/checkout', requireRealUser, validate(schemas.checkout), async (req
   }
 });
 
-router.get('/orders', requireRealUser, async (req, res) => {
+router.get('/orders', authenticateToken, requireRealUser, attachStoreContext, requireStoreAccess, async (req, res) => {
   try {
-    const storeResult = await pool.query('SELECT id FROM stores WHERE owner_id=$1', [req.user.userId]);
-    if (storeResult.rows.length === 0) return res.status(404).json({ error: 'No store' });
-    const storeId = storeResult.rows[0].id;
+    const storeId = req.storeContext.store_id;
 
     const { page, limit, offset } = getPagination(req, 20, 100);
     const countResult = await pool.query('SELECT COUNT(*) as total FROM orders WHERE store_id = $1', [storeId]);
@@ -135,11 +142,9 @@ router.get('/orders', requireRealUser, async (req, res) => {
   }
 });
 
-router.get('/orders/:id', requireRealUser, async (req, res) => {
+router.get('/orders/:id', authenticateToken, requireRealUser, attachStoreContext, requireStoreAccess, async (req, res) => {
   try {
-    const storeResult = await pool.query('SELECT id FROM stores WHERE owner_id=$1', [req.user.userId]);
-    if (storeResult.rows.length === 0) return res.status(404).json({ error: 'No store' });
-    const storeId = storeResult.rows[0].id;
+    const storeId = req.storeContext.store_id;
 
     const orderResult = await pool.query(
       'SELECT * FROM orders WHERE id=$1 AND store_id=$2',
@@ -161,17 +166,12 @@ router.get('/orders/:id', requireRealUser, async (req, res) => {
   }
 });
 
-router.post('/orders', requireRealUser, validate(schemas.createOrder), async (req, res) => {
+router.post('/orders', authenticateToken, requireRealUser, attachStoreContext, requireStoreAccess, validate(schemas.createOrder), async (req, res) => {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
 
-    const storeResult = await client.query('SELECT id FROM stores WHERE owner_id=$1', [req.user.userId]);
-    if (storeResult.rows.length === 0) {
-      await client.query('ROLLBACK');
-      return res.status(403).json({ error: 'You do not own a store' });
-    }
-    const storeId = storeResult.rows[0].id;
+    const storeId = req.storeContext.store_id;
 
     const items = req.validatedBody.items;
     if (!Array.isArray(items) || items.length === 0) {
@@ -179,7 +179,6 @@ router.post('/orders', requireRealUser, validate(schemas.createOrder), async (re
       return res.status(400).json({ error: 'Items required' });
     }
 
-    // Validate stock and calculate totals
     let subtotal = 0;
     for (const item of items) {
       const productId = item.product_id;
@@ -211,22 +210,35 @@ router.post('/orders', requireRealUser, validate(schemas.createOrder), async (re
 
     const discount = parseFloat(req.validatedBody.discount) || 0;
     const tax = parseFloat(req.validatedBody.tax) || 0;
-    const total = Math.max(0, subtotal - discount + tax);
+    
+    const frontendSubtotal = parseFloat(req.validatedBody.subtotal);
+    const frontendTotal = parseFloat(req.validatedBody.total);
+    const finalSubtotal = (!isNaN(frontendSubtotal) && frontendSubtotal > 0) ? frontendSubtotal : subtotal;
+    const computedTotal = Math.max(0, finalSubtotal - discount + tax);
+    const finalTotal = (!isNaN(frontendTotal) && frontendTotal > 0) ? frontendTotal : computedTotal;
     const receiptNumber = generateReceiptNumber();
 
+    // Get cashier name for receipt (survives account deletion)
+    const cashierResult = await client.query(
+      'SELECT full_name FROM users WHERE id = $1',
+      [req.user.userId]
+    );
+    const cashierName = cashierResult.rows[0]?.full_name || 'Unknown';
+
     const orderResult = await client.query(
-      `INSERT INTO orders (store_id, cashier_id, customer_name, customer_phone, subtotal, discount, tax, total, status, payment_method, receipt_number, notes)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+      `INSERT INTO orders (store_id, cashier_id, cashier_name, customer_name, customer_phone, subtotal, discount, tax, total, status, payment_method, receipt_number, notes)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
        RETURNING *`,
       [
         storeId,
         req.user.userId,
+        cashierName,
         req.validatedBody.customer_name || null,
         req.validatedBody.customer_phone || null,
-        subtotal,
+        finalSubtotal,
         discount,
         tax,
-        total,
+        finalTotal,
         'completed',
         req.validatedBody.payment_method || 'cash',
         receiptNumber,
@@ -235,7 +247,6 @@ router.post('/orders', requireRealUser, validate(schemas.createOrder), async (re
     );
     const orderId = orderResult.rows[0].id;
 
-    // Insert items and reduce stock
     for (const item of items) {
       const productId = item.product_id;
       const qty = parseInt(item.quantity);
@@ -245,7 +256,7 @@ router.post('/orders', requireRealUser, validate(schemas.createOrder), async (re
       await client.query(
         `INSERT INTO order_items (order_id, product_id, product_name, quantity, unit_price, total_price, barcode)
          VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-        [orderId, productId, item.product_name, qty, unitPrice, lineTotal, item.barcode || null]
+        [orderId, productId, item.product_name || null, qty, unitPrice, lineTotal, item.barcode || null]
       );
 
       await client.query(
@@ -266,11 +277,9 @@ router.post('/orders', requireRealUser, validate(schemas.createOrder), async (re
 });
 
 // ==================== LOW STOCK ====================
-router.get('/my-store/low-stock', requireRealUser, async (req, res) => {
+router.get('/my-store/low-stock', authenticateToken, requireRealUser, attachStoreContext, requireStoreAccess, async (req, res) => {
   try {
-    const storeResult = await pool.query('SELECT id FROM stores WHERE owner_id=$1', [req.user.userId]);
-    if (storeResult.rows.length === 0) return res.status(404).json({ error: 'No store' });
-    const storeId = storeResult.rows[0].id;
+    const storeId = req.storeContext.store_id;
 
     const result = await pool.query(
       `SELECT id, name, quantity, barcode, price FROM products
@@ -285,11 +294,9 @@ router.get('/my-store/low-stock', requireRealUser, async (req, res) => {
 });
 
 // ==================== RECEIPT SETTINGS ====================
-router.get('/my-store/receipt-settings', requireRealUser, async (req, res) => {
+router.get('/my-store/receipt-settings', authenticateToken, requireRealUser, attachStoreContext, requireStoreAccess, async (req, res) => {
   try {
-    const storeResult = await pool.query('SELECT id FROM stores WHERE owner_id=$1', [req.user.userId]);
-    if (storeResult.rows.length === 0) return res.status(404).json({ error: 'No store' });
-    const storeId = storeResult.rows[0].id;
+    const storeId = req.storeContext.store_id;
 
     const result = await pool.query(
       'SELECT * FROM receipt_settings WHERE store_id = $1',
@@ -297,7 +304,6 @@ router.get('/my-store/receipt-settings', requireRealUser, async (req, res) => {
     );
     if (result.rows.length > 0) return res.json(result.rows[0]);
 
-    // Return defaults
     res.json({
       store_id: storeId,
       footer_message: 'Thank you for your purchase!',
@@ -310,11 +316,9 @@ router.get('/my-store/receipt-settings', requireRealUser, async (req, res) => {
   }
 });
 
-router.put('/my-store/receipt-settings', requireRealUser, validate(schemas.receiptSettings), async (req, res) => {
+router.put('/my-store/receipt-settings', authenticateToken, requireRealUser, attachStoreContext, requireStoreAccess, validate(schemas.receiptSettings), async (req, res) => {
   try {
-    const storeResult = await pool.query('SELECT id FROM stores WHERE owner_id=$1', [req.user.userId]);
-    if (storeResult.rows.length === 0) return res.status(404).json({ error: 'No store' });
-    const storeId = storeResult.rows[0].id;
+    const storeId = req.storeContext.store_id;
 
     const existing = await pool.query('SELECT id FROM receipt_settings WHERE store_id = $1', [storeId]);
     const hasRecord = existing.rows.length > 0;

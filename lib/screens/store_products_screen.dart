@@ -3,7 +3,10 @@ import 'package:flutter/material.dart';
 import 'package:latlong2/latlong.dart';
 import '../services/api_service.dart';
 import '../lang/translations.dart';
-import 'store_map_screen.dart'; // CHANGED from 'map_screen.dart'
+import 'store_map_screen.dart';
+import '../services/store_service.dart';
+import '../services/location_service.dart';
+import '../services/product_service.dart';
 
 class StoreProductsScreen extends StatefulWidget {
   final int storeId;
@@ -30,13 +33,13 @@ class _StoreProductsScreenState extends State<StoreProductsScreen> {
 
   Future<void> loadData() async {
     try {
-      final storeData = await ApiService.fetchStore(widget.storeId);
+      final storeData = await StoreService.fetchStore(widget.storeId);
       _storeData = storeData;
       if (_displayName.isEmpty) {
         _displayName = storeData['name'] ?? t('store');
       }
 
-      final data = await ApiService.fetchProducts(widget.storeId);
+      final data = await ProductService.fetchProducts(widget.storeId);
       setState(() {
         products = data;
         isLoading = false;

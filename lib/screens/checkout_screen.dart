@@ -1,4 +1,6 @@
 // lib/screens/checkout_screen.dart
+// FIXED: Offline product loading now correctly filters by storeId in catch block
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
@@ -9,6 +11,10 @@ import '../screens/receipt_screen.dart';
 import '../lang/translations.dart';
 import '../widgets/gradient_button.dart';
 import '../services/offline_service.dart';
+import '../services/auth_service.dart';
+import '../services/store_service.dart';
+import '../services/product_service.dart';
+import '../services/order_service.dart';
 
 class CartItem {
   final int? productId;
@@ -50,15 +56,41 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
 
   bool _isLoading = false;
   bool _isSearching = false;
-  List<dynamic> _allProducts = []; // full store inventory
+  List<dynamic> _allProducts = [];
   List<dynamic> _searchResults = [];
   String? _cashierName;
   int? _storeId;
 
-  double get _subtotal => _cart.fold(0, (sum, item) => sum + item.total);
-  double get _discount => double.tryParse(_discountCtrl.text) ?? 0;
-  double get _tax => double.tryParse(_taxCtrl.text) ?? 0;
-  double get _total => _subtotal - _discount + _tax;
+  // NEW: Percentage toggle states
+  bool _discountIsPercent = false;
+  bool _taxIsPercent = false;
+
+  /// Raw subtotal = sum of all item totals
+  double get _rawSubtotal => _cart.fold(0, (sum, item) => sum + item.total);
+
+  /// Discount value (calculated from percentage or flat)
+  double get _discountValue {
+    final raw = double.tryParse(_discountCtrl.text) ?? 0;
+    if (_discountIsPercent && raw > 0) {
+      return (_rawSubtotal * raw / 100).clamp(0, _rawSubtotal);
+    }
+    return raw.clamp(0, _rawSubtotal);
+  }
+
+  /// Tax value (calculated from percentage or flat)
+  double get _taxValue {
+    final raw = double.tryParse(_taxCtrl.text) ?? 0;
+    if (_taxIsPercent && raw > 0) {
+      return (_rawSubtotal * raw / 100);
+    }
+    return raw;
+  }
+
+  /// Subtotal shown on receipt = raw subtotal (before discount/tax)
+  double get _subtotal => _rawSubtotal;
+
+  /// Total = subtotal - discount + tax
+  double get _total => _rawSubtotal - _discountValue + _taxValue;
 
   @override
   void initState() {
@@ -70,25 +102,46 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
   Future<void> _loadStoreProducts() async {
     setState(() => _isLoading = true);
     try {
-      // Try to get my store first
-      final store = await ApiService.getMyStore();
+      final store = await StoreService.getMyStore();
       _storeId = store['id'];
-      final products = await ApiService.fetchProducts(
+      final products = await ProductService.fetchProducts(
         _storeId!,
         useCache: true,
       );
       if (mounted) {
         setState(() {
           _allProducts = products;
-          _searchResults = products; // show all by default
+          _searchResults = products;
           _isLoading = false;
         });
       }
-      // Also cache to local DB for offline
       await OfflineService.cacheProducts(_storeId!, products);
     } catch (e) {
-      // Fallback: load from local cache if offline
+      // Server is down — use cached data only
       try {
+        // Try store context first (fastest, no network)
+        _storeId ??= await ApiService.getMyStoreId();
+
+        // Try cached store if context is empty
+        if (_storeId == null) {
+          final cachedStore = await OfflineService.getCachedStore();
+          _storeId = cachedStore?['id'] as int?;
+        }
+
+        if (_storeId != null) {
+          // Get merged products (cached + pending creates/updates/deletes)
+          final merged = await OfflineService.getMergedProducts(_storeId!);
+          if (mounted) {
+            setState(() {
+              _allProducts = merged;
+              _searchResults = merged;
+              _isLoading = false;
+            });
+            return;
+          }
+        }
+
+        // Last resort: any cached products at all
         final cached = await OfflineService.getCachedProducts();
         if (mounted && cached.isNotEmpty) {
           setState(() {
@@ -96,6 +149,8 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
             _searchResults = cached;
             _isLoading = false;
           });
+        } else {
+          if (mounted) setState(() => _isLoading = false);
         }
       } catch (_) {
         if (mounted) setState(() => _isLoading = false);
@@ -105,9 +160,17 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
 
   Future<void> _loadCashier() async {
     try {
-      final user = await ApiService.getCurrentUser();
+      final user = await AuthService.getCurrentUser();
       if (mounted) setState(() => _cashierName = user['full_name']?.toString());
-    } catch (_) {}
+    } catch (_) {
+      // Offline fallback: try cached user
+      try {
+        final cachedUser = await OfflineService.getCachedUser();
+        if (mounted && cachedUser != null) {
+          setState(() => _cashierName = cachedUser['full_name']?.toString());
+        }
+      } catch (_) {}
+    }
   }
 
   Future<void> _scanBarcode() async {
@@ -121,10 +184,27 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
   Future<void> _addByBarcode(String code) async {
     setState(() => _isLoading = true);
     try {
-      final product = await ApiService.findProductByBarcode(code);
+      final product = await ProductService.findProductByBarcode(code);
       _addProductToCart(product);
     } catch (e) {
-      _showError('${t('product_not_found')}: $code');
+      // Offline fallback: search in cached products by barcode
+      try {
+        final storeIdFallback = _storeId ?? await ApiService.getMyStoreId();
+        final cached = storeIdFallback != null
+            ? await OfflineService.getCachedProducts(storeId: storeIdFallback)
+            : await OfflineService.getCachedProducts();
+        final match = cached.firstWhere(
+          (p) => p['barcode']?.toString() == code,
+          orElse: () => <String, dynamic>{},
+        );
+        if (match.isNotEmpty) {
+          _addProductToCart(match);
+        } else {
+          _showError('${t('product_not_found') ?? 'Product not found'}: $code');
+        }
+      } catch (_) {
+        _showError('${t('product_not_found') ?? 'Product not found'}: $code');
+      }
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -137,20 +217,23 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     if (existing >= 0) {
       final item = _cart[existing];
       if (item.quantity + 1 > stock) {
-        _showError(t('insufficient_stock'));
+        _showError(t('insufficient_stock') ?? 'Insufficient stock');
         return;
       }
       setState(() => item.quantity++);
     } else {
       if (stock < 1) {
-        _showError(t('out_of_stock'));
+        _showError(t('out_of_stock') ?? 'Out of stock');
         return;
       }
       setState(
         () => _cart.add(
           CartItem(
             productId: product['id'],
-            name: product['name']?.toString() ?? t('unknown_product'),
+            name:
+                product['name']?.toString() ??
+                t('unknown_product') ??
+                'Unknown',
             unitPrice: _parsePrice(product['price']),
             barcode: product['barcode']?.toString(),
             stock: stock,
@@ -167,7 +250,6 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       setState(() => _searchResults = _allProducts);
       return;
     }
-    // Local filter first (works offline)
     final localFiltered = _allProducts.where((p) {
       final name = p['name']?.toString().toLowerCase() ?? '';
       final barcode = p['barcode']?.toString().toLowerCase() ?? '';
@@ -179,19 +261,16 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       _isSearching = false;
     });
 
-    // Also try server search for broader results
     if (query.length >= 2) {
       setState(() => _isSearching = true);
       try {
-        final results = await ApiService.searchStoreProducts(
+        final results = await ProductService.searchStoreProducts(
           query: query,
           storeId: _storeId,
         );
-        // Merge server results with local, preferring local data for stock accuracy
         final merged = _mergeWithLocal(results);
         if (mounted) setState(() => _searchResults = merged);
       } catch (_) {
-        // Keep local results on error
       } finally {
         if (mounted) setState(() => _isSearching = false);
       }
@@ -203,7 +282,6 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     return serverResults.map((s) {
       final local = localMap[s['id']];
       if (local != null) {
-        // Use local stock if more recent
         return local['updated_at'] != null &&
                 s['updated_at'] != null &&
                 DateTime.parse(
@@ -224,7 +302,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       return;
     }
     if (item.stock != null && newQty > item.stock!) {
-      _showError(t('insufficient_stock'));
+      _showError(t('insufficient_stock') ?? 'Insufficient stock');
       return;
     }
     setState(() => item.quantity = newQty);
@@ -236,23 +314,42 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
 
   Future<void> _completeCheckout() async {
     if (_cart.isEmpty) {
-      _showError(t('cart_empty'));
+      _showError(t('cart_empty') ?? 'Cart is empty');
       return;
     }
 
     final confirm = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
-        title: Text(t('confirm_checkout')),
-        content: Text('${t('total_amount')}: ${_fmt(_total)}'),
+        title: Text(t('confirm_checkout') ?? 'Confirm Checkout'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('${t('subtotal') ?? 'Subtotal'}: ${_fmt(_subtotal)}'),
+            if (_discountValue > 0)
+              Text(
+                '${t('discount') ?? 'Discount'}: -${_fmt(_discountValue)}${_discountIsPercent ? ' (${_discountCtrl.text}%)' : ''}',
+              ),
+            if (_taxValue > 0)
+              Text(
+                '${t('tax') ?? 'Tax'}: +${_fmt(_taxValue)}${_taxIsPercent ? ' (${_taxCtrl.text}%)' : ''}',
+              ),
+            const Divider(),
+            Text(
+              '${t('total_amount') ?? 'Total'}: ${_fmt(_total)}',
+              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+            ),
+          ],
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: Text(t('cancel')),
+            child: Text(t('cancel') ?? 'Cancel'),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
-            child: Text(t('confirm')),
+            child: Text(t('confirm') ?? 'Confirm'),
           ),
         ],
       ),
@@ -261,19 +358,24 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
 
     setState(() => _isLoading = true);
 
-    // Update local stock first (works offline)
-    for (final item in _cart) {
-      if (item.productId != null) {
-        await OfflineService.updateLocalStock(item.productId!, -item.quantity);
-      }
-    }
-
-    // Check connectivity
+    // Check connectivity FIRST before touching stock
     final connectivity = await Connectivity().checkConnectivity();
-    final isOnline = connectivity != ConnectivityResult.none;
+    final isOnline = !connectivity.contains(ConnectivityResult.none);
+
+    String _offlineReceipt() =>
+        'OFF-${DateTime.now().millisecondsSinceEpoch.toString().substring(5)}';
 
     if (!isOnline) {
-      // Queue order for later sync
+      // OFFLINE: adjust cached stock only (no sync record to avoid double-deduction)
+      for (final item in _cart) {
+        if (item.productId != null) {
+          await OfflineService.adjustCachedStockOnly(
+            item.productId!,
+            -item.quantity,
+          );
+        }
+      }
+
       final orderData = {
         'items': _cart
             .map(
@@ -294,11 +396,14 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
         'customer_phone': _customerPhoneCtrl.text.trim().isEmpty
             ? null
             : _customerPhoneCtrl.text.trim(),
-        'discount': _discount,
-        'tax': _tax,
+        'subtotal': _subtotal,
+        'discount': _discountValue,
+        'tax': _taxValue,
         'total': _total,
         'notes': _notesCtrl.text.trim().isEmpty ? null : _notesCtrl.text.trim(),
         'payment_method': 'cash',
+        'receipt_number': _offlineReceipt(),
+        'cashier_name': _cashierName ?? t('unknown') ?? 'Unknown',
         'created_at': DateTime.now().toIso8601String(),
       };
 
@@ -308,13 +413,16 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              '${t('order_saved_offline')} — ${t('sync_when_online')}',
+              t('receipt_saved_offline') ?? 'Receipt saved offline',
             ),
-            backgroundColor: Colors.orange,
-            duration: const Duration(seconds: 3),
+            backgroundColor: Colors.green.shade700,
+            duration: const Duration(seconds: 2),
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
           ),
         );
-        // Show local receipt instead of server receipt
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(
@@ -326,7 +434,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       return;
     }
 
-    // Online: send to server
+    // ONLINE: send to server
     try {
       final items = _cart
           .map(
@@ -337,11 +445,12 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
               'unit_price': c.unitPrice,
               'total_price': c.total,
               'barcode': c.barcode,
+              'currency': c.currency,
             },
           )
           .toList();
 
-      final order = await ApiService.createOrder(
+      final order = await OrderService.createOrder(
         items: items,
         customerName: _customerNameCtrl.text.trim().isEmpty
             ? null
@@ -349,8 +458,10 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
         customerPhone: _customerPhoneCtrl.text.trim().isEmpty
             ? null
             : _customerPhoneCtrl.text.trim(),
-        discount: _discount,
-        tax: _tax,
+        subtotal: _subtotal,
+        discount: _discountValue,
+        tax: _taxValue,
+        total: _total,
         notes: _notesCtrl.text.trim().isEmpty ? null : _notesCtrl.text.trim(),
       );
 
@@ -363,7 +474,16 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
         );
       }
     } catch (e) {
-      // Server failed — queue locally and show offline receipt
+      // Server failed mid-checkout: queue offline
+      for (final item in _cart) {
+        if (item.productId != null) {
+          await OfflineService.adjustCachedStockOnly(
+            item.productId!,
+            -item.quantity,
+          );
+        }
+      }
+
       final orderData = {
         'items': _cart
             .map(
@@ -384,27 +504,30 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
         'customer_phone': _customerPhoneCtrl.text.trim().isEmpty
             ? null
             : _customerPhoneCtrl.text.trim(),
-        'discount': _discount,
-        'tax': _tax,
+        'subtotal': _subtotal,
+        'discount': _discountValue,
+        'tax': _taxValue,
         'total': _total,
         'notes': _notesCtrl.text.trim().isEmpty ? null : _notesCtrl.text.trim(),
         'payment_method': 'cash',
+        'receipt_number': _offlineReceipt(),
+        'cashier_name': _cashierName ?? t('unknown') ?? 'Unknown',
         'created_at': DateTime.now().toIso8601String(),
       };
       await OfflineService.queueOrder(orderData);
 
       if (mounted) {
-        final errMsg = e.toString();
-        final shortErr = errMsg.length > 60
-            ? '${errMsg.substring(0, 60)}...'
-            : errMsg;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              '${t('server_error') ?? 'Server error'} — ${t('order_saved_offline') ?? 'Saved locally'}',
+              t('receipt_saved_offline') ?? 'Receipt saved offline',
             ),
-            backgroundColor: Colors.orange,
-            duration: const Duration(seconds: 3),
+            backgroundColor: Colors.green.shade700,
+            duration: const Duration(seconds: 2),
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
           ),
         );
         Navigator.pushReplacement(
@@ -437,6 +560,67 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     return 0;
   }
 
+  // NEW: Build discount/tax input with percentage toggle
+  Widget _buildDiscountTaxInput({
+    required TextEditingController controller,
+    required String label,
+    required IconData icon,
+    required bool isPercent,
+    required ValueChanged<bool> onToggle,
+  }) {
+    final theme = Theme.of(context);
+    return Row(
+      children: [
+        Expanded(
+          child: TextField(
+            controller: controller,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            decoration: InputDecoration(
+              labelText: label,
+              prefixIcon: Icon(icon),
+              suffixIcon: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Percent toggle
+                  TextButton(
+                    onPressed: () => setState(() => onToggle(!isPercent)),
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                      minimumSize: const Size(0, 0),
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    child: Text(
+                      isPercent ? '%' : _currency,
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        color: isPercent
+                            ? theme.colorScheme.primary
+                            : theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 12,
+                vertical: 8,
+              ),
+            ),
+            onChanged: (_) => setState(() {}),
+          ),
+        ),
+      ],
+    );
+  }
+
+  String get _currency {
+    if (_cart.isEmpty) return 'SYP';
+    return _cart.first.currency;
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -444,7 +628,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(t('checkout')),
+        title: Text(t('checkout') ?? 'Checkout'),
         actions: [
           if (_cart.isNotEmpty)
             Padding(
@@ -466,14 +650,15 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                 padding: const EdgeInsets.all(16),
                 child: Column(
                   children: [
-                    // Search + Scan
                     Row(
                       children: [
                         Expanded(
                           child: TextField(
                             controller: _searchCtrl,
                             decoration: InputDecoration(
-                              hintText: t('search_products_or_scan'),
+                              hintText:
+                                  t('search_products_or_scan') ??
+                                  'Search or scan',
                               prefixIcon: const Icon(Icons.search),
                               suffixIcon: _searchCtrl.text.isNotEmpty
                                   ? IconButton(
@@ -500,7 +685,6 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                       ],
                     ),
                     const SizedBox(height: 12),
-                    // Product list (all inventory or filtered search)
                     if (_isSearching)
                       const LinearProgressIndicator()
                     else if (_searchResults.isNotEmpty)
@@ -536,7 +720,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                                       : null,
                                 ),
                                 subtitle: Text(
-                                  '${_fmt(_parsePrice(p['price']), currency: p['currency']?.toString() ?? 'SYP')} • $stock ${t('in_stock')}',
+                                  '${_fmt(_parsePrice(p['price']), currency: p['currency']?.toString() ?? 'SYP')} • $stock ${t('in_stock') ?? 'in stock'}',
                                   style: isOutOfStock
                                       ? TextStyle(
                                           color: theme.colorScheme.error,
@@ -561,7 +745,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                         ),
                       )
                     else if (_searchCtrl.text.isNotEmpty)
-                      Center(child: Text(t('no_results_found')))
+                      Center(child: Text(t('no_results_found') ?? 'No results'))
                     else if (_allProducts.isEmpty && !_isLoading)
                       Expanded(
                         child: Center(
@@ -575,7 +759,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                               ),
                               const SizedBox(height: 8),
                               Text(
-                                t('no_products_in_store'),
+                                t('no_products_in_store') ?? 'No products',
                                 style: TextStyle(
                                   color: theme.colorScheme.outline,
                                 ),
@@ -603,7 +787,6 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                 ),
                 child: Column(
                   children: [
-                    // Cart header
                     Container(
                       padding: const EdgeInsets.all(16),
                       color: theme.colorScheme.surface,
@@ -615,20 +798,19 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                           ),
                           const SizedBox(width: 8),
                           Text(
-                            t('cart'),
+                            t('cart') ?? 'Cart',
                             style: theme.textTheme.titleMedium?.copyWith(
                               fontWeight: FontWeight.bold,
                             ),
                           ),
                           const Spacer(),
                           Text(
-                            '${_cart.length} ${t('items')}',
+                            '${_cart.length} ${t('items') ?? 'items'}',
                             style: theme.textTheme.bodySmall,
                           ),
                         ],
                       ),
                     ),
-                    // Cart items
                     Expanded(
                       child: _cart.isEmpty
                           ? Center(
@@ -642,7 +824,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                                   ),
                                   const SizedBox(height: 8),
                                   Text(
-                                    t('cart_empty'),
+                                    t('cart_empty') ?? 'Cart is empty',
                                     style: TextStyle(
                                       color: theme.colorScheme.outline,
                                     ),
@@ -729,63 +911,60 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                               },
                             ),
                     ),
-                    // Totals
                     Container(
                       padding: const EdgeInsets.all(16),
                       color: theme.colorScheme.surface,
                       child: Column(
                         children: [
-                          _totalRow(t('subtotal'), _subtotal),
+                          _totalRow(t('subtotal') ?? 'Subtotal', _subtotal),
                           const SizedBox(height: 8),
-                          Row(
-                            children: [
-                              Expanded(
-                                child: TextField(
-                                  controller: _discountCtrl,
-                                  keyboardType: TextInputType.number,
-                                  decoration: InputDecoration(
-                                    labelText: t('discount'),
-                                    prefixIcon: const Icon(Icons.local_offer),
-                                    border: OutlineInputBorder(
-                                      borderRadius: BorderRadius.circular(8),
-                                    ),
-                                    contentPadding: const EdgeInsets.symmetric(
-                                      horizontal: 12,
-                                      vertical: 8,
-                                    ),
-                                  ),
-                                  onChanged: (_) => setState(() {}),
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: TextField(
-                                  controller: _taxCtrl,
-                                  keyboardType: TextInputType.number,
-                                  decoration: InputDecoration(
-                                    labelText: t('tax'),
-                                    prefixIcon: const Icon(
-                                      Icons.account_balance,
-                                    ),
-                                    border: OutlineInputBorder(
-                                      borderRadius: BorderRadius.circular(8),
-                                    ),
-                                    contentPadding: const EdgeInsets.symmetric(
-                                      horizontal: 12,
-                                      vertical: 8,
-                                    ),
-                                  ),
-                                  onChanged: (_) => setState(() {}),
-                                ),
-                              ),
-                            ],
+                          // NEW: Discount with percentage toggle
+                          _buildDiscountTaxInput(
+                            controller: _discountCtrl,
+                            label: t('discount') ?? 'Discount',
+                            icon: Icons.local_offer,
+                            isPercent: _discountIsPercent,
+                            onToggle: (v) => _discountIsPercent = v,
                           ),
+                          const SizedBox(height: 4),
+                          if (_discountValue > 0)
+                            Align(
+                              alignment: Alignment.centerRight,
+                              child: Text(
+                                '- ${_fmt(_discountValue)}',
+                                style: TextStyle(
+                                  color: Colors.green.shade700,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                          const SizedBox(height: 8),
+                          // NEW: Tax with percentage toggle
+                          _buildDiscountTaxInput(
+                            controller: _taxCtrl,
+                            label: t('tax') ?? 'Tax',
+                            icon: Icons.account_balance,
+                            isPercent: _taxIsPercent,
+                            onToggle: (v) => _taxIsPercent = v,
+                          ),
+                          const SizedBox(height: 4),
+                          if (_taxValue > 0)
+                            Align(
+                              alignment: Alignment.centerRight,
+                              child: Text(
+                                '+ ${_fmt(_taxValue)}',
+                                style: TextStyle(
+                                  color: theme.colorScheme.primary,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
                           const Divider(height: 24),
                           Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
                               Text(
-                                t('total'),
+                                t('total') ?? 'Total',
                                 style: theme.textTheme.titleLarge?.copyWith(
                                   fontWeight: FontWeight.bold,
                                 ),
@@ -808,7 +987,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                                   : _completeCheckout,
                               isLoading: _isLoading,
                               child: Text(
-                                t('complete_checkout'),
+                                t('complete_checkout') ?? 'Complete Checkout',
                                 style: const TextStyle(fontSize: 16),
                               ),
                             ),

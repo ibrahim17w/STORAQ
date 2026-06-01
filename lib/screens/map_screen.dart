@@ -8,6 +8,7 @@ import '../services/api_service.dart';
 import '../lang/translations.dart';
 import '../widgets/cached_tile_provider.dart';
 import 'store_products_screen.dart';
+import '../services/store_service.dart';
 
 class MapScreen extends StatefulWidget {
   final LatLng? target;
@@ -104,7 +105,7 @@ class _MapScreenState extends State<MapScreen> {
 
   Future<void> _loadStores() async {
     try {
-      final stores = await ApiService.fetchStores();
+      final stores = await StoreService.fetchStores();
       if (mounted) {
         setState(() {
           _stores = stores

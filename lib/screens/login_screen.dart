@@ -12,6 +12,7 @@ import 'register_screen.dart';
 import '../widgets/app_notification.dart';
 import '../utils/error_mapper.dart';
 import 'main_nav_screen.dart';
+import '../services/auth_service.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -32,13 +33,13 @@ class _LoginScreenState extends State<LoginScreen> {
 
     setState(() => _isLoading = true);
     try {
-      await ApiService.login(
+      await AuthService.login(
         email: _emailCtrl.text.trim(),
         password: _passwordCtrl.text,
       );
 
       try {
-        await ApiService.updatePreferredLanguage(
+        await AuthService.updatePreferredLanguage(
           localeNotifier.value.languageCode,
         );
       } catch (_) {}
@@ -335,7 +336,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
     Future<void> resendCode() async {
       try {
-        await ApiService.resendVerification(email);
+        await AuthService.resendVerification(email);
         startCooldown();
         showAppNotification(
           context,
@@ -358,7 +359,7 @@ class _LoginScreenState extends State<LoginScreen> {
       }
       verifying = true;
       try {
-        await ApiService.verifyEmail(email: email, code: otpCtrl.text.trim());
+        await AuthService.verifyEmail(email: email, code: otpCtrl.text.trim());
         if (mounted) {
           Navigator.pop(context);
           showAppNotification(

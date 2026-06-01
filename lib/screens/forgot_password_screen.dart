@@ -9,6 +9,7 @@ import '../providers/locale_provider.dart';
 import '../lang/translations.dart';
 import '../utils/error_mapper.dart';
 import 'login_screen.dart';
+import '../services/auth_service.dart';
 
 class ForgotPasswordScreen extends StatefulWidget {
   const ForgotPasswordScreen({super.key});
@@ -148,7 +149,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
 
     setState(() => _isLoading = true);
     try {
-      await ApiService.forgotPassword(_emailCtrl.text.trim()).timeout(
+      await AuthService.forgotPassword(_emailCtrl.text.trim()).timeout(
         const Duration(seconds: 10),
         onTimeout: () => throw TimeoutException(t('request_timeout')),
       );
@@ -190,7 +191,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
 
     setState(() => _isLoading = true);
     try {
-      await ApiService.resetPassword(
+      await AuthService.resetPassword(
         email: _emailCtrl.text.trim(),
         code: _codeCtrl.text.trim(),
         newPassword: _newPassCtrl.text,

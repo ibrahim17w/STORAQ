@@ -18,7 +18,6 @@ void main() async {
     sqfliteFfiInit();
     databaseFactory = databaseFactoryFfi;
   }
-
   runApp(const MyApp());
 }
 
@@ -139,27 +138,33 @@ class AuthGate extends StatefulWidget {
 }
 
 class _AuthGateState extends State<AuthGate> {
-  bool? isLoggedIn;
+  bool? _isAuthenticated;
 
   @override
   void initState() {
     super.initState();
-    checkAuth();
+    _checkAuth();
   }
 
-  Future<void> checkAuth() async {
-    final loggedIn = await ApiService.isLoggedIn();
-    if (mounted) setState(() => isLoggedIn = loggedIn);
+  Future<void> _checkAuth() async {
+    final hasToken = await ApiService.isLoggedIn();
+    final isGuest = await ApiService.isGuest();
+
+    // Stay logged in if we have a token OR if we are in guest mode.
+    // This check is LOCAL ONLY — it never contacts the server.
+    if (mounted) {
+      setState(() => _isAuthenticated = hasToken || isGuest);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    if (isLoggedIn == null) {
+    if (_isAuthenticated == null) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
-    if (isLoggedIn == false) {
-      return const LoginScreen();
+    if (_isAuthenticated == true) {
+      return const PopScope(canPop: false, child: MainNavScreen());
     }
-    return const PopScope(canPop: false, child: MainNavScreen());
+    return const LoginScreen();
   }
 }

@@ -6,6 +6,7 @@ import '../lang/translations.dart';
 import '../widgets/cached_image.dart';
 import 'store_map_screen.dart'; // Already correct
 import 'store_products_screen.dart';
+import '../services/store_service.dart';
 
 /// Product Detail Screen — shows a single product with its shop info and map link.
 class ProductDetailScreen extends StatefulWidget {
@@ -27,13 +28,14 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
   }
 
   Future<void> _loadStore() async {
-    final shopId = widget.product['shop_id'];
+    // Backend uses 'store_id', frontend sometimes passes 'shop_id'
+    final shopId = widget.product['shop_id'] ?? widget.product['store_id'];
     if (shopId == null) {
       setState(() => _loadingStore = false);
       return;
     }
     try {
-      final store = await ApiService.fetchStore(shopId);
+      final store = await StoreService.fetchStore(shopId);
       if (mounted) {
         setState(() {
           _storeData = store;
@@ -54,13 +56,13 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
       ).showSnackBar(const SnackBar(content: Text('Location not available')));
       return;
     }
-    // CHANGED: pass store data properly
+    final storeId = widget.product['shop_id'] ?? widget.product['store_id'];
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (_) => StoreLocationView(
           target: LatLng(lat, lng),
-          targetStoreId: widget.product['shop_id'],
+          targetStoreId: storeId,
           targetName: _storeData?['name'],
           targetImageUrl: _storeData?['image_url']?.toString(),
           stores: _storeData != null ? [_storeData!] : [],
@@ -70,13 +72,15 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
   }
 
   void _openStorePage() {
-    final shopId = widget.product['shop_id'];
+    final shopId = widget.product['shop_id'] ?? widget.product['store_id'];
     if (shopId == null) return;
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (_) => StoreProductsScreen(
-          storeId: shopId,
+          storeId: shopId is int
+              ? shopId
+              : int.tryParse(shopId.toString()) ?? 0,
           storeName: _storeData?['name'],
         ),
       ),

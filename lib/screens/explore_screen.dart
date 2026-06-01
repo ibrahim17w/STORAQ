@@ -15,8 +15,11 @@ import 'package:latlong2/latlong.dart';
 import 'package:flutter/services.dart';
 import '../utils/location_helper.dart';
 import 'package:geolocator/geolocator.dart';
+import '../services/marketplace_service.dart';
+import '../services/location_service.dart';
+import '../services/image_search_service.dart';
+import '../services/store_service.dart';
 
-// ── Translation helper (same as home_screen) ──
 String _tr(String key, {required String fallback}) {
   final result = t(key);
   if (result == null || result == key) return fallback;
@@ -168,8 +171,8 @@ class _ExploreScreenState extends State<ExploreScreen> {
     _initLocation();
     try {
       final results = await Future.wait([
-        ApiService.fetchStores(),
-        ApiService.fetchMarketplaceFeed(),
+        StoreService.fetchStores(),
+        MarketplaceService.fetchMarketplaceFeed(),
       ]);
       if (mounted) {
         setState(() {
@@ -243,7 +246,7 @@ class _ExploreScreenState extends State<ExploreScreen> {
     _viewFlushTimer = Timer(const Duration(seconds: 2), _flushViews);
     final productId = product['id'];
     if (productId != null) {
-      ApiService.trackProductView(productId).catchError((_) {});
+      MarketplaceService.trackProductView(productId).catchError((_) {});
     }
   }
 
@@ -317,7 +320,7 @@ class _ExploreScreenState extends State<ExploreScreen> {
 
     if (q.length >= 2) {
       _addToHistory(query);
-      ApiService.trackSearch(query).catchError((_) {});
+      MarketplaceService.trackSearch(query).catchError((_) {});
     }
   }
 
@@ -398,7 +401,10 @@ class _ExploreScreenState extends State<ExploreScreen> {
     bool isServerError = false;
 
     try {
-      result = await ApiService.searchByImage(bytes, mimeType: mimeType);
+      result = await ImageSearchService.searchByImage(
+        bytes,
+        mimeType: mimeType,
+      );
     } on ApiTimeoutException catch (e) {
       errorMsg =
           t('image_search_timeout') ??

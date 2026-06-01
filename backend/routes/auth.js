@@ -202,6 +202,34 @@ router.post('/login', loginIpLimiter, async (req, res) => {
 
     await clearLoginAttempts(email);
 
+    // ==================== NEW: ATTACH STORE CONTEXT ====================
+    let storeContext = null;
+    if (user.role === 'store_owner') {
+      const storeResult = await pool.query(
+        'SELECT id FROM stores WHERE owner_id = $1 LIMIT 1',
+        [user.id]
+      );
+      if (storeResult.rows.length > 0) {
+        storeContext = {
+          store_id: storeResult.rows[0].id,
+          role: 'owner',
+          can_manage_inventory: true
+        };
+      }
+    } else {
+      const staffResult = await pool.query(
+        'SELECT store_id, can_manage_inventory FROM store_staff WHERE user_id = $1 AND status = $2 LIMIT 1',
+        [user.id, 'accepted']
+      );
+      if (staffResult.rows.length > 0) {
+        storeContext = {
+          store_id: staffResult.rows[0].store_id,
+          role: 'worker',
+          can_manage_inventory: staffResult.rows[0].can_manage_inventory
+        };
+      }
+    }
+
     const token = jwt.sign(
       { userId: user.id, email: user.email, role: user.role },
       process.env.JWT_SECRET,
@@ -213,7 +241,8 @@ router.post('/login', loginIpLimiter, async (req, res) => {
         id: user.id,
         full_name: user.full_name,
         email: user.email,
-        role: user.role
+        role: user.role,
+        store: storeContext
       }
     });
   } catch (err) {

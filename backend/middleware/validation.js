@@ -1,4 +1,4 @@
-//middleware/validation.js
+// middleware/validation.js
 const { z } = require('zod');
 
 // ==================== ZOD HELPERS ====================
@@ -158,6 +158,18 @@ const schemas = {
     code: z.string().min(1).max(50),
   }),
   migrateLocations: z.object({}),
+
+  // ==================== NEW: STAFF / INVITATION ====================
+  inviteStaff: z.object({
+    email: z.string().email(),
+    can_manage_inventory: z.boolean().optional(),
+  }),
+  respondInvitation: z.object({
+    action: z.enum(['accept', 'reject']),
+  }),
+  updateStaffPermissions: z.object({
+    can_manage_inventory: z.boolean(),
+  }),
 };
 
 function validate(schema) {
@@ -167,10 +179,8 @@ function validate(schema) {
       req.validatedBody = result;
       next();
     } catch (err) {
-      // Log the full error for debugging
       console.error('Validation error:', err);
 
-      // Check if it's a ZodError (handle both constructor name and instanceof)
       if (err && (err instanceof z.ZodError || err.constructor?.name === 'ZodError' || err.name === 'ZodError')) {
         const issues = err.issues || err.errors || [];
         return res.status(400).json({
@@ -181,7 +191,6 @@ function validate(schema) {
           })),
         });
       }
-      // If it's not a ZodError, pass it to the next error handler
       next(err);
     }
   };

@@ -15,6 +15,11 @@ import 'login_screen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:flutter/services.dart';
+import '../services/marketplace_service.dart';
+import '../services/location_service.dart';
+import '../services/categories_service.dart';
+import '../services/auth_service.dart';
+import '../services/store_service.dart';
 
 String _tr(String key, {required String fallback}) {
   final result = t(key);
@@ -669,7 +674,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _loadUserName() async {
     try {
-      final user = await ApiService.getCurrentUser();
+      final user = await AuthService.getCurrentUser();
       if (mounted && user != null)
         setState(() => _userName = user['full_name'] ?? '');
     } catch (_) {}
@@ -677,7 +682,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _loadProducts() async {
     try {
-      final products = await ApiService.fetchMarketplaceFeed();
+      final products = await MarketplaceService.fetchMarketplaceFeed();
       if (mounted) {
         setState(() {
           _products = products;
@@ -692,7 +697,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _loadStores() async {
     try {
-      final stores = await ApiService.fetchStores();
+      final stores = await StoreService.fetchStores();
       if (mounted) {
         setState(() {
           _stores = stores;
@@ -711,7 +716,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _loadTrending() async {
     try {
-      final trending = await ApiService.fetchTrendingProducts();
+      final trending = await MarketplaceService.fetchTrendingProducts();
       if (mounted)
         setState(() {
           _trendingProducts = trending.isNotEmpty ? trending : [];
@@ -724,7 +729,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _loadSponsored() async {
     try {
-      final sponsored = await ApiService.fetchSponsoredStores();
+      final sponsored = await MarketplaceService.fetchSponsoredStores();
       if (mounted)
         setState(() {
           _sponsoredStores = sponsored.isNotEmpty ? sponsored : [];
@@ -737,7 +742,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _loadRecommendations() async {
     try {
-      final recs = await ApiService.fetchRecommendations();
+      final recs = await MarketplaceService.fetchRecommendations();
       if (mounted) {
         setState(() {
           _apiRecommendations = recs;
@@ -812,8 +817,9 @@ class _HomeScreenState extends State<HomeScreen> {
     _viewFlushTimer?.cancel();
     _viewFlushTimer = Timer(const Duration(seconds: 2), _flushViews);
     final productId = product['id'];
-    if (productId != null)
-      ApiService.trackProductView(productId).catchError((_) {});
+    if (productId != null) {
+      MarketplaceService.trackProductView(productId).catchError((_) {});
+    }
   }
 
   static Future<void> _flushViews() async {
@@ -2727,7 +2733,7 @@ class _SearchBottomSheetState extends State<SearchBottomSheet> {
     // Track and save to history only for meaningful searches (2+ chars)
     if (q.length >= 2) {
       _addToHistory(query);
-      ApiService.trackSearch(query).catchError((_) {});
+      MarketplaceService.trackSearch(query).catchError((_) {});
     }
   }
 

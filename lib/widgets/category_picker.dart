@@ -1,8 +1,10 @@
 // lib/widgets/category_picker.dart
-// FIXED: Deduplicates categories, supports translations via t() function
+// FIXED: Offline category caching, deduplication, translations
 
 import 'package:flutter/material.dart';
-import '../services/api_service.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
+import '../services/categories_service.dart';
+import '../services/offline_service.dart';
 import '../lang/translations.dart';
 
 class CategoryPicker extends StatefulWidget {
@@ -24,6 +26,7 @@ class CategoryPicker extends StatefulWidget {
 class _CategoryPickerState extends State<CategoryPicker> {
   List<Map<String, dynamic>> _categories = [];
   bool _loading = true;
+  bool _isOffline = false;
 
   @override
   void initState() {
@@ -32,29 +35,55 @@ class _CategoryPickerState extends State<CategoryPicker> {
   }
 
   Future<void> _loadCategories() async {
+    setState(() => _loading = true);
+
     try {
-      final raw = await ApiService.fetchCategories();
-      // DEDUPLICATE: keep only first occurrence of each unique name
-      final seen = <String>{};
-      final deduped = <Map<String, dynamic>>[];
-      for (final cat in raw) {
-        if (cat is Map<String, dynamic>) {
-          final name = cat['name']?.toString() ?? '';
-          final key = name.toLowerCase().trim();
-          if (key.isNotEmpty && !seen.contains(key)) {
-            seen.add(key);
-            deduped.add(cat);
-          }
+      // Try to fetch from server (with offline fallback built into service)
+      final raw = await CategoriesService.fetchCategories();
+      _setCategories(raw);
+      setState(() => _isOffline = false);
+    } catch (e) {
+      // Final fallback: try cached directly
+      try {
+        final cached = await OfflineService.getCachedCategories();
+        if (cached.isNotEmpty) {
+          _setCategories(cached);
+          setState(() => _isOffline = true);
+        } else {
+          setState(() {
+            _categories = [];
+            _loading = false;
+            _isOffline = true;
+          });
         }
-      }
-      if (mounted) {
+      } catch (_) {
         setState(() {
-          _categories = deduped;
+          _categories = [];
           _loading = false;
+          _isOffline = true;
         });
       }
-    } catch (e) {
-      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  void _setCategories(List<dynamic> raw) {
+    // DEDUPLICATE: keep only first occurrence of each unique ID
+    final seen = <int>{};
+    final deduped = <Map<String, dynamic>>[];
+    for (final cat in raw) {
+      if (cat is Map<String, dynamic>) {
+        final id = cat['id'] as int? ?? 0;
+        if (id > 0 && !seen.contains(id)) {
+          seen.add(id);
+          deduped.add(cat);
+        }
+      }
+    }
+    if (mounted) {
+      setState(() {
+        _categories = deduped;
+        _loading = false;
+      });
     }
   }
 
@@ -105,59 +134,90 @@ class _CategoryPickerState extends State<CategoryPicker> {
     }
 
     if (_categories.isEmpty) {
-      return Text(
-        t('no_categories'),
-        style: TextStyle(color: theme.colorScheme.onSurfaceVariant),
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            t('no_categories') ?? 'No categories available',
+            style: TextStyle(color: theme.colorScheme.onSurfaceVariant),
+          ),
+          const SizedBox(height: 8),
+          if (_isOffline)
+            Text(
+              t('connect_to_load_categories') ??
+                  'Connect to the internet to load categories',
+              style: TextStyle(color: theme.colorScheme.error, fontSize: 12),
+            ),
+        ],
       );
     }
 
-    return Wrap(
-      spacing: 8,
-      runSpacing: 8,
-      children: _categories.map((cat) {
-        final id = cat['id'] as int? ?? 0;
-        final isSelected = widget.selectedIds.contains(id);
-        final displayName = _displayName(cat);
-        final iconName = cat['icon']?.toString() ?? 'category';
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (_isOffline)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Row(
+              children: [
+                Icon(Icons.wifi_off, size: 14, color: Colors.orange.shade700),
+                const SizedBox(width: 6),
+                Text(
+                  t('offline_categories') ?? 'Showing cached categories',
+                  style: TextStyle(color: Colors.orange.shade700, fontSize: 12),
+                ),
+              ],
+            ),
+          ),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: _categories.map((cat) {
+            final id = cat['id'] as int? ?? 0;
+            final isSelected = widget.selectedIds.contains(id);
+            final displayName = _displayName(cat);
+            final iconName = cat['icon']?.toString() ?? 'category';
 
-        return ChoiceChip(
-          label: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                _parseIcon(iconName),
-                size: 16,
+            return ChoiceChip(
+              label: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    _parseIcon(iconName),
+                    size: 16,
+                    color: isSelected
+                        ? theme.colorScheme.onPrimary
+                        : theme.colorScheme.primary,
+                  ),
+                  const SizedBox(width: 6),
+                  Text(displayName),
+                ],
+              ),
+              selected: isSelected,
+              onSelected: (selected) {
+                if (widget.multiSelect) {
+                  final updated = List<int>.from(widget.selectedIds);
+                  if (selected) {
+                    if (!updated.contains(id)) updated.add(id);
+                  } else {
+                    updated.remove(id);
+                  }
+                  widget.onChanged(updated);
+                } else {
+                  widget.onChanged(selected ? [id] : []);
+                }
+              },
+              selectedColor: theme.colorScheme.primary,
+              labelStyle: TextStyle(
                 color: isSelected
                     ? theme.colorScheme.onPrimary
-                    : theme.colorScheme.primary,
+                    : theme.colorScheme.onSurface,
+                fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
               ),
-              const SizedBox(width: 6),
-              Text(displayName),
-            ],
-          ),
-          selected: isSelected,
-          onSelected: (selected) {
-            if (widget.multiSelect) {
-              final updated = List<int>.from(widget.selectedIds);
-              if (selected) {
-                if (!updated.contains(id)) updated.add(id);
-              } else {
-                updated.remove(id);
-              }
-              widget.onChanged(updated);
-            } else {
-              widget.onChanged(selected ? [id] : []);
-            }
-          },
-          selectedColor: theme.colorScheme.primary,
-          labelStyle: TextStyle(
-            color: isSelected
-                ? theme.colorScheme.onPrimary
-                : theme.colorScheme.onSurface,
-            fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
-          ),
-        );
-      }).toList(),
+            );
+          }).toList(),
+        ),
+      ],
     );
   }
 
@@ -173,8 +233,7 @@ class _CategoryPickerState extends State<CategoryPicker> {
       'directions_car': Icons.directions_car,
       'menu_book': Icons.menu_book,
       'sports': Icons.sports,
-      'electronics':
-          Icons.devices, // Icons.electronics doesn't exist in Flutter
+      'electronics': Icons.devices,
       'local_grocery_store': Icons.local_grocery_store,
       'face': Icons.face,
       'child_care': Icons.child_care,

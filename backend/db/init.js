@@ -1,8 +1,189 @@
 //db/init.js
 const { pool } = require('../config/database');
 
+// ==================== MIGRATIONS ====================
+async function runMigrations() {
+  await pool.query(`
+    DO $$
+    BEGIN
+      -- ORDERS: patch all missing columns
+      IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'orders') THEN
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='cashier_id') THEN
+          ALTER TABLE orders ADD COLUMN cashier_id INTEGER REFERENCES users(id);
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='cashier_name') THEN
+          ALTER TABLE orders ADD COLUMN cashier_name VARCHAR(100);
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='customer_name') THEN
+          ALTER TABLE orders ADD COLUMN customer_name VARCHAR(100);
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='customer_phone') THEN
+          ALTER TABLE orders ADD COLUMN customer_phone VARCHAR(50);
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='receipt_number') THEN
+          ALTER TABLE orders ADD COLUMN receipt_number VARCHAR(50);
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='subtotal') THEN
+          ALTER TABLE orders ADD COLUMN subtotal DECIMAL(12,2) NOT NULL DEFAULT 0;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='discount') THEN
+          ALTER TABLE orders ADD COLUMN discount DECIMAL(12,2) NOT NULL DEFAULT 0;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='tax') THEN
+          ALTER TABLE orders ADD COLUMN tax DECIMAL(12,2) NOT NULL DEFAULT 0;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='total') THEN
+          ALTER TABLE orders ADD COLUMN total DECIMAL(12,2) NOT NULL DEFAULT 0;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='status') THEN
+          ALTER TABLE orders ADD COLUMN status VARCHAR(20) DEFAULT 'completed';
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='payment_method') THEN
+          ALTER TABLE orders ADD COLUMN payment_method VARCHAR(20) DEFAULT 'cash';
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='notes') THEN
+          ALTER TABLE orders ADD COLUMN notes TEXT;
+        END IF;
+      END IF;
+
+      -- ORDER_ITEMS: patch missing product_name
+      IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'order_items') THEN
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='order_items' AND column_name='product_name') THEN
+          ALTER TABLE order_items ADD COLUMN product_name VARCHAR(200);
+        END IF;
+      END IF;
+
+      -- STORES: patch all missing columns
+      IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'stores') THEN
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='stores' AND column_name='rating') THEN
+          ALTER TABLE stores ADD COLUMN rating DECIMAL(2,1) DEFAULT 5.0;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='stores' AND column_name='is_sponsored') THEN
+          ALTER TABLE stores ADD COLUMN is_sponsored BOOLEAN DEFAULT FALSE;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='stores' AND column_name='sponsorship_tier') THEN
+          ALTER TABLE stores ADD COLUMN sponsorship_tier INTEGER DEFAULT 1;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='stores' AND column_name='sponsorship_expires_at') THEN
+          ALTER TABLE stores ADD COLUMN sponsorship_expires_at TIMESTAMP;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='stores' AND column_name='city_id') THEN
+          ALTER TABLE stores ADD COLUMN city_id VARCHAR(100);
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='stores' AND column_name='country_code') THEN
+          ALTER TABLE stores ADD COLUMN country_code VARCHAR(2);
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='stores' AND column_name='lat') THEN
+          ALTER TABLE stores ADD COLUMN lat DOUBLE PRECISION;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='stores' AND column_name='lng') THEN
+          ALTER TABLE stores ADD COLUMN lng DOUBLE PRECISION;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='stores' AND column_name='image_url') THEN
+          ALTER TABLE stores ADD COLUMN image_url TEXT;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='stores' AND column_name='logo_url') THEN
+          ALTER TABLE stores ADD COLUMN logo_url TEXT;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='stores' AND column_name='description') THEN
+          ALTER TABLE stores ADD COLUMN description TEXT;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='stores' AND column_name='address') THEN
+          ALTER TABLE stores ADD COLUMN address TEXT;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='stores' AND column_name='phone') THEN
+          ALTER TABLE stores ADD COLUMN phone VARCHAR(50);
+        END IF;
+      END IF;
+
+      -- PRODUCTS: patch missing columns
+      IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'products') THEN
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='products' AND column_name='currency') THEN
+          ALTER TABLE products ADD COLUMN currency VARCHAR(10) DEFAULT 'SYP';
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='products' AND column_name='embedding') THEN
+          ALTER TABLE products ADD COLUMN embedding vector(512);
+        END IF;
+      END IF;
+    END $$;
+  `);
+  console.log('✅ Database migrations applied');
+}
+
+// ==================== PATCH FOREIGN KEY CONSTRAINTS ====================
+async function patchForeignKeyConstraints() {
+  try {
+    await pool.query(`
+      DO $$
+      BEGIN
+        -- order_items.product_id: SET NULL (preserve order history)
+        IF EXISTS (
+          SELECT 1 FROM information_schema.table_constraints
+          WHERE constraint_name = 'order_items_product_id_fkey'
+          AND table_name = 'order_items'
+        ) THEN
+          ALTER TABLE order_items DROP CONSTRAINT order_items_product_id_fkey;
+          ALTER TABLE order_items ALTER COLUMN product_id DROP NOT NULL;
+          ALTER TABLE order_items ADD CONSTRAINT order_items_product_id_fkey
+            FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE SET NULL;
+        END IF;
+
+        -- orders.store_id: SET NULL (preserve order history when store deleted)
+        IF EXISTS (
+          SELECT 1 FROM information_schema.table_constraints
+          WHERE constraint_name = 'orders_store_id_fkey'
+          AND table_name = 'orders'
+        ) THEN
+          ALTER TABLE orders DROP CONSTRAINT orders_store_id_fkey;
+          ALTER TABLE orders ALTER COLUMN store_id DROP NOT NULL;
+          ALTER TABLE orders ADD CONSTRAINT orders_store_id_fkey
+            FOREIGN KEY (store_id) REFERENCES stores(id) ON DELETE SET NULL;
+        END IF;
+
+        -- orders.cashier_id: SET NULL (preserve order history when cashier deleted)
+        IF EXISTS (
+          SELECT 1 FROM information_schema.table_constraints
+          WHERE constraint_name = 'orders_cashier_id_fkey'
+          AND table_name = 'orders'
+        ) THEN
+          ALTER TABLE orders DROP CONSTRAINT orders_cashier_id_fkey;
+          ALTER TABLE orders ADD CONSTRAINT orders_cashier_id_fkey
+            FOREIGN KEY (cashier_id) REFERENCES users(id) ON DELETE SET NULL;
+        END IF;
+
+        -- store_staff.user_id: CASCADE (clean up staff entries when user deleted)
+        IF EXISTS (
+          SELECT 1 FROM information_schema.table_constraints
+          WHERE constraint_name = 'store_staff_user_id_fkey'
+          AND table_name = 'store_staff'
+        ) THEN
+          ALTER TABLE store_staff DROP CONSTRAINT store_staff_user_id_fkey;
+          ALTER TABLE store_staff ADD CONSTRAINT store_staff_user_id_fkey
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE;
+        END IF;
+
+        -- store_staff.invited_by: SET NULL
+        IF EXISTS (
+          SELECT 1 FROM information_schema.table_constraints
+          WHERE constraint_name = 'store_staff_invited_by_fkey'
+          AND table_name = 'store_staff'
+        ) THEN
+          ALTER TABLE store_staff DROP CONSTRAINT store_staff_invited_by_fkey;
+          ALTER TABLE store_staff ADD CONSTRAINT store_staff_invited_by_fkey
+            FOREIGN KEY (invited_by) REFERENCES users(id) ON DELETE SET NULL;
+        END IF;
+      END $$;
+    `);
+    console.log('✅ Foreign key constraints patched');
+  } catch (err) {
+    console.error('FK patch warning (non-critical):', err.message);
+  }
+}
+
 // ==================== NEW: INVENTORY & CHECKOUT TABLES ====================
 async function initInventoryTables() {
+  await runMigrations(); // <-- PATCH FIRST
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS categories (
       id SERIAL PRIMARY KEY,
@@ -13,7 +194,6 @@ async function initInventoryTables() {
     );
   `);
 
-  // Create base products table before ALTER TABLE
   await pool.query(`
     CREATE TABLE IF NOT EXISTS products (
       id SERIAL PRIMARY KEY,
@@ -60,8 +240,9 @@ async function initInventoryTables() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS orders (
       id SERIAL PRIMARY KEY,
-      store_id INTEGER NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
-      cashier_id INTEGER REFERENCES users(id),
+      store_id INTEGER REFERENCES stores(id) ON DELETE SET NULL,
+      cashier_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      cashier_name VARCHAR(100),
       customer_name VARCHAR(100),
       customer_phone VARCHAR(50),
       receipt_number VARCHAR(50) NOT NULL UNIQUE,
@@ -80,7 +261,7 @@ async function initInventoryTables() {
     CREATE TABLE IF NOT EXISTS order_items (
       id SERIAL PRIMARY KEY,
       order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
-      product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+      product_id INTEGER REFERENCES products(id) ON DELETE SET NULL,
       product_name VARCHAR(200),
       quantity INTEGER NOT NULL,
       unit_price DECIMAL(12,2) NOT NULL,
@@ -89,7 +270,6 @@ async function initInventoryTables() {
     );
   `);
 
-  // Add translations column if not exists
   await pool.query(`
     DO $$
     BEGIN
@@ -102,7 +282,6 @@ async function initInventoryTables() {
     END $$;
   `);
 
-  // Upsert categories with translations (idempotent — won't create duplicates)
   const categories = [
     {
       name: 'General',
@@ -208,37 +387,13 @@ async function initInventoryTables() {
     );
   }
 
-  // Fix missing columns for databases created before these fields existed
-  await pool.query(`
-    DO $$
-    BEGIN
-      -- orders table
-      IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='cashier_id') THEN
-        ALTER TABLE orders ADD COLUMN cashier_id INTEGER REFERENCES users(id);
-      END IF;
-
-      -- stores table (if created elsewhere without these columns)
-      IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='stores' AND column_name='rating') THEN
-        ALTER TABLE stores ADD COLUMN rating DECIMAL(2,1) DEFAULT 5.0;
-      END IF;
-      IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='stores' AND column_name='is_sponsored') THEN
-        ALTER TABLE stores ADD COLUMN is_sponsored BOOLEAN DEFAULT FALSE;
-      END IF;
-      IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='stores' AND column_name='sponsorship_tier') THEN
-        ALTER TABLE stores ADD COLUMN sponsorship_tier INTEGER DEFAULT 1;
-      END IF;
-      IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='stores' AND column_name='sponsorship_expires_at') THEN
-        ALTER TABLE stores ADD COLUMN sponsorship_expires_at TIMESTAMP;
-      END IF;
-    END $$;
-  `);
-
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_products_barcode ON products(barcode);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_products_category ON products(category_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_orders_store ON orders(store_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_orders_receipt ON orders(receipt_number);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_order_items_order ON order_items(order_id);`);
 
+  await patchForeignKeyConstraints();
   console.log('✅ Inventory tables initialized');
 }
 
@@ -311,9 +466,55 @@ async function initAuthTables() {
       CONSTRAINT fk_receipt_settings_store FOREIGN KEY (store_id) REFERENCES stores(id) ON DELETE CASCADE
     );
   `);
+
+  // ==================== NEW: STORE STAFF ====================
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS store_staff (
+      id SERIAL PRIMARY KEY,
+      store_id INTEGER NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      can_manage_inventory BOOLEAN DEFAULT FALSE,
+      status VARCHAR(20) DEFAULT 'pending',
+      invited_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      invited_at TIMESTAMP DEFAULT NOW(),
+      responded_at TIMESTAMP,
+      created_at TIMESTAMP DEFAULT NOW(),
+      UNIQUE(store_id, user_id)
+    );
+  `);
+
+  // Migration: add status column if table already exists without it
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'store_staff') THEN
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='store_staff' AND column_name='status') THEN
+          ALTER TABLE store_staff ADD COLUMN status VARCHAR(20) DEFAULT 'pending';
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='store_staff' AND column_name='invited_by') THEN
+          ALTER TABLE store_staff ADD COLUMN invited_by INTEGER REFERENCES users(id) ON DELETE SET NULL;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='store_staff' AND column_name='invited_at') THEN
+          ALTER TABLE store_staff ADD COLUMN invited_at TIMESTAMP DEFAULT NOW();
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='store_staff' AND column_name='responded_at') THEN
+          ALTER TABLE store_staff ADD COLUMN responded_at TIMESTAMP;
+        END IF;
+        -- Default existing rows to accepted so they don't break
+        UPDATE store_staff SET status = 'accepted' WHERE status IS NULL OR status = '';
+      END IF;
+    END $$;
+  `);
+
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_store_staff_user ON store_staff(user_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_store_staff_store ON store_staff(store_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_store_staff_status ON store_staff(status);`);
+
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_verification_codes_email_created ON verification_codes(email, created_at);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_product_views_user ON product_views(user_id, viewed_at);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_search_queries_user ON search_queries(user_id, searched_at);`);
+  
+  await patchForeignKeyConstraints();
   console.log('✅ Auth & auxiliary tables initialized');
 }
 

@@ -1,5 +1,5 @@
 // lib/screens/add_product_screen.dart
-// COMPLETE REPLACEMENT — fixes edit pre-fill, category dedup, translations
+// COMPLETE REPLACEMENT — fixes edit pre-fill, category dedup, translations, connectivity v6+
 
 import 'dart:io';
 import 'dart:convert';
@@ -17,6 +17,8 @@ import '../widgets/category_picker.dart';
 import '../widgets/product_image_gallery.dart';
 import '../utils/barcode_helper.dart';
 import '../lang/translations.dart';
+import '../services/product_service.dart';
+import 'package:http/http.dart' as http;
 
 class AddProductScreen extends StatefulWidget {
   final Map<String, dynamic>? product;
@@ -142,7 +144,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
   Future<void> _checkBarcode(String code) async {
     if (code.isEmpty || !BarcodeHelper.isValidBarcode(code)) return;
     try {
-      final result = await ApiService.validateBarcode(code);
+      final result = await ProductService.validateBarcode(code);
       if (result != null && result['exists'] == true) {
         if (mounted) {
           setState(() {
@@ -184,27 +186,27 @@ class _AddProductScreenState extends State<AddProductScreen> {
 
     final name = _nameCtrl.text.trim();
     if (name.isEmpty) {
-      _showError(t('name_required'));
+      _showError(t('name_required') ?? 'Name is required');
       return;
     }
 
     final priceText = _priceCtrl.text.trim();
     final price = double.tryParse(priceText.replaceAll(',', '.'));
     if (price == null || price < 0) {
-      _showError(t('invalid_price'));
+      _showError(t('invalid_price') ?? 'Invalid price');
       return;
     }
 
     final qtyText = _qtyCtrl.text.trim();
     final qty = int.tryParse(qtyText);
     if (qty == null || qty < 0) {
-      _showError(t('invalid_quantity'));
+      _showError(t('invalid_quantity') ?? 'Invalid quantity');
       return;
     }
 
     final barcode = _barcodeCtrl.text.trim();
     if (barcode.isNotEmpty && !BarcodeHelper.isValidBarcode(barcode)) {
-      _showError(t('invalid_barcode_format'));
+      _showError(t('invalid_barcode_format') ?? 'Invalid barcode format');
       return;
     }
 
@@ -215,18 +217,18 @@ class _AddProductScreenState extends State<AddProductScreen> {
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(16),
           ),
-          title: Text(t('barcode_exists')),
+          title: Text(t('barcode_exists') ?? 'Barcode exists'),
           content: Text(
-            '${t('product_with_barcode_exists')}: ${_existingBarcodeProduct!['name']}',
+            '${t('product_with_barcode_exists') ?? 'Product with this barcode exists'}: ${_existingBarcodeProduct!['name']}',
           ),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context, false),
-              child: Text(t('cancel')),
+              child: Text(t('cancel') ?? 'Cancel'),
             ),
             TextButton(
               onPressed: () => Navigator.pop(context, true),
-              child: Text(t('continue_anyway')),
+              child: Text(t('continue_anyway') ?? 'Continue anyway'),
             ),
           ],
         ),
@@ -234,37 +236,160 @@ class _AddProductScreenState extends State<AddProductScreen> {
       if (proceed != true) return;
     }
 
-    final connectivity = await Connectivity().checkConnectivity();
-    final isOnline = connectivity != ConnectivityResult.none;
+    int? storeId = await ApiService.getMyStoreId();
 
+    // Fallback: try cached store if context is empty
+    if (storeId == null) {
+      try {
+        final cachedStore = await OfflineService.getCachedStore();
+        storeId = cachedStore?['id'] as int?;
+      } catch (_) {}
+    }
+
+    if (storeId == null) {
+      _showError('No store context. Please login online first.');
+      return;
+    }
+
+    // Check connectivity AND try a quick server ping
+    final connectivity = await Connectivity().checkConnectivity();
+    final hasNetwork = !connectivity.contains(ConnectivityResult.none);
+
+    // Try server ping — if server is down, treat as offline even with network
+    bool isOnline = false;
+    if (hasNetwork) {
+      try {
+        final ping = await http
+            .head(Uri.parse('${ApiService.baseUrl}/api/health'))
+            .timeout(const Duration(seconds: 2));
+        isOnline = ping.statusCode == 200;
+      } catch (_) {
+        isOnline = false;
+      }
+    }
+
+    // ==================== OFFLINE ====================
     if (!isOnline) {
-      await OfflineService.addPending({
-        'name': name,
-        'price': price,
-        'quantity': qty,
-        'description': _descCtrl.text.trim(),
-        'barcode': barcode,
-        'category_ids': _categoryIds,
-        'currency': _currencyCtrl.text.trim(),
-        'image_paths': _newImages.map((f) => f.path).toList(),
-      });
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(t('offline_saved')),
-            backgroundColor: Colors.orange,
-          ),
+      if (widget.product != null) {
+        // Offline EDIT
+        final serverId = widget.product!['id'] is int
+            ? widget.product!['id'] as int
+            : int.tryParse(widget.product!['id'].toString()) ?? 0;
+
+        await OfflineService.addPendingUpdate(
+          {
+            'server_id': serverId,
+            'name': name,
+            'price': price,
+            'quantity': qty,
+            'description': _descCtrl.text.trim(),
+            'barcode': barcode,
+            'category_id': _categoryIds.isNotEmpty ? _categoryIds.first : null,
+            'currency': _currencyCtrl.text.trim(),
+            'image_paths': _newImages.map((f) => f.path).toList(),
+            'existing_images': _existingImages,
+          },
+          serverId,
+          storeId,
         );
-        Navigator.pop(context, {'offline': true});
+
+        await OfflineService.updateCachedProduct({
+          'id': serverId,
+          'name': name,
+          'price': price,
+          'quantity': qty,
+          'description': _descCtrl.text.trim(),
+          'barcode': barcode,
+          'category_id': _categoryIds.isNotEmpty ? _categoryIds.first : null,
+          'currency': _currencyCtrl.text.trim(),
+        });
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                t('product_saved_offline') ?? 'Product saved offline',
+              ),
+              backgroundColor: Colors.green.shade700,
+              duration: const Duration(seconds: 2),
+              behavior: SnackBarBehavior.floating,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+          );
+          Navigator.pop(context, {
+            'offline': true,
+            'updated': true,
+            'id': serverId,
+          });
+        }
+      } else {
+        // Offline CREATE
+        // Store single category_id for backward compatibility with pending_products schema
+        final singleCategoryId = _categoryIds.isNotEmpty
+            ? _categoryIds.first
+            : null;
+        await OfflineService.addPending({
+          'name': name,
+          'price': price,
+          'quantity': qty,
+          'description': _descCtrl.text.trim(),
+          'barcode': barcode,
+          'category_id': singleCategoryId,
+          'category_ids':
+              _categoryIds, // Keep full list for future multi-category support
+          'currency': _currencyCtrl.text.trim(),
+          'image_paths': _newImages.map((f) => f.path).toList(),
+          'action': 'create',
+        }, storeId);
+
+        // Optimistic: add to cache immediately so UI shows it
+        final tempId = DateTime.now().millisecondsSinceEpoch;
+        await OfflineService.cacheProducts(storeId, [
+          {
+            'id': 'pending_$tempId',
+            'name': name,
+            'price': price,
+            'quantity': qty,
+            'description': _descCtrl.text.trim(),
+            'barcode': barcode,
+            'category_id': singleCategoryId,
+            'currency': _currencyCtrl.text.trim(),
+            'image_url': _newImages.isNotEmpty ? _newImages.first.path : null,
+            'images': _newImages.map((f) => f.path).toList(),
+            'low_stock_threshold': 5,
+            'updated_at': DateTime.now().toIso8601String(),
+            '_pendingCreate': true,
+          },
+        ]);
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                t('product_saved_offline') ?? 'Product saved offline',
+              ),
+              backgroundColor: Colors.green.shade700,
+              duration: const Duration(seconds: 2),
+              behavior: SnackBarBehavior.floating,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+          );
+          Navigator.pop(context, {'offline': true, 'pending': true});
+        }
       }
       return;
     }
 
+    // ==================== ONLINE ====================
     setState(() => _isLoading = true);
     try {
       Map<String, dynamic> result;
       if (widget.product != null) {
-        result = await ApiService.updateProduct(
+        result = await ProductService.updateProduct(
           id: widget.product!['id'],
           name: name,
           price: price,
@@ -279,7 +404,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
           existingImages: _existingImages,
         );
       } else {
-        result = await ApiService.createProduct(
+        result = await ProductService.createProduct(
           name: name,
           price: price,
           quantity: qty,
@@ -296,7 +421,11 @@ class _AddProductScreenState extends State<AddProductScreen> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(widget.product != null ? t('updated') : t('saved')),
+            content: Text(
+              widget.product != null
+                  ? (t('updated') ?? 'Updated')
+                  : (t('saved') ?? 'Saved'),
+            ),
             backgroundColor: Colors.green,
           ),
         );
@@ -409,7 +538,9 @@ class _AddProductScreenState extends State<AddProductScreen> {
         backgroundColor: theme.colorScheme.surface,
         foregroundColor: theme.colorScheme.onSurface,
         title: Text(
-          isEdit ? t('edit_product') : t('add_product'),
+          isEdit
+              ? (t('edit_product') ?? 'Edit Product')
+              : (t('add_product') ?? 'Add Product'),
           style: theme.textTheme.titleLarge?.copyWith(
             fontWeight: FontWeight.w700,
           ),
@@ -431,7 +562,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
                     _buildSectionHeader(
                       context,
                       Icons.image_outlined,
-                      t('product_images'),
+                      t('product_images') ?? 'Product Images',
                     ),
                     Container(
                       decoration: BoxDecoration(
@@ -504,7 +635,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
                     _buildSectionHeader(
                       context,
                       Icons.info_outline,
-                      t('basic_info'),
+                      t('basic_info') ?? 'Basic Info',
                     ),
                     Container(
                       decoration: BoxDecoration(
@@ -530,14 +661,14 @@ class _AddProductScreenState extends State<AddProductScreen> {
                             textAlign: isRTL ? TextAlign.right : TextAlign.left,
                             decoration: _modernInputDecoration(
                               context,
-                              '${t('product_name')} *',
+                              '${t('product_name') ?? 'Product Name'} *',
                               icon: Icons.label_outline,
                             ),
                             validator: (v) {
                               if (v == null || v.trim().isEmpty)
-                                return t('name_required');
+                                return t('name_required') ?? 'Name required';
                               if (v.trim().length < 2)
-                                return t('name_too_short');
+                                return t('name_too_short') ?? 'Name too short';
                               return null;
                             },
                           ),
@@ -561,20 +692,23 @@ class _AddProductScreenState extends State<AddProductScreen> {
                                   ],
                                   decoration: _modernInputDecoration(
                                     context,
-                                    '${t('price')} *',
+                                    '${t('price') ?? 'Price'} *',
                                     icon: Icons.payments_outlined,
                                     helper: t('price_helper'),
                                   ),
                                   validator: (v) {
                                     if (v == null || v.trim().isEmpty)
-                                      return t('price_required');
+                                      return t('price_required') ??
+                                          'Price required';
                                     final parsed = double.tryParse(
                                       v.trim().replaceAll(',', '.'),
                                     );
                                     if (parsed == null)
-                                      return t('invalid_price');
+                                      return t('invalid_price') ??
+                                          'Invalid price';
                                     if (parsed < 0)
-                                      return t('negative_price_not_allowed');
+                                      return t('negative_price_not_allowed') ??
+                                          'Negative price not allowed';
                                     return null;
                                   },
                                 ),
@@ -588,7 +722,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
                                       TextCapitalization.characters,
                                   decoration: _modernInputDecoration(
                                     context,
-                                    t('currency'),
+                                    t('currency') ?? 'Currency',
                                     icon: Icons.currency_exchange,
                                     helper: 'SYP, USD, TRY, EUR...',
                                   ),
@@ -605,7 +739,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
                                   ],
                                   decoration: _modernInputDecoration(
                                     context,
-                                    t('quantity'),
+                                    t('quantity') ?? 'Quantity',
                                     icon: Icons.format_list_numbered,
                                     helper: t('quantity_helper'),
                                   ),
@@ -614,9 +748,13 @@ class _AddProductScreenState extends State<AddProductScreen> {
                                       return null;
                                     final parsed = int.tryParse(v.trim());
                                     if (parsed == null)
-                                      return t('invalid_quantity');
+                                      return t('invalid_quantity') ??
+                                          'Invalid quantity';
                                     if (parsed < 0)
-                                      return t('negative_quantity_not_allowed');
+                                      return t(
+                                            'negative_quantity_not_allowed',
+                                          ) ??
+                                          'Negative quantity not allowed';
                                     return null;
                                   },
                                 ),
@@ -632,7 +770,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
                     _buildSectionHeader(
                       context,
                       Icons.category_outlined,
-                      t('categorization'),
+                      t('categorization') ?? 'Categorization',
                     ),
                     Container(
                       decoration: BoxDecoration(
@@ -668,7 +806,8 @@ class _AddProductScreenState extends State<AddProductScreen> {
                               if (v != null &&
                                   v.isNotEmpty &&
                                   !BarcodeHelper.isValidBarcode(v)) {
-                                return t('invalid_barcode_format');
+                                return t('invalid_barcode_format') ??
+                                    'Invalid barcode format';
                               }
                               return null;
                             },
@@ -695,7 +834,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
                                     const SizedBox(width: 10),
                                     Expanded(
                                       child: Text(
-                                        '${t('barcode_exists_warning')}: ${_existingBarcodeProduct?['name'] ?? ''}',
+                                        '${t('barcode_exists_warning') ?? 'Barcode exists warning'}: ${_existingBarcodeProduct?['name'] ?? ''}',
                                         style: TextStyle(
                                           fontSize: 13,
                                           color: Colors.orange.shade900,
@@ -716,7 +855,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
                     _buildSectionHeader(
                       context,
                       Icons.description_outlined,
-                      t('details'),
+                      t('details') ?? 'Details',
                     ),
                     Container(
                       decoration: BoxDecoration(
@@ -739,7 +878,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
                         textAlign: isRTL ? TextAlign.right : TextAlign.left,
                         decoration: _modernInputDecoration(
                           context,
-                          t('description'),
+                          t('description') ?? 'Description',
                           icon: Icons.notes,
                         ).copyWith(alignLabelWithHint: true),
                       ),
@@ -751,7 +890,9 @@ class _AddProductScreenState extends State<AddProductScreen> {
                       onPressed: _isLoading ? null : _save,
                       isLoading: _isLoading,
                       child: Text(
-                        isEdit ? t('update_product') : t('add_product'),
+                        isEdit
+                            ? (t('update_product') ?? 'Update Product')
+                            : (t('add_product') ?? 'Add Product'),
                         style: const TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.w600,

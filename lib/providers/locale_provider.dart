@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../lang/translations.dart';
 import '../services/api_service.dart';
+import '../services/auth_service.dart';
 
 final List<Locale> supportedLocales = [
   const Locale('en'),
@@ -118,7 +119,7 @@ void showLanguagePicker(BuildContext context) {
                       try {
                         final token = await ApiService.getToken();
                         if (token != null) {
-                          await ApiService.updatePreferredLanguage(code);
+                          await AuthService.updatePreferredLanguage(code);
                         }
                       } catch (_) {}
 

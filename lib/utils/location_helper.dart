@@ -2,6 +2,7 @@
 import 'dart:math';
 import 'package:geolocator/geolocator.dart';
 import '../services/api_service.dart';
+import '../services/location_service.dart';
 
 class LocationHelper {
   /// Calculate distance between two coordinates using Haversine formula
@@ -46,7 +47,7 @@ class LocationHelper {
     String lang = 'en',
   }) async {
     try {
-      return await ApiService.reverseGeocode(lat, lng, lang);
+      return await LocationService.reverseGeocode(lat, lng, lang);
     } catch (e) {
       return null;
     }

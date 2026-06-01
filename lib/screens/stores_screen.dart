@@ -10,6 +10,7 @@ import 'store_products_screen.dart';
 import 'my_store_screen.dart';
 import 'store_map_screen.dart';
 import '../lang/translations.dart';
+import '../services/store_service.dart';
 
 class StoresScreen extends StatefulWidget {
   const StoresScreen({super.key});
@@ -22,7 +23,7 @@ class _StoresScreenState extends State<StoresScreen> {
   List<dynamic> stores = [];
   bool isLoading = true;
   String error = '';
-  String? userRole;
+  bool _hasStoreAccess = false;
 
   @override
   void initState() {
@@ -32,11 +33,13 @@ class _StoresScreenState extends State<StoresScreen> {
 
   Future<void> loadData() async {
     try {
-      final data = await ApiService.fetchStores();
-      final role = await ApiService.getUserRole();
+      final data = await StoreService.fetchStores();
+      // FIXED: Check store context (owner or accepted worker) instead of just role
+      final hasAccess =
+          await ApiService.isStoreOwner() || await ApiService.isStoreWorker();
       setState(() {
         stores = data;
-        userRole = role;
+        _hasStoreAccess = hasAccess;
         isLoading = false;
       });
     } catch (e) {
@@ -62,7 +65,8 @@ class _StoresScreenState extends State<StoresScreen> {
       appBar: AppBar(
         title: const Text('Market Bridge'),
         actions: [
-          if (userRole == 'store_owner')
+          // FIXED: Show My Store for both owner and accepted worker
+          if (_hasStoreAccess)
             TextButton.icon(
               onPressed: () {
                 Navigator.push(
