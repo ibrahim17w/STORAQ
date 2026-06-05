@@ -61,6 +61,7 @@ class _ExploreScreenState extends State<ExploreScreen> {
   static Timer? _viewFlushTimer;
 
   Set<int> _favoriteIds = {};
+  Set<int> _favoriteStoreIds = {};
 
   @override
   void initState() {
@@ -70,6 +71,44 @@ class _ExploreScreenState extends State<ExploreScreen> {
     _loadHistory();
     _searchController.addListener(_onSearchChanged);
     _loadFavorites();
+    _loadFavoriteStores();
+
+    FavoritesService.favoriteIdsNotifier.addListener(_onFavoritesChanged);
+    FavoritesService.favoriteStoreIdsNotifier.addListener(
+      _onStoreFavoritesChanged,
+    );
+  }
+
+  @override
+  void dispose() {
+    FavoritesService.favoriteIdsNotifier.removeListener(_onFavoritesChanged);
+    FavoritesService.favoriteStoreIdsNotifier.removeListener(
+      _onStoreFavoritesChanged,
+    );
+    _searchController.removeListener(_onSearchChanged);
+    _searchController.dispose();
+    _searchFocusNode.dispose();
+    super.dispose();
+  }
+
+  void _onFavoritesChanged() {
+    if (mounted) {
+      setState(
+        () => _favoriteIds = Set<int>.from(
+          FavoritesService.favoriteIdsNotifier.value,
+        ),
+      );
+    }
+  }
+
+  void _onStoreFavoritesChanged() {
+    if (mounted) {
+      setState(
+        () => _favoriteStoreIds = Set<int>.from(
+          FavoritesService.favoriteStoreIdsNotifier.value,
+        ),
+      );
+    }
   }
 
   Future<void> _loadFavorites() async {
@@ -79,10 +118,25 @@ class _ExploreScreenState extends State<ExploreScreen> {
     } catch (_) {}
   }
 
-  Future<void> _toggleFavorite(int productId) async {
-    await FavoritesService.toggleFavorite(productId);
-    final ids = await FavoritesService.getLocalFavoriteIds();
-    if (mounted) setState(() => _favoriteIds = ids.toSet());
+  Future<void> _loadFavoriteStores() async {
+    try {
+      final ids = await FavoritesService.getLocalFavoriteStoreIds();
+      if (mounted) setState(() => _favoriteStoreIds = ids.toSet());
+    } catch (_) {}
+  }
+
+  Future<void> _toggleFavorite(
+    int productId,
+    Map<String, dynamic> product,
+  ) async {
+    await FavoritesService.toggleFavorite(productId, product: product);
+  }
+
+  Future<void> _toggleFavoriteStore(
+    int storeId,
+    Map<String, dynamic> store,
+  ) async {
+    await FavoritesService.toggleFavoriteStore(storeId, store: store);
   }
 
   int? _productId(dynamic product) {
@@ -92,12 +146,11 @@ class _ExploreScreenState extends State<ExploreScreen> {
     return int.tryParse(id.toString());
   }
 
-  @override
-  void dispose() {
-    _searchController.removeListener(_onSearchChanged);
-    _searchController.dispose();
-    _searchFocusNode.dispose();
-    super.dispose();
+  int? _storeId(dynamic store) {
+    final id = store['id'];
+    if (id == null) return null;
+    if (id is int) return id;
+    return int.tryParse(id.toString());
   }
 
   Future<void> _loadGridPreference() async {
@@ -784,7 +837,7 @@ class _ExploreScreenState extends State<ExploreScreen> {
                       showFavorite: pid != null,
                       isFavorite: pid != null && _favoriteIds.contains(pid),
                       onFavoriteToggle: pid != null
-                          ? () => _toggleFavorite(pid)
+                          ? () => _toggleFavorite(pid, p)
                           : null,
                     );
                   }).toList(),
@@ -800,7 +853,7 @@ class _ExploreScreenState extends State<ExploreScreen> {
                         showFavorite: pid != null,
                         isFavorite: pid != null && _favoriteIds.contains(pid),
                         onFavoriteToggle: pid != null
-                            ? () => _toggleFavorite(pid)
+                            ? () => _toggleFavorite(pid, p)
                             : null,
                       ),
                     );
@@ -835,30 +888,42 @@ class _ExploreScreenState extends State<ExploreScreen> {
                   child: ListView.builder(
                     scrollDirection: Axis.horizontal,
                     itemCount: _searchStoreResults.length,
-                    itemBuilder: (context, i) => StoreCard(
-                      store: _searchStoreResults[i],
-                      onTap: () async {
-                        final canProceed = await guest.requireAuth(context);
-                        if (!canProceed) return;
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => StoreProductsScreen(
-                              storeId: _searchStoreResults[i]['id'],
-                              storeName:
-                                  _searchStoreResults[i]['name']?.toString() ??
-                                  'Unknown Store',
+                    itemBuilder: (context, i) {
+                      final store = _searchStoreResults[i];
+                      final sid = _storeId(store);
+                      return StoreCard(
+                        store: store,
+                        onTap: () async {
+                          final canProceed = await guest.requireAuth(context);
+                          if (!canProceed) return;
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => StoreProductsScreen(
+                                storeId: _searchStoreResults[i]['id'],
+                                storeName:
+                                    _searchStoreResults[i]['name']
+                                        ?.toString() ??
+                                    'Unknown Store',
+                              ),
                             ),
-                          ),
-                        );
-                      },
-                      isCompact: true,
-                      width: 140,
-                    ),
+                          );
+                        },
+                        isCompact: true,
+                        width: 140,
+                        showFavorite: sid != null,
+                        isFavorite:
+                            sid != null && _favoriteStoreIds.contains(sid),
+                        onFavoriteToggle: sid != null
+                            ? () => _toggleFavoriteStore(sid, store)
+                            : null,
+                      );
+                    },
                   ),
                 )
               : Column(
                   children: _searchStoreResults.map((s) {
+                    final sid = _storeId(s);
                     return Padding(
                       padding: const EdgeInsets.only(bottom: 8),
                       child: StoreListTile(
@@ -877,6 +942,12 @@ class _ExploreScreenState extends State<ExploreScreen> {
                             ),
                           );
                         },
+                        showFavorite: sid != null,
+                        isFavorite:
+                            sid != null && _favoriteStoreIds.contains(sid),
+                        onFavoriteToggle: sid != null
+                            ? () => _toggleFavoriteStore(sid, s)
+                            : null,
                       ),
                     );
                   }).toList(),
@@ -1156,7 +1227,7 @@ class _ExploreScreenState extends State<ExploreScreen> {
                               borderRadius: BorderRadius.circular(12),
                               child: InkWell(
                                 borderRadius: BorderRadius.circular(12),
-                                onTap: () => _toggleFavorite(pid),
+                                onTap: () => _toggleFavorite(pid, product),
                                 child: Padding(
                                   padding: const EdgeInsets.all(4),
                                   child: Icon(
@@ -1265,7 +1336,7 @@ class _ExploreScreenState extends State<ExploreScreen> {
                   showFavorite: pid != null,
                   isFavorite: pid != null && _favoriteIds.contains(pid),
                   onFavoriteToggle: pid != null
-                      ? () => _toggleFavorite(pid)
+                      ? () => _toggleFavorite(pid, product)
                       : null,
                 ),
                 if (!showDistance)
@@ -1330,23 +1401,27 @@ class _ExploreScreenState extends State<ExploreScreen> {
         spacing: 10,
         runSpacing: 10,
         alignment: WrapAlignment.start,
-        children: stores
-            .map(
-              (store) => StoreCard(
-                store: store,
-                onTap: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => StoreProductsScreen(
-                      storeId: store['id'],
-                      storeName: store['name']?.toString() ?? 'Unknown Store',
-                    ),
-                  ),
+        children: stores.map((store) {
+          final sid = _storeId(store);
+          return StoreCard(
+            store: store,
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => StoreProductsScreen(
+                  storeId: store['id'],
+                  storeName: store['name']?.toString() ?? 'Unknown Store',
                 ),
-                distanceKm: _sortByClosest ? _distanceToStore(store) : null,
               ),
-            )
-            .toList(),
+            ),
+            distanceKm: _sortByClosest ? _distanceToStore(store) : null,
+            showFavorite: sid != null,
+            isFavorite: sid != null && _favoriteStoreIds.contains(sid),
+            onFavoriteToggle: sid != null
+                ? () => _toggleFavoriteStore(sid, store)
+                : null,
+          );
+        }).toList(),
       ),
     );
   }
@@ -1365,6 +1440,7 @@ class _ExploreScreenState extends State<ExploreScreen> {
             store['location_description']?.toString() ??
             store['description']?.toString() ??
             '';
+        final sid = _storeId(store);
 
         return Card(
           margin: const EdgeInsets.only(bottom: 10),
@@ -1454,7 +1530,19 @@ class _ExploreScreenState extends State<ExploreScreen> {
                       ],
                     ),
                   ),
-                  if (hasLocation)
+                  if (sid != null)
+                    IconButton(
+                      icon: Icon(
+                        _favoriteStoreIds.contains(sid)
+                            ? Icons.favorite
+                            : Icons.favorite_border,
+                        color: _favoriteStoreIds.contains(sid)
+                            ? Colors.red
+                            : Colors.grey,
+                      ),
+                      onPressed: () => _toggleFavoriteStore(sid, store),
+                    )
+                  else if (hasLocation)
                     IconButton(
                       icon: Icon(
                         Icons.map,
@@ -1465,7 +1553,7 @@ class _ExploreScreenState extends State<ExploreScreen> {
                         context,
                         MaterialPageRoute(
                           builder: (_) => StoreLocationView(
-                            target: LatLng(lat, lng),
+                            target: LatLng(lat!, lng!),
                             targetStoreId: store['id'],
                             targetName:
                                 store['name']?.toString() ?? 'Unknown Store',

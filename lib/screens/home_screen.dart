@@ -96,6 +96,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   // Favorites
   Set<int> _favoriteIds = {};
+  Set<int> _favoriteStoreIds = {};
 
   static final List<String> _pendingViews = [];
   static Timer? _viewFlushTimer;
@@ -114,6 +115,43 @@ class _HomeScreenState extends State<HomeScreen> {
     _loadSponsored();
     _loadRecommendations();
     _loadFavorites();
+    _loadFavoriteStores();
+
+    FavoritesService.favoriteIdsNotifier.addListener(_onFavoritesChanged);
+    FavoritesService.favoriteStoreIdsNotifier.addListener(
+      _onStoreFavoritesChanged,
+    );
+  }
+
+  @override
+  void dispose() {
+    FavoritesService.favoriteIdsNotifier.removeListener(_onFavoritesChanged);
+    FavoritesService.favoriteStoreIdsNotifier.removeListener(
+      _onStoreFavoritesChanged,
+    );
+    _viewFlushTimer?.cancel();
+    _flushViews();
+    super.dispose();
+  }
+
+  void _onFavoritesChanged() {
+    if (mounted) {
+      setState(
+        () => _favoriteIds = Set<int>.from(
+          FavoritesService.favoriteIdsNotifier.value,
+        ),
+      );
+    }
+  }
+
+  void _onStoreFavoritesChanged() {
+    if (mounted) {
+      setState(
+        () => _favoriteStoreIds = Set<int>.from(
+          FavoritesService.favoriteStoreIdsNotifier.value,
+        ),
+      );
+    }
   }
 
   Future<void> _loadFavorites() async {
@@ -123,10 +161,32 @@ class _HomeScreenState extends State<HomeScreen> {
     } catch (_) {}
   }
 
-  Future<void> _toggleFavorite(int productId) async {
-    await FavoritesService.toggleFavorite(productId);
-    final ids = await FavoritesService.getLocalFavoriteIds();
-    if (mounted) setState(() => _favoriteIds = ids.toSet());
+  Future<void> _loadFavoriteStores() async {
+    try {
+      final ids = await FavoritesService.getLocalFavoriteStoreIds();
+      if (mounted) setState(() => _favoriteStoreIds = ids.toSet());
+    } catch (_) {}
+  }
+
+  Future<void> _toggleFavorite(
+    int productId,
+    Map<String, dynamic> product,
+  ) async {
+    await FavoritesService.toggleFavorite(productId, product: product);
+  }
+
+  Future<void> _toggleFavoriteStore(
+    int storeId,
+    Map<String, dynamic> store,
+  ) async {
+    await FavoritesService.toggleFavoriteStore(storeId, store: store);
+  }
+
+  int? _storeId(dynamic store) {
+    final id = store['id'];
+    if (id == null) return null;
+    if (id is int) return id;
+    return int.tryParse(id.toString());
   }
 
   Future<void> _loadGridPreference() async {
@@ -647,13 +707,6 @@ class _HomeScreenState extends State<HomeScreen> {
         break;
     }
     return sorted;
-  }
-
-  @override
-  void dispose() {
-    _viewFlushTimer?.cancel();
-    _flushViews();
-    super.dispose();
   }
 
   Future<void> _loadUserName() async {
@@ -1332,7 +1385,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           showFavorite: pid != null,
                           isFavorite: pid != null && _favoriteIds.contains(pid),
                           onFavoriteToggle: pid != null
-                              ? () => _toggleFavorite(pid)
+                              ? () => _toggleFavorite(pid, product)
                               : null,
                         );
                       },
@@ -1356,19 +1409,28 @@ class _HomeScreenState extends State<HomeScreen> {
                       scrollDirection: Axis.horizontal,
                       padding: const EdgeInsets.symmetric(horizontal: 12),
                       itemCount: filteredSponsored.length,
-                      itemBuilder: (context, i) => StoreCard(
-                        store: filteredSponsored[i],
-                        onTap: () => Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => StoreProductsScreen(
-                              storeId: filteredSponsored[i]['id'],
+                      itemBuilder: (context, i) {
+                        final store = filteredSponsored[i];
+                        final sid = _storeId(store);
+                        return StoreCard(
+                          store: store,
+                          onTap: () => Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) =>
+                                  StoreProductsScreen(storeId: store['id']),
                             ),
                           ),
-                        ),
-                        isSponsored: true,
-                        sponsoredLabel: t('top') ?? 'TOP',
-                      ),
+                          isSponsored: true,
+                          sponsoredLabel: t('top') ?? 'TOP',
+                          showFavorite: sid != null,
+                          isFavorite:
+                              sid != null && _favoriteStoreIds.contains(sid),
+                          onFavoriteToggle: sid != null
+                              ? () => _toggleFavoriteStore(sid, store)
+                              : null,
+                        );
+                      },
                     ),
                   ),
                 ),
@@ -1400,7 +1462,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           showFavorite: pid != null,
                           isFavorite: pid != null && _favoriteIds.contains(pid),
                           onFavoriteToggle: pid != null
-                              ? () => _toggleFavorite(pid)
+                              ? () => _toggleFavorite(pid, product)
                               : null,
                         );
                       },
@@ -1424,17 +1486,26 @@ class _HomeScreenState extends State<HomeScreen> {
                       scrollDirection: Axis.horizontal,
                       padding: const EdgeInsets.symmetric(horizontal: 12),
                       itemCount: filteredStores.length,
-                      itemBuilder: (context, i) => StoreCard(
-                        store: filteredStores[i],
-                        onTap: () => Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => StoreProductsScreen(
-                              storeId: filteredStores[i]['id'],
+                      itemBuilder: (context, i) {
+                        final store = filteredStores[i];
+                        final sid = _storeId(store);
+                        return StoreCard(
+                          store: store,
+                          onTap: () => Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) =>
+                                  StoreProductsScreen(storeId: store['id']),
                             ),
                           ),
-                        ),
-                      ),
+                          showFavorite: sid != null,
+                          isFavorite:
+                              sid != null && _favoriteStoreIds.contains(sid),
+                          onFavoriteToggle: sid != null
+                              ? () => _toggleFavoriteStore(sid, store)
+                              : null,
+                        );
+                      },
                     ),
                   ),
                 ),
@@ -1554,7 +1625,9 @@ class _HomeScreenState extends State<HomeScreen> {
               onTap: () => _onProductTap(product),
               showFavorite: pid != null,
               isFavorite: pid != null && _favoriteIds.contains(pid),
-              onFavoriteToggle: pid != null ? () => _toggleFavorite(pid) : null,
+              onFavoriteToggle: pid != null
+                  ? () => _toggleFavorite(pid, product)
+                  : null,
             );
           }).toList(),
         ),
@@ -1577,7 +1650,9 @@ class _HomeScreenState extends State<HomeScreen> {
               onTap: () => _onProductTap(product),
               showFavorite: pid != null,
               isFavorite: pid != null && _favoriteIds.contains(pid),
-              onFavoriteToggle: pid != null ? () => _toggleFavorite(pid) : null,
+              onFavoriteToggle: pid != null
+                  ? () => _toggleFavorite(pid, product)
+                  : null,
             ),
           );
         }, childCount: displayCount),

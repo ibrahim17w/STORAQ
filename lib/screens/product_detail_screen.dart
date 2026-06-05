@@ -41,7 +41,10 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
     final id = widget.product['id'];
     if (id == null) return;
     final pid = id is int ? id : int.tryParse(id.toString()) ?? 0;
-    await FavoritesService.toggleFavorite(pid);
+    await FavoritesService.toggleFavorite(
+      pid,
+      product: widget.product,
+    ); // FIXED: pass product for offline cache
     if (mounted) setState(() => _isFavorite = !_isFavorite);
   }
 

@@ -1,5 +1,6 @@
 // lib/screens/add_product_screen.dart
-// COMPLETE REPLACEMENT — fixes edit pre-fill, category dedup, translations, connectivity v6+
+// FIXED: Offline product creation stores raw image paths (no file:// prefix)
+// so CachedAppImage and other widgets can resolve them properly.
 
 import 'dart:io';
 import 'dart:convert';
@@ -59,11 +60,9 @@ class _AddProductScreenState extends State<AddProductScreen> {
     }
   }
 
-  /// FIXED: Robust product pre-fill handling various backend response formats
   void _populateFromProduct(Map<String, dynamic> product) {
     _nameCtrl.text = product['name']?.toString() ?? '';
 
-    // Price: handle int, double, string
     final rawPrice = product['price'];
     if (rawPrice != null) {
       if (rawPrice is num) {
@@ -75,7 +74,6 @@ class _AddProductScreenState extends State<AddProductScreen> {
       }
     }
 
-    // Quantity
     final rawQty = product['quantity'];
     if (rawQty != null) {
       _qtyCtrl.text = rawQty.toString();
@@ -85,10 +83,8 @@ class _AddProductScreenState extends State<AddProductScreen> {
     _barcodeCtrl.text = product['barcode']?.toString() ?? '';
     _currencyCtrl.text = product['currency']?.toString() ?? 'SYP';
 
-    // Images: handle multiple possible field names from backend
     List<String> images = [];
 
-    // Try 'image_urls' first (what frontend expects)
     final imageUrls = product['image_urls'];
     if (imageUrls is List) {
       images = imageUrls
@@ -97,7 +93,6 @@ class _AddProductScreenState extends State<AddProductScreen> {
           .toList();
     }
 
-    // Fallback to 'images' (JSONB array from backend)
     if (images.isEmpty) {
       final rawImages = product['images'];
       if (rawImages is List) {
@@ -118,7 +113,6 @@ class _AddProductScreenState extends State<AddProductScreen> {
       }
     }
 
-    // Fallback to single 'image_url'
     if (images.isEmpty) {
       final singleUrl = product['image_url']?.toString();
       if (singleUrl != null && singleUrl.isNotEmpty) {
@@ -128,7 +122,6 @@ class _AddProductScreenState extends State<AddProductScreen> {
 
     _existingImages = images;
 
-    // Categories: handle various formats
     final rawCats = product['category_ids'] ?? product['category_id'];
     if (rawCats is List) {
       _categoryIds = rawCats.whereType<int>().toList();
@@ -159,9 +152,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
             _existingBarcodeProduct = null;
           });
       }
-    } catch (_) {
-      // Silently fail validation; backend will enforce on save
-    }
+    } catch (_) {}
   }
 
   void _handleNewImages(List<File> files) {
@@ -238,7 +229,6 @@ class _AddProductScreenState extends State<AddProductScreen> {
 
     int? storeId = await ApiService.getMyStoreId();
 
-    // Fallback: try cached store if context is empty
     if (storeId == null) {
       try {
         final cachedStore = await OfflineService.getCachedStore();
@@ -251,11 +241,9 @@ class _AddProductScreenState extends State<AddProductScreen> {
       return;
     }
 
-    // Check connectivity AND try a quick server ping
     final connectivity = await Connectivity().checkConnectivity();
     final hasNetwork = !connectivity.contains(ConnectivityResult.none);
 
-    // Try server ping — if server is down, treat as offline even with network
     bool isOnline = false;
     if (hasNetwork) {
       try {
@@ -271,7 +259,6 @@ class _AddProductScreenState extends State<AddProductScreen> {
     // ==================== OFFLINE ====================
     if (!isOnline) {
       if (widget.product != null) {
-        // Offline EDIT
         final serverId = widget.product!['id'] is int
             ? widget.product!['id'] as int
             : int.tryParse(widget.product!['id'].toString()) ?? 0;
@@ -325,8 +312,6 @@ class _AddProductScreenState extends State<AddProductScreen> {
           });
         }
       } else {
-        // Offline CREATE
-        // Store single category_id for backward compatibility with pending_products schema
         final singleCategoryId = _categoryIds.isNotEmpty
             ? _categoryIds.first
             : null;
@@ -337,32 +322,11 @@ class _AddProductScreenState extends State<AddProductScreen> {
           'description': _descCtrl.text.trim(),
           'barcode': barcode,
           'category_id': singleCategoryId,
-          'category_ids':
-              _categoryIds, // Keep full list for future multi-category support
+          'category_ids': _categoryIds,
           'currency': _currencyCtrl.text.trim(),
           'image_paths': _newImages.map((f) => f.path).toList(),
           'action': 'create',
         }, storeId);
-
-        // Optimistic: add to cache immediately so UI shows it
-        final tempId = DateTime.now().millisecondsSinceEpoch;
-        await OfflineService.cacheProducts(storeId, [
-          {
-            'id': 'pending_$tempId',
-            'name': name,
-            'price': price,
-            'quantity': qty,
-            'description': _descCtrl.text.trim(),
-            'barcode': barcode,
-            'category_id': singleCategoryId,
-            'currency': _currencyCtrl.text.trim(),
-            'image_url': _newImages.isNotEmpty ? _newImages.first.path : null,
-            'images': _newImages.map((f) => f.path).toList(),
-            'low_stock_threshold': 5,
-            'updated_at': DateTime.now().toIso8601String(),
-            '_pendingCreate': true,
-          },
-        ]);
 
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -558,7 +522,6 @@ class _AddProductScreenState extends State<AddProductScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    // ── Images Section ──
                     _buildSectionHeader(
                       context,
                       Icons.image_outlined,
@@ -631,7 +594,6 @@ class _AddProductScreenState extends State<AddProductScreen> {
                     ),
                     const SizedBox(height: 28),
 
-                    // ── Basic Info Section ──
                     _buildSectionHeader(
                       context,
                       Icons.info_outline,
@@ -654,7 +616,6 @@ class _AddProductScreenState extends State<AddProductScreen> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
-                          // Name
                           TextFormField(
                             controller: _nameCtrl,
                             textDirection: TextDirection.ltr,
@@ -674,7 +635,6 @@ class _AddProductScreenState extends State<AddProductScreen> {
                           ),
                           const SizedBox(height: 16),
 
-                          // Price, Currency & Quantity Row
                           Row(
                             children: [
                               Expanded(
@@ -766,7 +726,6 @@ class _AddProductScreenState extends State<AddProductScreen> {
                     ),
                     const SizedBox(height: 28),
 
-                    // ── Categorization Section ──
                     _buildSectionHeader(
                       context,
                       Icons.category_outlined,
@@ -851,7 +810,6 @@ class _AddProductScreenState extends State<AddProductScreen> {
                     ),
                     const SizedBox(height: 28),
 
-                    // ── Description Section ──
                     _buildSectionHeader(
                       context,
                       Icons.description_outlined,
@@ -885,7 +843,6 @@ class _AddProductScreenState extends State<AddProductScreen> {
                     ),
                     const SizedBox(height: 32),
 
-                    // ── Submit Button ──
                     GradientButton(
                       onPressed: _isLoading ? null : _save,
                       isLoading: _isLoading,

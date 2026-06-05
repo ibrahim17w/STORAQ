@@ -1,5 +1,9 @@
 // lib/screens/barcode_scanner_screen.dart
+import 'dart:io';
+
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import '../lang/translations.dart';
 
@@ -21,10 +25,17 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
   bool _torchOn = false;
   bool _isScanning = true;
   String? _lastCode;
+  bool _isDesktopUnsupported = false;
+  final TextEditingController _manualController = TextEditingController();
 
   @override
   void initState() {
     super.initState();
+    // mobile_scanner does not support Windows or Linux desktop
+    if (!kIsWeb && (Platform.isWindows || Platform.isLinux)) {
+      _isDesktopUnsupported = true;
+      return;
+    }
     _controller = MobileScannerController(
       detectionSpeed: DetectionSpeed.normal,
       facing: CameraFacing.back,
@@ -35,6 +46,7 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
   @override
   void dispose() {
     _controller?.dispose();
+    _manualController.dispose();
     super.dispose();
   }
 
@@ -49,7 +61,9 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
     // Validate format if requested
     if (widget.expectedFormat != null) {
       final format = barcode.format?.name ?? '';
-      if (!format.toLowerCase().contains(widget.expectedFormat!.toLowerCase())) {
+      if (!format.toLowerCase().contains(
+        widget.expectedFormat!.toLowerCase(),
+      )) {
         return;
       }
     }
@@ -64,9 +78,75 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
     Navigator.pop(context, code);
   }
 
+  void _submitManual() {
+    final code = _manualController.text.trim();
+    if (code.isNotEmpty) {
+      Navigator.pop(context, code);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+
+    // ── Desktop fallback: manual entry form ──
+    if (_isDesktopUnsupported) {
+      return Scaffold(
+        appBar: AppBar(
+          title: Text(t('scan_barcode')),
+          leading: IconButton(
+            icon: const Icon(Icons.close),
+            onPressed: () => Navigator.pop(context),
+          ),
+        ),
+        body: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Icon(Icons.qr_code_scanner, size: 72, color: Colors.grey),
+              const SizedBox(height: 20),
+              Text(
+                t('scanner_not_available'),
+                textAlign: TextAlign.center,
+                style: theme.textTheme.titleMedium,
+              ),
+              const SizedBox(height: 8),
+              Text(
+                t('enter_barcode_manually'),
+                textAlign: TextAlign.center,
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: Colors.grey[600],
+                ),
+              ),
+              const SizedBox(height: 32),
+              TextField(
+                controller: _manualController,
+                autofocus: true,
+                keyboardType: TextInputType.text,
+                textInputAction: TextInputAction.done,
+                decoration: InputDecoration(
+                  labelText: t('barcode'),
+                  hintText: t('enter_barcode_manually'),
+                  border: const OutlineInputBorder(),
+                  prefixIcon: const Icon(Icons.qr_code),
+                ),
+                onSubmitted: (_) => _submitManual(),
+              ),
+              const SizedBox(height: 24),
+              ElevatedButton.icon(
+                onPressed: _submitManual,
+                icon: const Icon(Icons.check),
+                label: Text(t('confirm')),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    // ── Mobile / macOS camera scanner ──
     return Scaffold(
       backgroundColor: Colors.black,
       body: Stack(
@@ -107,14 +187,20 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
                     ),
                   ),
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 6,
+                    ),
                     decoration: BoxDecoration(
                       color: Colors.black54,
                       borderRadius: BorderRadius.circular(20),
                     ),
                     child: Text(
                       t('scan_barcode'),
-                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                   ),
                   CircleAvatar(
@@ -142,7 +228,10 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
             right: 0,
             child: Center(
               child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 8,
+                ),
                 decoration: BoxDecoration(
                   color: Colors.black54,
                   borderRadius: BorderRadius.circular(20),
@@ -186,9 +275,14 @@ class _ScannerOverlayPainter extends CustomPainter {
     );
 
     // Dark overlay
-    final overlayPath = Path()..addRect(Rect.fromLTWH(0, 0, size.width, size.height));
+    final overlayPath = Path()
+      ..addRect(Rect.fromLTWH(0, 0, size.width, size.height));
     final cutoutPath = Path()..addRRect(rect);
-    final finalPath = Path.combine(PathOperation.difference, overlayPath, cutoutPath);
+    final finalPath = Path.combine(
+      PathOperation.difference,
+      overlayPath,
+      cutoutPath,
+    );
     canvas.drawPath(finalPath, Paint()..color = overlayColor);
 
     // Corner borders

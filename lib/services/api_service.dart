@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:core';
 import 'dart:typed_data';
 import 'dart:io';
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter/foundation.dart' show kDebugMode;
@@ -150,6 +151,27 @@ class ApiService {
   static Future<String?> getStoreStatus() async {
     final ctx = await getStoreContext();
     return ctx?['status']?.toString();
+  }
+
+  /// True only when the device has network and the API responds (not just Wi‑Fi).
+  static Future<bool> isServerReachable() async {
+    try {
+      final connectivity = await Connectivity()
+          .checkConnectivity()
+          .timeout(const Duration(seconds: 1));
+      if (connectivity.contains(ConnectivityResult.none)) return false;
+    } catch (_) {
+      return false;
+    }
+
+    try {
+      final response = await http
+          .head(Uri.parse('$baseUrl/api/health'))
+          .timeout(const Duration(seconds: 2));
+      return response.statusCode == 200;
+    } catch (_) {
+      return false;
+    }
   }
 
   // ============================================================

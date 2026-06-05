@@ -5,12 +5,19 @@ import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:http/http.dart' as http;
+import 'store_catalog_service.dart';
 
 class OfflineService {
-  static Database? _db;
+  static void _notifyCatalogChanged() {
+    StoreCatalogService.instance.notifyChanged();
+  }
+  // CRITICAL FIX: Use a single Future to prevent race condition where multiple
+  // callers simultaneously trigger _init(), causing SQLite file lock on Windows.
+  static Future<Database>? _dbFuture;
   static Future<Database> get db async {
-    _db ??= await _init();
-    return _db!;
+    _dbFuture ??= _init();
+    return await _dbFuture!;
   }
 
   static Future<Database> _init() async {
@@ -18,7 +25,7 @@ class OfflineService {
     final path = join(dir.path, 'market_bridge.db');
     return openDatabase(
       path,
-      version: 8, // Bumped for offline_orders table
+      version: 13,
       onCreate: (db, v) async {
         await _createTables(db);
       },
@@ -43,6 +50,21 @@ class OfflineService {
         }
         if (oldV < 8) {
           await _migrateV8(db);
+        }
+        if (oldV < 9) {
+          await _migrateV9(db);
+        }
+        if (oldV < 10) {
+          await _migrateV10(db);
+        }
+        if (oldV < 11) {
+          await _migrateV11(db);
+        }
+        if (oldV < 12) {
+          await _migrateV12(db);
+        }
+        if (oldV < 13) {
+          await _migrateV13(db);
         }
       },
     );
@@ -79,6 +101,7 @@ class OfflineService {
         barcode TEXT,
         images TEXT,
         image_url TEXT,
+        local_images TEXT,
         category_id INTEGER,
         low_stock_threshold INTEGER DEFAULT 5,
         currency TEXT DEFAULT 'SYP',
@@ -95,7 +118,6 @@ class OfflineService {
       )
     """);
 
-    // NEW: offline_orders table for completed offline orders (receipts)
     await db.execute("""
       CREATE TABLE IF NOT EXISTS offline_orders(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -112,7 +134,19 @@ class OfflineService {
         payment_method TEXT,
         notes TEXT,
         currency TEXT DEFAULT 'SYP',
-        created_at TEXT
+        created_at TEXT,
+        synced INTEGER DEFAULT 0
+      )
+    """);
+
+    await db.execute("""
+      CREATE TABLE IF NOT EXISTS cached_orders(
+        id INTEGER PRIMARY KEY,
+        receipt_number TEXT,
+        store_id INTEGER,
+        data TEXT NOT NULL,
+        created_at TEXT,
+        cached_at TEXT
       )
     """);
 
@@ -161,6 +195,16 @@ class OfflineService {
         sort_order INTEGER DEFAULT 0,
         parent_id INTEGER,
         cached_at TEXT
+      )
+    """);
+
+    await db.execute("""
+      CREATE TABLE IF NOT EXISTS product_id_map(
+        pending_row_id INTEGER PRIMARY KEY,
+        server_id INTEGER NOT NULL,
+        barcode TEXT,
+        store_id INTEGER,
+        mapped_at TEXT
       )
     """);
   }
@@ -273,6 +317,334 @@ class OfflineService {
     } catch (_) {}
   }
 
+  static Future<void> _migrateV9(Database db) async {
+    try {
+      await db.execute(
+        'ALTER TABLE cached_products ADD COLUMN local_images TEXT',
+      );
+    } catch (_) {}
+  }
+
+  static Future<void> _migrateV10(Database db) async {
+    try {
+      await db.execute(
+        'ALTER TABLE offline_orders ADD COLUMN synced INTEGER DEFAULT 0',
+      );
+    } catch (_) {}
+    await db.execute("""
+      CREATE TABLE IF NOT EXISTS cached_orders(
+        id INTEGER PRIMARY KEY,
+        receipt_number TEXT,
+        store_id INTEGER,
+        data TEXT NOT NULL,
+        created_at TEXT,
+        cached_at TEXT
+      )
+    """);
+  }
+
+  static Future<void> _migrateV11(Database db) async {
+    await db.execute("""
+      CREATE TABLE IF NOT EXISTS product_id_map(
+        pending_row_id INTEGER PRIMARY KEY,
+        server_id INTEGER NOT NULL,
+        barcode TEXT,
+        store_id INTEGER,
+        mapped_at TEXT
+      )
+    """);
+  }
+
+  static Future<void> _migrateV12(Database db) async {
+    await db.delete(
+      'offline_orders',
+      where: 'synced = ?',
+      whereArgs: [1],
+    );
+  }
+
+  static Future<void> _migrateV13(Database db) async {
+    try {
+      await db.execute('UPDATE cached_products SET local_images = NULL');
+    } catch (_) {}
+    await _deleteLegacyImageCacheFiles();
+  }
+
+  static final RegExp _legacyImageFilePattern = RegExp(
+    r'^prod_\d+_\d+\.[a-zA-Z0-9]+$',
+  );
+
+  static String _urlCacheFingerprint(String url) =>
+      url.hashCode.toUnsigned(32).toRadixString(16).padLeft(8, '0');
+
+  static int _parseQuantity(dynamic value) {
+    if (value is int) return value;
+    if (value is num) return value.round();
+    return int.tryParse(value?.toString() ?? '') ?? 0;
+  }
+
+  static Future<void> _deleteLegacyImageCacheFiles() async {
+    try {
+      final appDir = await getApplicationDocumentsDirectory();
+      final imagesDir = Directory(join(appDir.path, 'cached_images'));
+      if (!await imagesDir.exists()) return;
+      await for (final entity in imagesDir.list()) {
+        if (entity is! File) continue;
+        final name = basename(entity.path);
+        if (_legacyImageFilePattern.hasMatch(name)) {
+          try {
+            await entity.delete();
+          } catch (_) {}
+        }
+      }
+    } catch (_) {}
+  }
+
+  static Future<void> _purgeProductImageCache(int storeId, int productId) async {
+    try {
+      final appDir = await getApplicationDocumentsDirectory();
+      final imagesDir = Directory(join(appDir.path, 'cached_images'));
+      if (!await imagesDir.exists()) return;
+      final legacyPrefix = 'prod_${productId}_';
+      final storePrefix = 's${storeId}_p${productId}_';
+      await for (final entity in imagesDir.list()) {
+        if (entity is! File) continue;
+        final name = basename(entity.path);
+        if (name.startsWith(legacyPrefix) || name.startsWith(storePrefix)) {
+          try {
+            await entity.delete();
+          } catch (_) {}
+        }
+      }
+    } catch (_) {}
+  }
+
+  // ==================== PENDING → SERVER PRODUCT ID MAP ====================
+
+  static bool _syncIdsEqual(dynamic a, dynamic b) {
+    if (a == null || b == null) return false;
+    return a.toString() == b.toString();
+  }
+
+  static Future<void> saveProductIdMapping({
+    required int pendingRowId,
+    required int serverId,
+    String? barcode,
+    int? storeId,
+  }) async {
+    final database = await db;
+    await database.insert('product_id_map', {
+      'pending_row_id': pendingRowId,
+      'server_id': serverId,
+      'barcode': barcode,
+      'store_id': storeId,
+      'mapped_at': DateTime.now().toIso8601String(),
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  static Future<int?> getServerIdForPendingRow(int pendingRowId) async {
+    final database = await db;
+    final rows = await database.query(
+      'product_id_map',
+      where: 'pending_row_id = ?',
+      whereArgs: [pendingRowId],
+      limit: 1,
+    );
+    if (rows.isEmpty) return null;
+    return rows.first['server_id'] as int?;
+  }
+
+  static Future<int?> lookupServerIdByBarcode(String barcode) async {
+    if (barcode.isEmpty) return null;
+    final database = await db;
+    final mapped = await database.query(
+      'product_id_map',
+      where: 'barcode = ?',
+      whereArgs: [barcode],
+      limit: 1,
+    );
+    if (mapped.isNotEmpty) {
+      return mapped.first['server_id'] as int?;
+    }
+    final cached = await database.query(
+      'cached_products',
+      where: 'barcode = ?',
+      whereArgs: [barcode],
+      limit: 1,
+    );
+    if (cached.isNotEmpty) {
+      return cached.first['id'] as int?;
+    }
+    return null;
+  }
+
+  /// Resolves pending_* IDs and string IDs to a server product id when possible.
+  static Future<int?> resolveServerProductId(
+    dynamic productId, {
+    String? barcode,
+  }) async {
+    final pidStr = productId?.toString().trim() ?? '';
+    if (pidStr.isEmpty) {
+      return barcode != null ? lookupServerIdByBarcode(barcode) : null;
+    }
+
+    if (pidStr.startsWith('pending_')) {
+      final rowId = int.tryParse(pidStr.replaceFirst('pending_', ''));
+      if (rowId != null) {
+        final mapped = await getServerIdForPendingRow(rowId);
+        if (mapped != null) return mapped;
+      }
+      return barcode != null ? lookupServerIdByBarcode(barcode) : null;
+    }
+
+    int? parsedId;
+    if (productId is int) {
+      parsedId = productId;
+    } else if (productId is double) {
+      parsedId = productId.toInt();
+    } else {
+      parsedId = int.tryParse(pidStr);
+      parsedId ??= double.tryParse(pidStr)?.toInt();
+    }
+    if (parsedId != null && parsedId > 0) return parsedId;
+
+    return barcode != null ? lookupServerIdByBarcode(barcode) : null;
+  }
+
+  static Future<Map<String, dynamic>> _remapOrderItemsList(
+    List<dynamic> itemsRaw,
+  ) async {
+    var changed = false;
+    final items = <Map<String, dynamic>>[];
+    for (final raw in itemsRaw) {
+      final map = raw is Map<String, dynamic>
+          ? Map<String, dynamic>.from(raw)
+          : <String, dynamic>{};
+      final barcode = map['barcode']?.toString();
+      final resolved = await resolveServerProductId(
+        map['product_id'] ?? map['id'] ?? map['productId'],
+        barcode: barcode,
+      );
+      if (resolved != null) {
+        final current = map['product_id'] ?? map['id'];
+        if (current?.toString() != resolved.toString()) {
+          map['product_id'] = resolved;
+          changed = true;
+        }
+      }
+      items.add(map);
+    }
+    return {'items': items, 'changed': changed};
+  }
+
+  /// Rewrites queued receipts so pending_* product ids become real server ids.
+  static Future<int> remapAllQueuedOrderItems() async {
+    final database = await db;
+    var remappedOrders = 0;
+
+    final pendingRows = await database.query(
+      'pending_orders',
+      where: 'synced = ?',
+      whereArgs: [0],
+    );
+    for (final row in pendingRows) {
+      try {
+        final orderData =
+            jsonDecode(row['order_data'] as String) as Map<String, dynamic>;
+        final itemsRaw = orderData['items'] as List<dynamic>? ?? [];
+        final result = await _remapOrderItemsList(itemsRaw);
+        if (result['changed'] == true) {
+          orderData['items'] = result['items'];
+          await database.update(
+            'pending_orders',
+            {'order_data': jsonEncode(orderData)},
+            where: 'id = ?',
+            whereArgs: [row['id']],
+          );
+          remappedOrders++;
+        }
+      } catch (_) {}
+    }
+
+    final offlineRows = await database.query('offline_orders');
+    for (final row in offlineRows) {
+      try {
+        final itemsRaw =
+            jsonDecode(row['items'] as String) as List<dynamic>? ?? [];
+        final result = await _remapOrderItemsList(itemsRaw);
+        if (result['changed'] == true) {
+          await database.update(
+            'offline_orders',
+            {'items': jsonEncode(result['items'])},
+            where: 'id = ?',
+            whereArgs: [row['id']],
+          );
+        }
+      } catch (_) {}
+    }
+
+    return remappedOrders;
+  }
+
+  // ==================== IMAGE CACHING (NON-BLOCKING) ====================
+  // CRITICAL FIX: Replaced all sync file operations (existsSync/lengthSync)
+  // with async versions (exists/length) and added event-loop yielding.
+  // On Windows, sync file I/O in a tight loop blocks the Dart event loop,
+  // causing "Not Responding" freezes.
+
+  static Future<List<String>> _cacheProductImages(
+    int storeId,
+    int productId,
+    List<String> imageUrls,
+  ) async {
+    await _purgeProductImageCache(storeId, productId);
+
+    final appDir = await getApplicationDocumentsDirectory();
+    final imagesDir = Directory(join(appDir.path, 'cached_images'));
+    if (!await imagesDir.exists()) {
+      await imagesDir.create(recursive: true);
+    }
+
+    final localPaths = <String>[];
+    for (int i = 0; i < imageUrls.length; i++) {
+      final url = imageUrls[i].trim();
+      if (url.isEmpty || !url.startsWith('http')) continue;
+
+      try {
+        final uri = Uri.parse(url);
+        final ext = uri.path.split('.').last.split('?').first;
+        final safeExt =
+            ['jpg', 'jpeg', 'png', 'gif', 'webp'].contains(ext.toLowerCase())
+            ? ext
+            : 'jpg';
+        final urlKey = _urlCacheFingerprint(url);
+        final fileName = 's${storeId}_p${productId}_${urlKey}_$i.$safeExt';
+        final filePath = join(imagesDir.path, fileName);
+        final file = File(filePath);
+
+        final response = await http
+            .get(uri)
+            .timeout(const Duration(seconds: 8));
+        if (response.statusCode == 200) {
+          await file.writeAsBytes(response.bodyBytes);
+        }
+        if (await file.exists()) {
+          final length = await file.length();
+          if (length > 0) {
+            localPaths.add(filePath);
+          }
+        }
+      } catch (_) {
+        // Skip images that fail to download - app stays responsive
+      }
+
+      if (i % 2 == 1) {
+        await Future.delayed(Duration.zero);
+      }
+    }
+    return localPaths;
+  }
+
   // ==================== OFFLINE ORDERS (RECEIPTS) ====================
 
   static Future<int> saveOfflineOrder(Map<String, dynamic> orderData) async {
@@ -292,13 +664,18 @@ class OfflineService {
       'notes': orderData['notes'],
       'currency': orderData['currency'] ?? 'SYP',
       'created_at': orderData['created_at'] ?? DateTime.now().toIso8601String(),
+      'synced': 0,
     });
   }
 
-  static Future<List<Map<String, dynamic>>> getOfflineOrders() async {
+  static Future<List<Map<String, dynamic>>> getOfflineOrders({
+    bool unsyncedOnly = true,
+  }) async {
     final database = await db;
     final rows = await database.query(
       'offline_orders',
+      where: unsyncedOnly ? 'synced = ?' : null,
+      whereArgs: unsyncedOnly ? [0] : null,
       orderBy: 'created_at DESC',
     );
     return rows.map((r) {
@@ -306,8 +683,68 @@ class OfflineService {
       map['items'] = jsonDecode(map['items']);
       map['id'] = 'offline_${map['id']}';
       map['offline'] = true;
+      map['pending_sync'] = (map['synced'] as int? ?? 0) == 0;
       return map;
     }).toList();
+  }
+
+  static Future<void> markOfflineOrderSynced(String receiptNumber) async {
+    await deleteOfflineOrderByReceipt(receiptNumber);
+  }
+
+  /// Removes local offline copy after it exists on the server (avoids duplicate history).
+  static Future<void> deleteOfflineOrderByReceipt(String receiptNumber) async {
+    final database = await db;
+    await database.delete(
+      'offline_orders',
+      where: 'receipt_number = ?',
+      whereArgs: [receiptNumber],
+    );
+  }
+
+  // ==================== CACHED SERVER ORDERS (order history offline) ====================
+
+  static Future<void> cacheOrders(List<dynamic> orders) async {
+    if (orders.isEmpty) return;
+    final database = await db;
+    final batch = database.batch();
+    final now = DateTime.now().toIso8601String();
+    for (final raw in orders) {
+      if (raw is! Map<String, dynamic>) continue;
+      final id = raw['id'];
+      if (id == null) continue;
+      final intId = id is int ? id : int.tryParse(id.toString());
+      if (intId == null) continue;
+      batch.insert('cached_orders', {
+        'id': intId,
+        'receipt_number': raw['receipt_number']?.toString(),
+        'store_id': raw['store_id'],
+        'data': jsonEncode(raw),
+        'created_at': raw['created_at']?.toString() ?? now,
+        'cached_at': now,
+      }, conflictAlgorithm: ConflictAlgorithm.replace);
+    }
+    await batch.commit(noResult: true);
+  }
+
+  static Future<List<Map<String, dynamic>>> getCachedOrders({
+    int limit = 200,
+    int offset = 0,
+  }) async {
+    final database = await db;
+    final rows = await database.query(
+      'cached_orders',
+      orderBy: 'created_at DESC',
+      limit: limit,
+      offset: offset,
+    );
+    return rows.map((r) {
+      try {
+        return jsonDecode(r['data'] as String) as Map<String, dynamic>;
+      } catch (_) {
+        return <String, dynamic>{};
+      }
+    }).where((m) => m.isNotEmpty).toList();
   }
 
   // ==================== CATEGORIES CACHE ====================
@@ -387,6 +824,7 @@ class OfflineService {
       where: 'store_id = ?',
       whereArgs: [storeId],
     );
+    _notifyCatalogChanged();
   }
 
   // ==================== USER CACHE (SharedPreferences) ====================
@@ -407,6 +845,8 @@ class OfflineService {
   }
 
   // ==================== PRODUCT CACHE ====================
+  // CRITICAL FIX: Limit concurrent image downloads to 3 at a time to
+  // prevent Windows file-system contention when many products have images.
 
   static Future<void> cacheProducts(int storeId, List<dynamic> products) async {
     final database = await db;
@@ -431,6 +871,52 @@ class OfflineService {
       }, conflictAlgorithm: ConflictAlgorithm.replace);
     }
     await batch.commit(noResult: true);
+    _notifyCatalogChanged();
+
+    // Process image downloads with limited concurrency (max 3 parallel)
+    final imageFutures = <Future<void>>[];
+    for (final p in products) {
+      final id = p['id'];
+      if (id == null) continue;
+      final intId = id is int ? id : int.tryParse(id.toString()) ?? 0;
+
+      List<String> urls = [];
+      final images = p['images'];
+      if (images is List) {
+        urls = images.whereType<String>().where((u) => u.isNotEmpty).toList();
+      }
+      final imageUrl = p['image_url'];
+      if (urls.isEmpty && imageUrl is String && imageUrl.isNotEmpty) {
+        urls = [imageUrl];
+      }
+
+      if (urls.isNotEmpty) {
+        imageFutures.add(() async {
+          final localPaths = await _cacheProductImages(storeId, intId, urls);
+          try {
+            final db = await OfflineService.db;
+            await db.update(
+              'cached_products',
+              {
+                'local_images': localPaths.isNotEmpty
+                    ? jsonEncode(localPaths)
+                    : null,
+              },
+              where: 'id = ? AND store_id = ?',
+              whereArgs: [intId, storeId],
+            );
+          } catch (_) {}
+        }());
+        // Limit to 3 concurrent downloads
+        if (imageFutures.length >= 3) {
+          await Future.wait(imageFutures);
+          imageFutures.clear();
+        }
+      }
+    }
+    if (imageFutures.isNotEmpty) {
+      await Future.wait(imageFutures);
+    }
   }
 
   static Future<List<Map<String, dynamic>>> getCachedProducts({
@@ -452,6 +938,11 @@ class OfflineService {
           map['images'] = jsonDecode(map['images']);
         } catch (_) {}
       }
+      if (map['local_images'] != null) {
+        try {
+          map['local_images'] = jsonDecode(map['local_images']);
+        } catch (_) {}
+      }
       return map;
     }).toList();
   }
@@ -468,6 +959,11 @@ class OfflineService {
     if (map['images'] != null) {
       try {
         map['images'] = jsonDecode(map['images']);
+      } catch (_) {}
+    }
+    if (map['local_images'] != null) {
+      try {
+        map['local_images'] = jsonDecode(map['local_images']);
       } catch (_) {}
     }
     return map;
@@ -495,11 +991,24 @@ class OfflineService {
       where: 'id = ?',
       whereArgs: [intId],
     );
+    _notifyCatalogChanged();
   }
 
   static Future<void> removeCachedProduct(int id) async {
     final database = await db;
+    final rows = await database.query(
+      'cached_products',
+      columns: ['store_id'],
+      where: 'id = ?',
+      whereArgs: [id],
+      limit: 1,
+    );
+    final storeId = rows.isNotEmpty ? rows.first['store_id'] as int? : null;
+    if (storeId != null) {
+      await _purgeProductImageCache(storeId, id);
+    }
     await database.delete('cached_products', where: 'id = ?', whereArgs: [id]);
+    _notifyCatalogChanged();
   }
 
   static Future<void> updateLocalStock(int productId, int delta) async {
@@ -507,7 +1016,7 @@ class OfflineService {
 
     final product = await getCachedProduct(productId);
     if (product != null) {
-      final newQty = (product['quantity'] as int? ?? 0) + delta;
+      final newQty = _parseQuantity(product['quantity']) + delta;
       await database.update(
         'cached_products',
         {'quantity': newQty.clamp(0, 999999)},
@@ -521,22 +1030,83 @@ class OfflineService {
       'delta': delta,
       'created_at': DateTime.now().toIso8601String(),
     });
+    _notifyCatalogChanged();
   }
 
-  /// Updates cached stock WITHOUT creating a sync record.
-  /// Use this for offline checkout so stock changes are not double-applied on sync.
   static Future<void> adjustCachedStockOnly(int productId, int delta) async {
     final database = await db;
     final product = await getCachedProduct(productId);
     if (product != null) {
-      final newQty = (product['quantity'] as int? ?? 0) + delta;
+      final newQty = _parseQuantity(product['quantity']) + delta;
       await database.update(
         'cached_products',
         {'quantity': newQty.clamp(0, 999999)},
         where: 'id = ?',
         whereArgs: [productId],
       );
+      _notifyCatalogChanged();
     }
+  }
+
+  /// Sales adjust server stock via order sync — drop queued deltas for those products.
+  static Future<void> discardUnsyncedStockChangesForProducts(
+    List<int> productIds,
+  ) async {
+    if (productIds.isEmpty) return;
+    final database = await db;
+    for (final pid in productIds) {
+      await database.delete(
+        'offline_stock_changes',
+        where: 'product_id = ? AND synced = ?',
+        whereArgs: [pid, 0],
+      );
+    }
+  }
+
+  /// Decrements stock after a sale (queues server sync for synced products).
+  static Future<void> adjustProductStockForSale(
+    dynamic productId,
+    int soldQuantity,
+  ) async {
+    final delta = -soldQuantity.abs();
+    if (productId is String && productId.startsWith('pending_')) {
+      final pendingId = int.tryParse(productId.replaceFirst('pending_', ''));
+      if (pendingId != null) {
+        await _adjustPendingRowQuantity(pendingId, delta);
+      }
+      return;
+    }
+    final intId = productId is int
+        ? productId
+        : int.tryParse(productId?.toString() ?? '');
+    if (intId != null && intId > 0) {
+      await updateLocalStock(intId, delta);
+    }
+  }
+
+  static Future<void> _adjustPendingRowQuantity(
+    int pendingRowId,
+    int delta,
+  ) async {
+    final database = await db;
+    final rows = await database.query(
+      'pending_products',
+      where: 'id = ?',
+      whereArgs: [pendingRowId],
+      limit: 1,
+    );
+    if (rows.isEmpty) return;
+    final current = rows.first['quantity'];
+    final qty = current is int
+        ? current
+        : int.tryParse(current?.toString() ?? '0') ?? 0;
+    await database.update(
+      'pending_products',
+      {'quantity': (qty + delta).clamp(0, 999999)},
+      where: 'id = ?',
+      whereArgs: [pendingRowId],
+    );
+    _notifyCatalogChanged();
   }
 
   // ==================== PENDING PRODUCTS ====================
@@ -546,13 +1116,19 @@ class OfflineService {
     int storeId,
   ) async {
     final database = await db;
-    return database.insert('pending_products', {
+    final id = await database.insert('pending_products', {
       'store_id': storeId,
       'name': product['name'],
       'price': product['price'],
       'quantity': product['quantity'],
       'description': product['description'],
       'barcode': product['barcode'],
+      'category_id': product['category_id'],
+      'category_ids': product['category_ids'] != null
+          ? (product['category_ids'] is String
+              ? product['category_ids']
+              : jsonEncode(product['category_ids']))
+          : null,
       'image_path': product['image_path'],
       'image_paths': product['image_paths'] != null
           ? jsonEncode(product['image_paths'])
@@ -560,6 +1136,8 @@ class OfflineService {
       'action': product['action'] ?? 'create',
       'created_at': DateTime.now().toIso8601String(),
     });
+    _notifyCatalogChanged();
+    return id;
   }
 
   static Future<int> addPendingUpdate(
@@ -583,6 +1161,7 @@ class OfflineService {
       'action': 'update',
       'created_at': DateTime.now().toIso8601String(),
     });
+    _notifyCatalogChanged();
   }
 
   static Future<void> addPendingDelete(int productId, int storeId) async {
@@ -592,6 +1171,7 @@ class OfflineService {
       'store_id': storeId,
       'created_at': DateTime.now().toIso8601String(),
     });
+    _notifyCatalogChanged();
   }
 
   static Future<List<Map<String, dynamic>>> getPendingCreates({
@@ -663,22 +1243,26 @@ class OfflineService {
   static Future<void> removePending(int id) async {
     final database = await db;
     await database.delete('pending_products', where: 'id = ?', whereArgs: [id]);
+    _notifyCatalogChanged();
   }
 
   static Future<void> clearPendingProduct(int id) async {
     final database = await db;
     await database.delete('pending_products', where: 'id = ?', whereArgs: [id]);
+    _notifyCatalogChanged();
   }
 
   static Future<void> clearPendingDelete(int id) async {
     final database = await db;
     await database.delete('pending_deletes', where: 'id = ?', whereArgs: [id]);
+    _notifyCatalogChanged();
   }
 
   static Future<void> clearPending() async {
     final database = await db;
     await database.delete('pending_products');
     await database.delete('pending_deletes');
+    _notifyCatalogChanged();
   }
 
   static Future<int> pendingCount() async {
@@ -736,31 +1320,12 @@ class OfflineService {
     }
 
     final products = <Map<String, dynamic>>[];
+    final cachedNames = <String>{};
 
     for (final row in cachedRows) {
-      final id = row['id'] as int;
+      final id = row['id'];
+      if (id is String) continue;
       if (pendingDeleteIds.contains(id)) continue;
-
-      // Skip orphaned temp cached products from old bug.
-      // Temp offline-created products had local file paths in image_url/images
-      // instead of HTTP URLs. After sync they remain as ghosts with different IDs.
-      final imageUrl = row['image_url'] as String?;
-      if (imageUrl != null &&
-          imageUrl.isNotEmpty &&
-          !imageUrl.startsWith('http')) {
-        continue;
-      }
-      final imagesJson = row['images'] as String?;
-      if (imagesJson != null && imagesJson.isNotEmpty) {
-        try {
-          final imagesList = jsonDecode(imagesJson) as List<dynamic>;
-          if (imagesList.any(
-            (img) => img is String && img.isNotEmpty && !img.startsWith('http'),
-          )) {
-            continue;
-          }
-        } catch (_) {}
-      }
 
       final map = Map<String, dynamic>.from(row);
       if (map['images'] != null) {
@@ -768,7 +1333,13 @@ class OfflineService {
           map['images'] = jsonDecode(map['images']);
         } catch (_) {}
       }
+      if (map['local_images'] != null) {
+        try {
+          map['local_images'] = jsonDecode(map['local_images']);
+        } catch (_) {}
+      }
       products.add(map);
+      cachedNames.add((map['name'] as String? ?? '').toLowerCase().trim());
     }
 
     final updateRows = await database.query(
@@ -787,11 +1358,17 @@ class OfflineService {
         final pending = updateMap[id]!;
         products[i]['name'] = pending['name'];
         products[i]['price'] = pending['price'];
-        products[i]['quantity'] = pending['quantity'];
+        products[i]['quantity'] = _parseQuantity(pending['quantity']);
         products[i]['description'] = pending['description'];
         products[i]['barcode'] = pending['barcode'];
         products[i]['currency'] = pending['currency'];
         products[i]['_pendingUpdate'] = true;
+        final updateImages = _pendingImagePathsFromRow(pending);
+        if (updateImages.isNotEmpty) {
+          products[i]['local_images'] = updateImages;
+          products[i]['images'] = updateImages;
+          products[i]['image_url'] = updateImages.first;
+        }
       }
     }
 
@@ -805,13 +1382,69 @@ class OfflineService {
       final map = Map<String, dynamic>.from(row);
       map['id'] = 'pending_${map['id']}';
       map['_pendingCreate'] = true;
+
+      final rawPaths = map['image_paths'];
+      List<String> paths = [];
+      if (rawPaths is String) {
+        try {
+          paths = (jsonDecode(rawPaths) as List<dynamic>)
+              .whereType<String>()
+              .toList();
+        } catch (_) {}
+      } else if (rawPaths is List) {
+        paths = rawPaths.whereType<String>().toList();
+      }
+      if (paths.isNotEmpty) {
+        map['local_images'] = paths;
+        map['images'] = paths;
+        map['image_url'] = paths.first;
+      }
+
+      final pendingName = (map['name'] as String? ?? '').toLowerCase().trim();
+      if (pendingName.isNotEmpty && cachedNames.contains(pendingName)) {
+        continue;
+      }
+
       products.add(map);
     }
 
     return products;
   }
 
+  static List<String> _pendingImagePathsFromRow(Map<String, dynamic> row) {
+    final paths = <String>[];
+
+    void addPath(dynamic value) {
+      if (value is String && value.isNotEmpty) {
+        paths.add(value);
+      }
+    }
+
+    final rawPaths = row['image_paths'];
+    if (rawPaths is String) {
+      try {
+        for (final item in jsonDecode(rawPaths) as List<dynamic>) {
+          addPath(item);
+        }
+      } catch (_) {}
+    } else if (rawPaths is List) {
+      for (final item in rawPaths) {
+        addPath(item);
+      }
+    }
+
+    addPath(row['image_path']);
+
+    return paths;
+  }
+
   // ==================== PENDING ORDERS (SYNC QUEUE) ====================
+
+  /// Persists receipt locally and queues it for server sync.
+  static Future<void> saveOrderForOffline(Map<String, dynamic> orderData) async {
+    await saveOfflineOrder(orderData);
+    await queueOrder(orderData);
+  }
 
   static Future<int> queueOrder(Map<String, dynamic> orderData) async {
     final database = await db;
@@ -846,6 +1479,7 @@ class OfflineService {
       whereArgs: [id],
     );
   }
+
 
   static Future<void> removePendingOrder(int id) async {
     final database = await db;
@@ -922,5 +1556,80 @@ class OfflineService {
     final raw = rows.first['last_sync_at'] as String?;
     if (raw == null) return null;
     return DateTime.tryParse(raw);
+  }
+
+  // ==================== IMAGE PATH RESOLUTION ====================
+  // CRITICAL FIX: This helper prefers local cached images over remote URLs.
+  // UI widgets should call this instead of reading image_url/images directly.
+  //
+  // ADDITIONAL FIX: Strips file:// prefix from paths so File() constructor
+  // works correctly on all platforms (especially Windows where file://C:\...
+  // is not a valid native path).
+
+  static bool _isLegacyCollisionImagePath(String path) {
+    return _legacyImageFilePattern.hasMatch(basename(path));
+  }
+
+  static List<String> getProductImagePaths(Map<String, dynamic> product) {
+    final isPendingCreate = product['_pendingCreate'] == true;
+
+    final local = product['local_images'];
+    List<String> candidates = [];
+
+    if (local is List && local.isNotEmpty) {
+      candidates = local
+          .whereType<String>()
+          .where((p) => p.isNotEmpty)
+          .where((p) => !_isLegacyCollisionImagePath(p))
+          .toList();
+    }
+
+    if (isPendingCreate) {
+      if (candidates.isEmpty) {
+        final single = product['image_path'];
+        if (single is String && single.isNotEmpty) {
+          candidates = [single];
+        }
+      }
+      return candidates.map((path) {
+        if (path.startsWith('file://')) return path.substring(7);
+        return path;
+      }).toList();
+    }
+
+    if (candidates.isEmpty) {
+      final images = product['images'];
+      if (images is List && images.isNotEmpty) {
+        candidates = images
+            .whereType<String>()
+            .where((p) => p.isNotEmpty)
+            .toList();
+      }
+    }
+
+    if (candidates.isEmpty) {
+      final url = product['image_url'];
+      if (url is String && url.isNotEmpty) {
+        candidates = [url];
+      }
+    }
+
+    if (candidates.isEmpty) {
+      final single = product['image_path'];
+      if (single is String && single.isNotEmpty) {
+        candidates = [single];
+      }
+    }
+
+    // CRITICAL FIX: Strip file:// prefix from all paths.
+    // The file:// URI scheme is valid for URIs but NOT for dart:io File paths.
+    // On Windows, File('file://C:\\Users\\...') fails because the OS
+    // doesn't understand the file:// prefix in native file APIs.
+    return candidates.map((path) {
+      if (path.startsWith('file://')) {
+        return path.substring(7);
+      }
+      return path;
+    }).toList();
   }
 }

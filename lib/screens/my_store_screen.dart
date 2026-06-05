@@ -1,5 +1,6 @@
 // lib/screens/my_store_screen.dart
-// FIXED: Better offline loading with storeId fallback, no crashes on empty data
+// FIXED: Image resolution now uses centralized CachedAppImage widget
+// to properly display both cached server images and offline pending images.
 
 import 'dart:async';
 import 'package:flutter/material.dart';
@@ -7,6 +8,7 @@ import 'package:connectivity_plus/connectivity_plus.dart';
 import '../services/api_service.dart';
 import '../services/offline_service.dart';
 import '../lang/translations.dart';
+import '../widgets/cached_image.dart';
 import 'add_product_screen.dart';
 import 'product_detail_screen.dart';
 import 'dart:convert';
@@ -31,9 +33,7 @@ class _MyStoreScreenState extends State<MyStoreScreen>
   bool _needsRefresh = false;
   bool _isOwner = false;
   bool _canManageInventory = false;
-  bool _showStaffSection = false;
 
-  // Offline state
   bool _isOffline = false;
   int _pendingCount = 0;
 
@@ -56,19 +56,19 @@ class _MyStoreScreenState extends State<MyStoreScreen>
   }
 
   Future<void> _initConnectivity() async {
-    final result = await Connectivity().checkConnectivity();
-    _updateConnectivity(result);
-    Connectivity().onConnectivityChanged.listen(
-      (results) => _updateConnectivity(results),
-    );
+    await _refreshReachability();
+    Connectivity().onConnectivityChanged.listen((_) {
+      unawaited(_refreshReachability());
+    });
   }
 
-  void _updateConnectivity(List<ConnectivityResult> results) {
+  Future<void> _refreshReachability() async {
+    final online = await ApiService.isServerReachable();
     final wasOffline = _isOffline;
-    setState(() => _isOffline = results.contains(ConnectivityResult.none));
-    if (wasOffline && !_isOffline) {
-      // Came back online — auto-sync
-      _syncAllPending();
+    if (!mounted) return;
+    setState(() => _isOffline = !online);
+    if (wasOffline && online) {
+      unawaited(_syncAllPending());
     }
   }
 
@@ -77,7 +77,6 @@ class _MyStoreScreenState extends State<MyStoreScreen>
     _canManageInventory = await ApiService.canManageInventory();
   }
 
-  /// Called when app lifecycle changes. When resumed, check if we need refresh.
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed && _needsRefresh) {
@@ -86,13 +85,11 @@ class _MyStoreScreenState extends State<MyStoreScreen>
     }
   }
 
-  /// Called when dependencies change — also when returning from navigation
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
     if (_needsRefresh) {
       _needsRefresh = false;
-      // Use microtask to avoid setState during build
       scheduleMicrotask(() => _loadData());
     }
   }
@@ -105,29 +102,23 @@ class _MyStoreScreenState extends State<MyStoreScreen>
     });
 
     try {
-      // Step 1: Get store (try server, then cache, then context fallback)
       final store = await StoreService.getMyStore();
       final storeId = store['id'] as int;
 
-      // Step 2: Load everything in PARALLEL (products, staff, pending count)
       final results = await Future.wait([
-        _isOffline
-            ? OfflineService.getMergedProducts(storeId)
-            : ProductService.fetchProducts(
-                storeId,
-                useCache: false,
-              ).catchError((_) => OfflineService.getMergedProducts(storeId)),
+        ProductService.loadStoreCatalog(
+          storeId,
+          forceRefresh: !_isOffline,
+        ),
         ApiService.isStoreOwner().catchError((_) => false),
         OfflineService.pendingProductChangeCount().catchError((_) => 0),
-        // Staff only loads if owner — wrapped to not block others
-        Future.value(null), // placeholder, loaded separately if needed
+        Future.value(null),
       ]);
 
       List<dynamic> products = results[0] as List<dynamic>;
       final isOwner = results[1] as bool;
       final pending = results[2] as int;
 
-      // Load staff in parallel with setting state (non-blocking)
       List<dynamic> staff = [];
       if (isOwner) {
         StoreService.fetchMyStoreStaff()
@@ -142,15 +133,13 @@ class _MyStoreScreenState extends State<MyStoreScreen>
           _store = store;
           _products = products;
           _isOwner = isOwner;
-          _canManageInventory =
-              isOwner; // Owner always can; staff check done in _loadPermissions
+          _canManageInventory = isOwner;
           _pendingCount = pending;
           _staff = staff;
           _loading = false;
         });
       }
     } catch (e) {
-      // getMyStore() already tried cache and context fallback — if all failed, we have nothing
       if (mounted) {
         setState(() {
           _error =
@@ -168,17 +157,14 @@ class _MyStoreScreenState extends State<MyStoreScreen>
       context,
       MaterialPageRoute(builder: (_) => const AddProductScreen()),
     );
-    // ALWAYS refresh when returning — product may have been added
     _needsRefresh = false;
     await _loadData();
   }
 
   Future<void> _navigateToEditProduct(Map<String, dynamic> product) async {
     _needsRefresh = true;
-    // FIXED: Ensure all required fields are present for editing
     final editProduct = Map<String, dynamic>.from(product);
 
-    // Normalize image fields — backend may return 'images' (JSONB) or 'image_urls'
     final images = product['images'];
     final imageUrls = product['image_urls'];
     if (imageUrls == null && images != null) {
@@ -196,7 +182,6 @@ class _MyStoreScreenState extends State<MyStoreScreen>
       }
     }
 
-    // Ensure category_ids is a list
     final categoryIds = product['category_ids'] ?? product['category_id'];
     if (categoryIds != null && editProduct['category_ids'] == null) {
       if (categoryIds is List) {
@@ -206,7 +191,6 @@ class _MyStoreScreenState extends State<MyStoreScreen>
       }
     }
 
-    // Ensure price is properly typed
     if (product['price'] != null) {
       editProduct['price'] = product['price'].toString();
     }
@@ -235,27 +219,53 @@ class _MyStoreScreenState extends State<MyStoreScreen>
     setState(() => _loading = true);
     try {
       final storeId = _store?['id'] as int?;
-      if (storeId != null) {
-        await ProductService.syncPendingChanges(storeId);
+      if (storeId == null) {
+        throw Exception(t('no_store_found') ?? 'No store found');
       }
 
-      // Also sync offline orders
-      await _syncOfflineOrders();
+      final result = await ProductService.syncStore(storeId);
+      final productSummary = result['products'] as Map<String, dynamic>? ?? {};
+      final orderResult = result['orders'] as Map<String, dynamic>? ?? {};
+      final productErr = productSummary['error']?.toString();
+      final orderSynced = orderResult['synced'] as int? ?? 0;
+      final orderFailed = orderResult['failed'] as int? ?? 0;
+      final orderErr = orderResult['lastError']?.toString();
+      final productFailed = productSummary['failed'] as int? ?? 0;
 
       await _loadData();
 
-      if (mounted) {
+      if (!mounted) return;
+
+      if (productErr != null && productFailed > 0) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(t('synced') ?? 'Sync complete'),
-            backgroundColor: Colors.green,
+            content: Text(productErr),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 5),
           ),
         );
+        return;
       }
+
+      final msg = orderFailed > 0 && orderErr != null
+          ? '${t('synced') ?? 'Synced'} products. Orders: $orderSynced ok, $orderFailed failed.\n$orderErr'
+          : '${t('synced') ?? 'Sync complete'} — orders: $orderSynced';
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(msg),
+          backgroundColor: orderFailed > 0 ? Colors.orange : Colors.green,
+          duration: Duration(seconds: orderFailed > 0 ? 6 : 3),
+        ),
+      );
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(e.toString()), backgroundColor: Colors.red),
+          SnackBar(
+            content: Text(e.toString().replaceFirst('Exception: ', '')),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 5),
+          ),
         );
       }
     } finally {
@@ -270,31 +280,12 @@ class _MyStoreScreenState extends State<MyStoreScreen>
     int synced = 0;
     int failed = 0;
 
-    for (final order in pending) {
-      try {
-        final orderData = order['order_data'] as Map<String, dynamic>;
-        await OrderService.createOrder(
-          items: List<Map<String, dynamic>>.from(orderData['items']),
-          customerName: orderData['customer_name'],
-          customerPhone: orderData['customer_phone'],
-          discount: (orderData['discount'] as num?)?.toDouble() ?? 0,
-          tax: (orderData['tax'] as num?)?.toDouble() ?? 0,
-          notes: orderData['notes'],
-          paymentMethod: orderData['payment_method'] ?? 'cash',
-        );
-        await OfflineService.markOrderSynced(order['id']);
-        synced++;
-      } catch (e) {
-        failed++;
-      }
-    }
-
-    // Also sync stock changes
-    final stockChanges = await OfflineService.getUnsyncedStockChanges();
-    for (final change in stockChanges) {
-      try {
-        await OfflineService.markStockChangeSynced(change['id']);
-      } catch (_) {}
+    try {
+      final result = await OrderService.syncPendingOrders();
+      synced = result['synced'] as int? ?? 0;
+      failed = result['failed'] as int? ?? 0;
+    } catch (_) {
+      failed = pending.length;
     }
 
     if (mounted && (synced > 0 || failed > 0)) {
@@ -336,9 +327,7 @@ class _MyStoreScreenState extends State<MyStoreScreen>
     try {
       final storeId = _store?['id'] as int?;
 
-      // Handle pending products (string IDs like 'pending_123')
       if (id is String && id.startsWith('pending_')) {
-        // Remove from pending_products table and cache
         final pendingId = int.tryParse(id.replaceFirst('pending_', ''));
         if (pendingId != null) {
           await OfflineService.removePending(pendingId);
@@ -356,7 +345,6 @@ class _MyStoreScreenState extends State<MyStoreScreen>
         return;
       }
 
-      // Handle server products (int IDs)
       final intId = id is int ? id : int.tryParse(id.toString());
       if (intId != null && storeId != null) {
         await ProductService.deleteProductOfflineAware(intId, storeId);
@@ -380,8 +368,6 @@ class _MyStoreScreenState extends State<MyStoreScreen>
       }
     }
   }
-
-  // ==================== STAFF MANAGEMENT (Owner Only) ====================
 
   Future<void> _inviteStaffMember() async {
     final emailCtrl = TextEditingController();
@@ -576,7 +562,6 @@ class _MyStoreScreenState extends State<MyStoreScreen>
         onRefresh: _loadData,
         child: CustomScrollView(
           slivers: [
-            // App bar with store header
             SliverAppBar(
               expandedHeight: 180,
               pinned: true,
@@ -586,10 +571,10 @@ class _MyStoreScreenState extends State<MyStoreScreen>
                   style: const TextStyle(fontWeight: FontWeight.w700),
                 ),
                 background: storeImage != null && storeImage.isNotEmpty
-                    ? Image.network(
-                        storeImage,
+                    ? CachedAppImage(
+                        imageUrl: storeImage,
                         fit: BoxFit.cover,
-                        errorBuilder: (_, __, ___) => Container(
+                        placeholder: Container(
                           color: theme.colorScheme.primaryContainer,
                         ),
                       )
@@ -604,7 +589,6 @@ class _MyStoreScreenState extends State<MyStoreScreen>
               ],
             ),
 
-            // Offline banner
             if (_isOffline)
               SliverToBoxAdapter(
                 child: Container(
@@ -661,7 +645,6 @@ class _MyStoreScreenState extends State<MyStoreScreen>
                 ),
               ),
 
-            // Sync button when online and pending changes exist
             if (!_isOffline && _pendingCount > 0)
               SliverToBoxAdapter(
                 child: Padding(
@@ -684,7 +667,6 @@ class _MyStoreScreenState extends State<MyStoreScreen>
                 ),
               ),
 
-            // Product count + add button
             SliverToBoxAdapter(
               child: Padding(
                 padding: const EdgeInsets.all(16),
@@ -709,7 +691,6 @@ class _MyStoreScreenState extends State<MyStoreScreen>
               ),
             ),
 
-            // Staff Management Section (Owner Only)
             if (_isOwner)
               SliverToBoxAdapter(
                 child: Padding(
@@ -782,7 +763,6 @@ class _MyStoreScreenState extends State<MyStoreScreen>
                               trailing: Row(
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
-                                  // Toggle inventory permission
                                   Tooltip(
                                     message:
                                         t('toggle_inventory') ??
@@ -802,7 +782,6 @@ class _MyStoreScreenState extends State<MyStoreScreen>
                                       ),
                                     ),
                                   ),
-                                  // Remove staff
                                   IconButton(
                                     icon: const Icon(
                                       Icons.remove_circle,
@@ -832,7 +811,6 @@ class _MyStoreScreenState extends State<MyStoreScreen>
                 ),
               ),
 
-            // Products grid
             if (_products.isEmpty)
               SliverFillRemaining(
                 hasScrollBody: false,
@@ -907,17 +885,30 @@ class _ProductCard extends StatelessWidget {
 
   const _ProductCard({required this.product, this.onEdit, this.onDelete});
 
+  // CRITICAL FIX: Use CachedAppImage which properly handles file:// prefix,
+  // local file paths, remote URLs, and all edge cases.
+  Widget _buildProductImage(BuildContext context) {
+    final imagePaths = OfflineService.getProductImagePaths(product);
+    final firstPath = imagePaths.isNotEmpty ? imagePaths.first : null;
+
+    return CachedAppImage(
+      imageUrl: firstPath,
+      width: 72,
+      height: 72,
+      borderRadius: BorderRadius.circular(10),
+      placeholder: Container(
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+        child: const Icon(Icons.inventory_2_outlined),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final name = product['name']?.toString() ?? 'Unnamed';
     final price = product['price']?.toString() ?? '0';
     final qty = product['quantity'] ?? 0;
-    final imageUrl = product['image_url']?.toString();
-    final images = product['images'] as List<dynamic>?;
-    final displayImage =
-        imageUrl ??
-        (images != null && images.isNotEmpty ? images.first.toString() : null);
     final isLowStock = (qty as num) <= (product['low_stock_threshold'] ?? 5);
     final isPendingCreate = product['_pendingCreate'] == true;
     final isPendingUpdate = product['_pendingUpdate'] == true;
@@ -938,14 +929,7 @@ class _ProductCard extends StatelessWidget {
             children: [
               ClipRRect(
                 borderRadius: BorderRadius.circular(10),
-                child: Container(
-                  width: 72,
-                  height: 72,
-                  color: theme.colorScheme.surfaceContainerHighest,
-                  child: displayImage != null
-                      ? _buildImage(displayImage)
-                      : const Icon(Icons.inventory_2_outlined),
-                ),
+                child: _buildProductImage(context),
               ),
               const SizedBox(width: 12),
               Expanded(
@@ -1037,18 +1021,6 @@ class _ProductCard extends StatelessWidget {
       ),
     );
   }
-
-  Widget _buildImage(String url) {
-    if (url.startsWith('pending_') || url.startsWith('/')) {
-      // Local file path (offline pending image)
-      return const Icon(Icons.image, color: Colors.grey);
-    }
-    return Image.network(
-      url,
-      fit: BoxFit.cover,
-      errorBuilder: (_, __, ___) => const Icon(Icons.image_not_supported),
-    );
-  }
 }
 
 class _PendingBadge extends StatelessWidget {
@@ -1077,9 +1049,6 @@ class _PendingBadge extends StatelessWidget {
     );
   }
 }
-// ============================================================
-// MY STORE SKELETON LOADING
-// ============================================================
 
 class _MyStoreSkeleton extends StatelessWidget {
   const _MyStoreSkeleton();
@@ -1092,7 +1061,6 @@ class _MyStoreSkeleton extends StatelessWidget {
     return Scaffold(
       body: CustomScrollView(
         slivers: [
-          // App bar skeleton
           SliverAppBar(
             expandedHeight: 180,
             pinned: true,
@@ -1100,7 +1068,6 @@ class _MyStoreSkeleton extends StatelessWidget {
               background: Container(color: baseColor),
             ),
           ),
-          // Stats row skeleton
           SliverToBoxAdapter(
             child: Padding(
               padding: const EdgeInsets.all(16),
@@ -1129,7 +1096,6 @@ class _MyStoreSkeleton extends StatelessWidget {
               ),
             ),
           ),
-          // Product cards skeleton
           SliverPadding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
             sliver: SliverList(

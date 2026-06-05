@@ -6,7 +6,9 @@ import '../lang/translations.dart';
 import '../widgets/guest_login_sheet.dart';
 import '../widgets/product/product_card.dart';
 import '../widgets/product/product_list_tile.dart';
+import '../widgets/store/store_list_tile.dart';
 import 'product_detail_screen.dart';
+import 'store_products_screen.dart';
 
 class FavoritesScreen extends StatefulWidget {
   const FavoritesScreen({super.key});
@@ -15,29 +17,73 @@ class FavoritesScreen extends StatefulWidget {
   State<FavoritesScreen> createState() => _FavoritesScreenState();
 }
 
-class _FavoritesScreenState extends State<FavoritesScreen> {
+class _FavoritesScreenState extends State<FavoritesScreen>
+    with SingleTickerProviderStateMixin {
   List<dynamic> _favorites = [];
-  bool _isLoading = true;
+  List<dynamic> _favoriteStores = [];
+  bool _isLoadingProducts = true;
+  bool _isLoadingStores = true;
   bool _isGridView = true;
+
+  late TabController _tabController;
 
   @override
   void initState() {
     super.initState();
+    _tabController = TabController(length: 2, vsync: this);
     _loadFavorites();
+    _loadFavoriteStores();
+    FavoritesService.favoriteIdsNotifier.addListener(_onFavoritesChanged);
+    FavoritesService.favoriteStoreIdsNotifier.addListener(
+      _onStoreFavoritesChanged,
+    );
+  }
+
+  @override
+  void dispose() {
+    FavoritesService.favoriteIdsNotifier.removeListener(_onFavoritesChanged);
+    FavoritesService.favoriteStoreIdsNotifier.removeListener(
+      _onStoreFavoritesChanged,
+    );
+    _tabController.dispose();
+    super.dispose();
+  }
+
+  void _onFavoritesChanged() {
+    if (mounted) _loadFavorites();
+  }
+
+  void _onStoreFavoritesChanged() {
+    if (mounted) _loadFavoriteStores();
   }
 
   Future<void> _loadFavorites() async {
-    setState(() => _isLoading = true);
+    setState(() => _isLoadingProducts = true);
     try {
       final items = await FavoritesService.fetchFavorites();
       if (mounted) {
         setState(() {
           _favorites = items;
-          _isLoading = false;
+          _isLoadingProducts = false;
         });
       }
     } catch (_) {
-      if (mounted) setState(() => _isLoading = false);
+      if (mounted) setState(() => _isLoadingProducts = false);
+    }
+  }
+
+  Future<void> _loadFavoriteStores() async {
+    setState(() => _isLoadingStores = true);
+    try {
+      final items = await FavoritesService.fetchFavoriteStores();
+      if (mounted) {
+        setState(() {
+          _favoriteStores = items;
+          _isLoadingStores = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) setState(() => _isLoadingStores = false);
     }
   }
 
@@ -48,13 +94,35 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
     );
   }
 
+  void _onStoreTap(dynamic store) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => StoreProductsScreen(
+          storeId: store['id'],
+          storeName: store['name']?.toString() ?? 'Unknown Store',
+        ),
+      ),
+    );
+  }
+
   Future<void> _removeFavorite(int productId) async {
     await FavoritesService.removeFavorite(productId);
-    await _loadFavorites();
+  }
+
+  Future<void> _removeFavoriteStore(int storeId) async {
+    await FavoritesService.removeFavoriteStore(storeId);
   }
 
   int? _productId(dynamic product) {
     final id = product['id'];
+    if (id == null) return null;
+    if (id is int) return id;
+    return int.tryParse(id.toString());
+  }
+
+  int? _storeId(dynamic store) {
+    final id = store['id'];
     if (id == null) return null;
     if (id is int) return id;
     return int.tryParse(id.toString());
@@ -74,22 +142,26 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
         return Scaffold(
           appBar: AppBar(
             title: Text(t('favorites') ?? 'Favorites'),
-            actions: [
-              IconButton(
-                icon: Icon(_isGridView ? Icons.view_list : Icons.grid_view),
-                onPressed: () => setState(() => _isGridView = !_isGridView),
-              ),
-            ],
+            bottom: TabBar(
+              controller: _tabController,
+              labelColor: Colors.white, // Selected tab text
+              unselectedLabelColor: Colors.white70, // Unselected tab text
+              indicatorColor: Colors.white, // Underline indicator
+              tabs: [
+                Tab(
+                  icon: const Icon(Icons.shopping_bag_outlined),
+                  text: t('products') ?? 'Products',
+                ),
+                Tab(
+                  icon: const Icon(Icons.store_outlined),
+                  text: t('stores') ?? 'Stores',
+                ),
+              ],
+            ),
           ),
-          body: RefreshIndicator(
-            onRefresh: _loadFavorites,
-            child: _isLoading
-                ? const Center(child: CircularProgressIndicator())
-                : _favorites.isEmpty
-                ? _buildEmptyState()
-                : _isGridView
-                ? _buildGrid()
-                : _buildList(),
+          body: TabBarView(
+            controller: _tabController,
+            children: [_buildProductsTab(), _buildStoresTab()],
           ),
         );
       },
@@ -126,32 +198,27 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
     );
   }
 
-  Widget _buildEmptyState() {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(Icons.favorite_outline, size: 64, color: Colors.grey.shade400),
-          const SizedBox(height: 16),
-          Text(
-            t('no_favorites') ?? 'No favorites yet',
-            style: TextStyle(
-              fontSize: 16,
-              color: Colors.grey.shade600,
-              fontWeight: FontWeight.w500,
-            ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            t('tap_heart_to_add') ?? 'Tap the heart on products to add them',
-            style: TextStyle(color: Colors.grey.shade500),
-          ),
-        ],
-      ),
+  // ── Products Tab ──
+  Widget _buildProductsTab() {
+    return RefreshIndicator(
+      onRefresh: _loadFavorites,
+      child: _isLoadingProducts
+          ? const Center(child: CircularProgressIndicator())
+          : _favorites.isEmpty
+          ? _buildEmptyState(
+              icon: Icons.shopping_bag_outlined,
+              title: t('no_favorite_products') ?? 'No favorite products yet',
+              subtitle:
+                  t('tap_heart_products') ??
+                  'Tap the heart on products to add them',
+            )
+          : _isGridView
+          ? _buildProductGrid()
+          : _buildProductList(),
     );
   }
 
-  Widget _buildGrid() {
+  Widget _buildProductGrid() {
     return SingleChildScrollView(
       padding: const EdgeInsets.all(12),
       child: Wrap(
@@ -173,7 +240,7 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
     );
   }
 
-  Widget _buildList() {
+  Widget _buildProductList() {
     return ListView.builder(
       padding: const EdgeInsets.all(12),
       itemCount: _favorites.length,
@@ -193,6 +260,73 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
           ),
         );
       },
+    );
+  }
+
+  // ── Stores Tab ──
+  Widget _buildStoresTab() {
+    return RefreshIndicator(
+      onRefresh: _loadFavoriteStores,
+      child: _isLoadingStores
+          ? const Center(child: CircularProgressIndicator())
+          : _favoriteStores.isEmpty
+          ? _buildEmptyState(
+              icon: Icons.store_outlined,
+              title: t('no_favorite_stores') ?? 'No favorite stores yet',
+              subtitle:
+                  t('tap_heart_stores') ??
+                  'Tap the heart on stores to add them',
+            )
+          : _buildStoreList(),
+    );
+  }
+
+  Widget _buildStoreList() {
+    return ListView.builder(
+      padding: const EdgeInsets.all(12),
+      itemCount: _favoriteStores.length,
+      itemBuilder: (context, i) {
+        final store = _favoriteStores[i];
+        final sid = _storeId(store);
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 10),
+          child: StoreListTile(
+            store: store,
+            onTap: () => _onStoreTap(store),
+            showFavorite: sid != null,
+            isFavorite: true,
+            onFavoriteToggle: () {
+              if (sid != null) _removeFavoriteStore(sid);
+            },
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildEmptyState({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+  }) {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(icon, size: 64, color: Colors.grey.shade400),
+          const SizedBox(height: 16),
+          Text(
+            title,
+            style: TextStyle(
+              fontSize: 16,
+              color: Colors.grey.shade600,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(subtitle, style: TextStyle(color: Colors.grey.shade500)),
+        ],
+      ),
     );
   }
 }

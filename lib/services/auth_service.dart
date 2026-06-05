@@ -3,6 +3,9 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'api_service.dart';
 import 'offline_service.dart';
+import 'store_service.dart';
+import 'product_service.dart';
+import 'order_service.dart';
 
 class AuthService {
   static Future<Map<String, dynamic>> register({
@@ -63,6 +66,8 @@ class AuthService {
       if (data['user'] != null) {
         await OfflineService.cacheUser(data['user'] as Map<String, dynamic>);
       }
+
+      await warmOfflineStoreData();
 
       return data;
     }
@@ -228,5 +233,19 @@ class AuthService {
     if (response.statusCode != 200) {
       throw Exception('Failed to update language');
     }
+  }
+
+  /// Downloads store catalog, receipt settings, and recent orders for offline use.
+  static Future<void> warmOfflineStoreData() async {
+    try {
+      final store = await StoreService.getMyStore();
+      final storeId = store['id'] as int?;
+      if (storeId == null) return;
+      await ProductService.loadStoreCatalog(storeId, forceRefresh: true);
+      await OrderService.loadReceiptSettings();
+      try {
+        await OrderService.fetchOrders(limit: 100, offset: 0);
+      } catch (_) {}
+    } catch (_) {}
   }
 }

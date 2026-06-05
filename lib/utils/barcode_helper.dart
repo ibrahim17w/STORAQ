@@ -10,20 +10,20 @@ class BarcodeHelper {
 
   static bool isValidEAN13(String code) {
     if (code.length != 13) return false;
-    if (!RegExp(r'^\d{13}\$').hasMatch(code)) return false;
+    if (!RegExp(r'^\d{13}$').hasMatch(code)) return false;
     return _eanChecksum(code.substring(0, 12)) == int.parse(code[12]);
   }
 
   static bool isValidUPC(String code) {
     if (code.length != 12) return false;
-    if (!RegExp(r'^\d{12}\$').hasMatch(code)) return false;
+    if (!RegExp(r'^\d{12}$').hasMatch(code)) return false;
     return _eanChecksum('0' + code.substring(0, 11)) == int.parse(code[11]);
   }
 
   static bool isValidCode128(String code) {
     // Code128 supports ASCII 32-127; allow printable chars
     if (code.isEmpty || code.length > 48) return false;
-    return RegExp(r'^[ -~]+\$').hasMatch(code);
+    return RegExp(r'^[ -~]+$').hasMatch(code);
   }
 
   static bool isValidBarcode(String code) {
@@ -55,7 +55,7 @@ class BarcodeHelper {
   static String generateCode128({String prefix = 'MB'}) {
     final rnd = Random.secure();
     final suffix = List.generate(8, (_) => rnd.nextInt(10)).join();
-    return '\$prefix-\$suffix';
+    return '$prefix-$suffix';
   }
 
   static int _eanChecksum(String payload) {
@@ -71,7 +71,12 @@ class BarcodeHelper {
   // ==================== SVG RENDERING ====================
 
   /// Render barcode as SVG string for printing/display
-  static String toSvg(String code, {String type = 'ean13', double width = 200, double height = 80}) {
+  static String toSvg(
+    String code, {
+    String type = 'ean13',
+    double width = 200,
+    double height = 80,
+  }) {
     try {
       final bc = Barcode.fromType(_mapType(type));
       return bc.toSvg(code, width: width, height: height);
@@ -84,11 +89,16 @@ class BarcodeHelper {
 
   static BarcodeType _mapType(String type) {
     switch (type.toLowerCase()) {
-      case 'ean13': return BarcodeType.CodeEAN13;
-      case 'upc':   return BarcodeType.CodeUPCA;
-      case 'code128': return BarcodeType.Code128;
-      case 'qr':    return BarcodeType.QrCode;
-      default:      return BarcodeType.Code128;
+      case 'ean13':
+        return BarcodeType.CodeEAN13;
+      case 'upc':
+        return BarcodeType.CodeUPCA;
+      case 'code128':
+        return BarcodeType.Code128;
+      case 'qr':
+        return BarcodeType.QrCode;
+      default:
+        return BarcodeType.Code128;
     }
   }
 

@@ -5,8 +5,18 @@ import '../cached_image.dart';
 class StoreListTile extends StatelessWidget {
   final dynamic store;
   final VoidCallback onTap;
+  final bool showFavorite;
+  final bool isFavorite;
+  final VoidCallback? onFavoriteToggle;
 
-  const StoreListTile({super.key, required this.store, required this.onTap});
+  const StoreListTile({
+    super.key,
+    required this.store,
+    required this.onTap,
+    this.showFavorite = false,
+    this.isFavorite = false,
+    this.onFavoriteToggle,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -84,10 +94,19 @@ class StoreListTile extends StatelessWidget {
                 ),
               ),
             ),
-            const Padding(
-              padding: EdgeInsets.only(right: 12),
-              child: Icon(Icons.chevron_right, color: Colors.grey),
-            ),
+            if (showFavorite)
+              IconButton(
+                icon: Icon(
+                  isFavorite ? Icons.favorite : Icons.favorite_border,
+                  color: isFavorite ? Colors.red : Colors.grey,
+                ),
+                onPressed: onFavoriteToggle,
+              )
+            else
+              const Padding(
+                padding: EdgeInsets.only(right: 12),
+                child: Icon(Icons.chevron_right, color: Colors.grey),
+              ),
           ],
         ),
       ),

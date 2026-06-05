@@ -1,6 +1,7 @@
 // lib/widgets/product/product_card.dart
 import 'package:flutter/material.dart';
 import '../cached_image.dart';
+import '../../services/offline_service.dart';
 
 class ProductCard extends StatelessWidget {
   final dynamic product;
@@ -26,6 +27,8 @@ class ProductCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final productImages = OfflineService.getProductImagePaths(product);
+
     return GestureDetector(
       onTap: onTap,
       child: Container(
@@ -49,7 +52,9 @@ class ProductCard extends StatelessWidget {
             Stack(
               children: [
                 CachedAppImage(
-                  imageUrl: product['image_url'],
+                  imageUrl: productImages.isNotEmpty
+                      ? productImages.first
+                      : null,
                   height: 140,
                   width: double.infinity,
                   fit: BoxFit.cover,

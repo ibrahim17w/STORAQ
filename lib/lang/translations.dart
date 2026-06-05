@@ -380,6 +380,10 @@ final Map<String, Map<String, String>> _translations = {
     'product_updated_offline': 'Product updated offline',
     'no_favorites': 'No favorites yet',
     'tap_heart_to_add': 'Tap the heart on products to add them',
+    'no_favorite_products': 'No favorite products yet',
+    'tap_heart_products': 'Tap the heart on products to add them',
+    'no_favorite_stores': 'No favorite stores yet',
+    'tap_heart_stores': 'Tap the heart on stores to add them',
   },
 
   'ar': {

@@ -334,9 +334,17 @@ router.post('/products/sync', authenticateToken, requireRealUser, attachStoreCon
         const { name, price, quantity, description, barcode, category_id, low_stock_threshold, currency } = item;
 
         if (barcode) {
-          const existing = await client.query('SELECT id FROM products WHERE barcode=$1', [barcode]);
+          const existing = await client.query(
+            'SELECT id FROM products WHERE barcode=$1 AND store_id=$2',
+            [barcode, storeId]
+          );
           if (existing.rows.length > 0) {
-            results.creates.push({ local_id: item.local_id, status: 'error', error: 'Barcode already exists', server_id: existing.rows[0].id });
+            results.creates.push({
+              local_id: item.local_id,
+              status: 'success',
+              server_id: existing.rows[0].id,
+              note: 'linked_existing_barcode',
+            });
             continue;
           }
         }

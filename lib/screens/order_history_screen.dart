@@ -3,12 +3,12 @@
 
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
-import 'package:connectivity_plus/connectivity_plus.dart';
 import '../services/api_service.dart';
 import 'receipt_screen.dart';
 import '../lang/translations.dart';
 import '../services/order_service.dart';
 import '../services/offline_service.dart';
+import '../services/product_service.dart';
 
 class OrderHistoryScreen extends StatefulWidget {
   const OrderHistoryScreen({super.key});
@@ -29,6 +29,21 @@ class _OrderHistoryScreenState extends State<OrderHistoryScreen> {
   void initState() {
     super.initState();
     _load();
+    _tryAutoSync();
+  }
+
+  Future<void> _tryAutoSync() async {
+    try {
+      if (!await ApiService.isServerReachable()) return;
+      final storeId = await ApiService.getMyStoreId();
+      if (storeId == null) return;
+      final hasWork =
+          await OfflineService.pendingProductChangeCount() > 0 ||
+          await OfflineService.pendingOrderCount() > 0;
+      if (!hasWork) return;
+      await ProductService.syncStore(storeId);
+      if (mounted) await _load(refresh: true);
+    } catch (_) {}
   }
 
   Future<void> _load({bool refresh = false}) async {
@@ -41,18 +56,39 @@ class _OrderHistoryScreenState extends State<OrderHistoryScreen> {
     }
 
     List<dynamic> allOrders = [];
+    final pendingReceipts = <String>{};
 
-    // 1. Load offline orders first (always available, never fails)
-    try {
-      final offlineOrders = await OfflineService.getOfflineOrders();
-      allOrders.addAll(offlineOrders);
-    } catch (_) {}
-
-    // 2. Load pending orders (queued for sync but not yet sent)
     try {
       final pendingOrders = await OfflineService.getPendingOrders();
       for (final pending in pendingOrders) {
         final orderData = pending['order_data'] as Map<String, dynamic>? ?? {};
+        final receipt = orderData['receipt_number']?.toString();
+        if (receipt != null && receipt.isNotEmpty) {
+          pendingReceipts.add(receipt);
+        }
+      }
+    } catch (_) {}
+
+    try {
+      final offlineOrders = await OfflineService.getOfflineOrders();
+      for (final order in offlineOrders) {
+        final receipt = order['receipt_number']?.toString() ?? '';
+        order['pending_sync'] = pendingReceipts.contains(receipt);
+        allOrders.add(order);
+      }
+    } catch (_) {}
+
+    // Legacy queued orders saved before offline_orders persistence
+    try {
+      final pendingOrders = await OfflineService.getPendingOrders();
+      final existingReceipts = allOrders
+          .map((o) => o['receipt_number']?.toString() ?? '')
+          .where((r) => r.isNotEmpty)
+          .toSet();
+      for (final pending in pendingOrders) {
+        final orderData = pending['order_data'] as Map<String, dynamic>? ?? {};
+        final receipt = orderData['receipt_number']?.toString() ?? '';
+        if (receipt.isNotEmpty && existingReceipts.contains(receipt)) continue;
         allOrders.add({
           ...orderData,
           'id': 'pending_${pending['id']}',
@@ -61,36 +97,71 @@ class _OrderHistoryScreenState extends State<OrderHistoryScreen> {
         });
       }
     } catch (_) {}
-
-    // 3. Load server orders (optional — app works fine without this)
     List<dynamic> serverOrders = [];
     bool serverFailed = false;
     try {
-      final data = await OrderService.fetchOrders(
-        limit: _limit,
-        offset: _offset,
-      );
-      serverOrders = data;
+      if (await ApiService.isServerReachable()) {
+        serverOrders = await OrderService.fetchOrders(
+          limit: _limit,
+          offset: _offset,
+        );
+      } else {
+        serverOrders = await OrderService.fetchOrdersOffline(
+          limit: _limit,
+          offset: _offset,
+        );
+        serverFailed = true;
+      }
     } catch (e) {
+      try {
+        serverOrders = await OrderService.fetchOrdersOffline(
+          limit: _limit,
+          offset: _offset,
+        );
+      } catch (_) {}
       serverFailed = true;
     }
 
-    // Merge server orders, avoiding duplicates with offline/pending
-    final existingIds = <dynamic>{};
-    for (final o in allOrders) {
-      existingIds.add(o['receipt_number'] ?? o['id']);
-    }
+    // Merge server orders; server copy wins over offline with same receipt #
+    final receiptKeys = <String>{
+      for (final o in allOrders)
+        o['receipt_number']?.toString() ?? '',
+    }..remove('');
+    final serverReceipts = <String>{};
     for (final s in serverOrders) {
-      final key = s['receipt_number'] ?? s['id'];
-      if (!existingIds.contains(key)) {
-        allOrders.add(s);
-        existingIds.add(key);
+      final receipt = s['receipt_number']?.toString() ?? '';
+      if (receipt.isNotEmpty) serverReceipts.add(receipt);
+    }
+
+    allOrders.removeWhere((o) {
+      if (o['offline'] != true) return false;
+      final receipt = o['receipt_number']?.toString() ?? '';
+      if (receipt.isNotEmpty && serverReceipts.contains(receipt)) {
+        return true;
       }
+      for (final s in serverOrders) {
+        if (_isLikelySameReceipt(o, s)) return true;
+      }
+      return false;
+    });
+
+    for (final s in serverOrders) {
+      final key = s['receipt_number']?.toString() ?? s['id']?.toString() ?? '';
+      if (key.isEmpty || receiptKeys.contains(key)) continue;
+      allOrders.add(s);
+      receiptKeys.add(key);
     }
 
     if (mounted) {
       setState(() {
-        _orders = allOrders;
+        _orders = allOrders
+          ..sort((a, b) {
+            final da = DateTime.tryParse(a['created_at']?.toString() ?? '') ??
+                DateTime.fromMillisecondsSinceEpoch(0);
+            final db = DateTime.tryParse(b['created_at']?.toString() ?? '') ??
+                DateTime.fromMillisecondsSinceEpoch(0);
+            return db.compareTo(da);
+          });
         _loading = false;
         _hasMore = !serverFailed && serverOrders.length >= _limit;
       });
@@ -106,8 +177,7 @@ class _OrderHistoryScreenState extends State<OrderHistoryScreen> {
   Future<void> _syncOfflineOrders() async {
     if (_isSyncing) return;
 
-    final connectivity = await Connectivity().checkConnectivity();
-    if (connectivity.contains(ConnectivityResult.none)) {
+    if (!await ApiService.isServerReachable()) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -121,10 +191,21 @@ class _OrderHistoryScreenState extends State<OrderHistoryScreen> {
 
     setState(() => _isSyncing = true);
 
-    final pending = await OfflineService.getPendingOrders();
-    if (pending.isEmpty) {
-      if (mounted) {
-        setState(() => _isSyncing = false);
+    try {
+      final storeId = await ApiService.getMyStoreId();
+      if (storeId == null) {
+        throw Exception(t('no_store_found') ?? 'No store found');
+      }
+      final combined = await ProductService.syncStore(storeId);
+      final result = combined['orders'] as Map<String, dynamic>? ?? {};
+      await _load(refresh: true);
+
+      if (!mounted) return;
+      final synced = result['synced'] as int? ?? 0;
+      final failed = result['failed'] as int? ?? 0;
+      final lastError = result['lastError']?.toString();
+
+      if (synced == 0 && failed == 0) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
@@ -133,129 +214,13 @@ class _OrderHistoryScreenState extends State<OrderHistoryScreen> {
             backgroundColor: Colors.blue,
           ),
         );
+        return;
       }
-      return;
-    }
-
-    int synced = 0;
-    int failed = 0;
-    String? lastError;
-
-    for (final order in pending) {
-      try {
-        final orderData = order['order_data'] as Map<String, dynamic>;
-        final itemsRaw = orderData['items'] as List<dynamic>? ?? [];
-
-        // Convert items to backend format with defensive field mapping
-        final List<Map<String, dynamic>> items = [];
-        final List<String> pendingNames = [];
-
-        for (final raw in itemsRaw) {
-          final map = raw is Map<String, dynamic> ? raw : <String, dynamic>{};
-
-          // Defensive: checkout may store fields under different names
-          final dynamic productId =
-              map['product_id'] ?? map['id'] ?? map['productId'];
-          final productName =
-              (map['product_name'] ??
-                      map['name'] ??
-                      map['productName'] ??
-                      'Unknown')
-                  .toString();
-          final dynamic quantityRaw =
-              map['quantity'] ?? map['qty'] ?? map['count'];
-          final dynamic unitPriceRaw =
-              map['unit_price'] ?? map['price'] ?? map['unitPrice'] ?? 0;
-          final dynamic totalPriceRaw =
-              map['total_price'] ??
-              map['totalPrice'] ??
-              map['line_total'] ??
-              (unitPriceRaw * (quantityRaw ?? 0));
-          final barcode = map['barcode'] ?? map['product_barcode'];
-
-          int quantity;
-          if (quantityRaw is int) {
-            quantity = quantityRaw;
-          } else if (quantityRaw is double) {
-            quantity = quantityRaw.toInt();
-          } else if (quantityRaw is String) {
-            quantity = int.tryParse(quantityRaw) ?? 0;
-          } else {
-            quantity = 0;
-          }
-
-          final pidString = productId?.toString() ?? '';
-
-          // Detect pending products that haven't been synced yet
-          if (pidString.isEmpty || pidString.startsWith('pending_')) {
-            pendingNames.add(productName);
-            continue;
-          }
-
-          final serverProductId = productId is int
-              ? productId
-              : int.tryParse(pidString);
-          if (serverProductId == null || serverProductId <= 0 || quantity < 1) {
-            throw Exception(
-              'Invalid item data for "$productName": product_id=$productId, quantity=$quantity',
-            );
-          }
-
-          items.add({
-            'product_id': serverProductId,
-            'product_name': productName,
-            'quantity': quantity,
-            'unit_price': (unitPriceRaw is num
-                ? unitPriceRaw.toDouble()
-                : (num.tryParse(unitPriceRaw.toString()) ?? 0).toDouble()),
-            'total_price': (totalPriceRaw is num
-                ? totalPriceRaw.toDouble()
-                : (num.tryParse(totalPriceRaw.toString()) ?? 0).toDouble()),
-            'barcode': barcode?.toString(),
-          });
-        }
-
-        if (pendingNames.isNotEmpty) {
-          throw Exception(
-            'Cannot sync order: products not yet on server: ${pendingNames.join(', ')}. Please sync products first.',
-          );
-        }
-
-        if (items.isEmpty) {
-          throw Exception('Order has no valid items to sync');
-        }
-
-        await OrderService.createOrder(
-          items: List<Map<String, dynamic>>.from(items),
-          customerName: orderData['customer_name']?.toString(),
-          customerPhone: orderData['customer_phone']?.toString(),
-          subtotal: (orderData['subtotal'] as num?)?.toDouble() ?? 0,
-          discount: (orderData['discount'] as num?)?.toDouble() ?? 0,
-          tax: (orderData['tax'] as num?)?.toDouble() ?? 0,
-          total: (orderData['total'] as num?)?.toDouble() ?? 0,
-          notes: orderData['notes']?.toString(),
-          paymentMethod: orderData['payment_method']?.toString() ?? 'cash',
-        );
-
-        await OfflineService.markOrderSynced(order['id']);
-        synced++;
-      } catch (e) {
-        failed++;
-        lastError = e.toString();
-      }
-    }
-
-    // Refresh the list
-    await _load(refresh: true);
-
-    if (mounted) {
-      setState(() => _isSyncing = false);
 
       final message = failed > 0 && lastError != null
           ? '${t('synced') ?? 'Synced'}: $synced, ${t('failed') ?? 'Failed'}: $failed\n${lastError.substring(0, lastError.length > 100 ? 100 : lastError.length)}'
           : '${t('synced') ?? 'Synced'}: $synced, ${t('failed') ?? 'Failed'}: $failed';
 
-      // FIXED: Removed 'const' from Duration since it uses runtime variable
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(message),
@@ -263,7 +228,30 @@ class _OrderHistoryScreenState extends State<OrderHistoryScreen> {
           duration: Duration(seconds: failed > 0 ? 5 : 3),
         ),
       );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(e.toString()), backgroundColor: Colors.red),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isSyncing = false);
     }
+  }
+
+  bool _isLikelySameReceipt(Map<dynamic, dynamic> offline, dynamic server) {
+    final tOff = DateTime.tryParse(offline['created_at']?.toString() ?? '');
+    final tSrv = DateTime.tryParse(server['created_at']?.toString() ?? '');
+    if (tOff == null || tSrv == null) return false;
+    if (tOff.difference(tSrv).inMinutes.abs() > 10) return false;
+
+    double totalOff = 0;
+    double totalSrv = 0;
+    final vOff = offline['total'];
+    final vSrv = server['total'];
+    if (vOff is num) totalOff = vOff.toDouble();
+    if (vSrv is num) totalSrv = vSrv.toDouble();
+    return (totalOff - totalSrv).abs() < 0.02;
   }
 
   String _fmt(dynamic value, {String currency = 'SYP'}) {

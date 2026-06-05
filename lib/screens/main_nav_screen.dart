@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import '../lang/translations.dart';
 import '../services/product_service.dart';
+import '../services/order_service.dart';
 import '../services/api_service.dart';
 import 'home_screen.dart';
 import 'explore_screen.dart';
@@ -44,24 +45,23 @@ class _MainNavScreenState extends State<MainNavScreen> {
   }
 
   Future<void> _initConnectivity() async {
-    final result = await Connectivity().checkConnectivity();
-    _wasOffline = result.contains(ConnectivityResult.none);
+    _wasOffline = !(await ApiService.isServerReachable());
 
-    _connectivitySub = Connectivity().onConnectivityChanged.listen((results) {
-      final isOffline = results.contains(ConnectivityResult.none);
-      if (_wasOffline && !isOffline) {
-        // Came back online — auto-sync pending changes
-        _autoSync();
+    _connectivitySub = Connectivity().onConnectivityChanged.listen((_) async {
+      final online = await ApiService.isServerReachable();
+      if (_wasOffline && online) {
+        await _autoSync();
       }
-      _wasOffline = isOffline;
+      _wasOffline = !online;
     });
   }
 
   Future<void> _autoSync() async {
     try {
+      if (!await ApiService.isServerReachable()) return;
       final storeId = await ApiService.getMyStoreId();
       if (storeId != null) {
-        await ProductService.syncPendingChanges(storeId);
+        await ProductService.syncStore(storeId);
       }
     } catch (e) {
       // Silent fail — user can manually sync if needed

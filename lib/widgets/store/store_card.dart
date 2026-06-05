@@ -10,6 +10,9 @@ class StoreCard extends StatelessWidget {
   final bool isCompact;
   final double? width;
   final String? sponsoredLabel;
+  final bool showFavorite;
+  final bool isFavorite;
+  final VoidCallback? onFavoriteToggle;
 
   const StoreCard({
     super.key,
@@ -20,6 +23,9 @@ class StoreCard extends StatelessWidget {
     this.isCompact = false,
     this.width = 160,
     this.sponsoredLabel,
+    this.showFavorite = false,
+    this.isFavorite = false,
+    this.onFavoriteToggle,
   });
 
   /// Keep only the first 2 parts of a long geocoding string
@@ -28,7 +34,6 @@ class StoreCard extends StatelessWidget {
     final country = store['country']?.toString() ?? '';
     if (city.isEmpty && country.isEmpty) return '';
 
-    // If city is a long comma-separated address, take first 2 chunks
     final parts = city
         .split(',')
         .map((s) => s.trim())
@@ -48,11 +53,10 @@ class StoreCard extends StatelessWidget {
         store['description']?.toString() ??
         '';
 
-    // FIX: default image reduced from 120 → 90 to fit 140px parent
     final imageHeight = isCompact ? 90 : (isSponsored ? 80 : 90);
     final padding = isCompact
         ? const EdgeInsets.fromLTRB(8, 6, 8, 4)
-        : const EdgeInsets.fromLTRB(10, 6, 10, 4); // tighter vertical padding
+        : const EdgeInsets.fromLTRB(10, 6, 10, 4);
 
     return GestureDetector(
       onTap: onTap,
@@ -78,12 +82,39 @@ class StoreCard extends StatelessWidget {
               borderRadius: const BorderRadius.vertical(
                 top: Radius.circular(14),
               ),
-              child: CachedAppImage(
-                imageUrl: store['image_url'],
-                height: imageHeight.toDouble(),
-                width: double.infinity,
-                fit: BoxFit.cover,
-                memCacheWidth: isCompact ? 300 : 400,
+              child: Stack(
+                children: [
+                  CachedAppImage(
+                    imageUrl: store['image_url'],
+                    height: imageHeight.toDouble(),
+                    width: double.infinity,
+                    fit: BoxFit.cover,
+                    memCacheWidth: isCompact ? 300 : 400,
+                  ),
+                  if (showFavorite)
+                    Positioned(
+                      top: 6,
+                      right: 6,
+                      child: Material(
+                        color: Colors.black.withOpacity(0.35),
+                        borderRadius: BorderRadius.circular(12),
+                        child: InkWell(
+                          borderRadius: BorderRadius.circular(12),
+                          onTap: onFavoriteToggle,
+                          child: Padding(
+                            padding: const EdgeInsets.all(5),
+                            child: Icon(
+                              isFavorite
+                                  ? Icons.favorite
+                                  : Icons.favorite_border,
+                              size: 18,
+                              color: isFavorite ? Colors.red : Colors.white,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
               ),
             ),
             Padding(
@@ -101,7 +132,7 @@ class StoreCard extends StatelessWidget {
                       fontSize: isCompact ? 11 : 12,
                     ),
                   ),
-                  const SizedBox(height: 2), // was 3
+                  const SizedBox(height: 2),
                   Text(
                     _shortLocation(store),
                     maxLines: 1,
@@ -112,7 +143,7 @@ class StoreCard extends StatelessWidget {
                     ),
                   ),
                   if (description.isNotEmpty && !isSponsored) ...[
-                    const SizedBox(height: 2), // was 3
+                    const SizedBox(height: 2),
                     Text(
                       description,
                       maxLines: 1,
@@ -124,7 +155,7 @@ class StoreCard extends StatelessWidget {
                     ),
                   ],
                   if (isSponsored) ...[
-                    const SizedBox(height: 3), // was 4
+                    const SizedBox(height: 3),
                     Container(
                       padding: const EdgeInsets.symmetric(
                         horizontal: 6,
@@ -145,7 +176,7 @@ class StoreCard extends StatelessWidget {
                     ),
                   ],
                   if (distanceKm != null && distanceKm != double.infinity) ...[
-                    const SizedBox(height: 3), // was 4
+                    const SizedBox(height: 3),
                     Row(
                       children: [
                         Icon(

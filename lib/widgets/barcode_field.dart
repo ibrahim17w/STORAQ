@@ -1,6 +1,9 @@
 // lib/widgets/barcode_field.dart
 // Safe barcode field with scanner fallback & MissingPluginException handling
 
+import 'dart:io';
+
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
@@ -32,6 +35,12 @@ class _BarcodeFieldState extends State<BarcodeField> {
   }
 
   Future<void> _openScanner() async {
+    // Guard: mobile_scanner does not support Windows or Linux
+    if (!kIsWeb && (Platform.isWindows || Platform.isLinux)) {
+      _showManualEntry();
+      return;
+    }
+
     try {
       final result = await Navigator.push<String>(
         context,
@@ -41,9 +50,6 @@ class _BarcodeFieldState extends State<BarcodeField> {
         _controller.text = result;
         widget.onChanged(result);
       }
-    } on MissingPluginException catch (e) {
-      debugPrint('Scanner plugin missing: $e');
-      _showManualEntry();
     } catch (e) {
       debugPrint('Scanner error: $e');
       _showManualEntry();
@@ -129,11 +135,20 @@ class _BarcodeScannerScreenState extends State<_BarcodeScannerScreen>
   MobileScannerController? _controller;
   bool _hasError = false;
   bool _isPopping = false;
+  bool _isDesktopUnsupported = false;
+  final TextEditingController _manualController = TextEditingController();
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+
+    // Guard: mobile_scanner does not support Windows or Linux
+    if (!kIsWeb && (Platform.isWindows || Platform.isLinux)) {
+      _isDesktopUnsupported = true;
+      return;
+    }
+
     _initController();
   }
 
@@ -194,15 +209,26 @@ class _BarcodeScannerScreenState extends State<_BarcodeScannerScreen>
     Navigator.pop(context);
   }
 
+  void _submitManual() {
+    final code = _manualController.text.trim();
+    if (code.isNotEmpty) {
+      _isPopping = true;
+      Navigator.pop(context, code);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    if (_hasError) {
+    // Desktop or init error: show manual entry UI directly
+    if (_isDesktopUnsupported || _hasError) {
       return Scaffold(
         backgroundColor: Colors.black,
         body: SafeArea(
-          child: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 const Icon(
                   Icons.qr_code_scanner,
@@ -212,6 +238,7 @@ class _BarcodeScannerScreenState extends State<_BarcodeScannerScreen>
                 const SizedBox(height: 16),
                 Text(
                   t('scanner_not_available'),
+                  textAlign: TextAlign.center,
                   style: Theme.of(
                     context,
                   ).textTheme.titleMedium?.copyWith(color: Colors.white),
@@ -223,10 +250,40 @@ class _BarcodeScannerScreenState extends State<_BarcodeScannerScreen>
                   style: const TextStyle(color: Colors.white70),
                 ),
                 const SizedBox(height: 24),
+                TextField(
+                  controller: _manualController,
+                  autofocus: true,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: InputDecoration(
+                    labelText: t('barcode'),
+                    labelStyle: const TextStyle(color: Colors.white70),
+                    border: const OutlineInputBorder(
+                      borderSide: BorderSide(color: Colors.white38),
+                    ),
+                    enabledBorder: const OutlineInputBorder(
+                      borderSide: BorderSide(color: Colors.white38),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderSide: BorderSide(
+                        color: Theme.of(context).colorScheme.primary,
+                      ),
+                    ),
+                  ),
+                  onSubmitted: (_) => _submitManual(),
+                ),
+                const SizedBox(height: 16),
                 ElevatedButton.icon(
+                  onPressed: _submitManual,
+                  icon: const Icon(Icons.check),
+                  label: Text(t('confirm')),
+                ),
+                const SizedBox(height: 8),
+                TextButton(
                   onPressed: _close,
-                  icon: const Icon(Icons.keyboard),
-                  label: Text(t('enter_manually')),
+                  child: Text(
+                    t('close'),
+                    style: const TextStyle(color: Colors.white70),
+                  ),
                 ),
               ],
             ),
@@ -334,6 +391,7 @@ class _BarcodeScannerScreenState extends State<_BarcodeScannerScreen>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _controller?.dispose();
+    _manualController.dispose();
     super.dispose();
   }
 }

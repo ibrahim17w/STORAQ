@@ -71,6 +71,7 @@ const schemas = {
     notes: z.string().max(500).optional(),
   }),
   createOrder: z.object({
+    receipt_number: z.string().max(50).optional(),
     items: z.array(z.object({
       product_id: numField({ optional: true }).refine(n => n === undefined || n === null || Number.isInteger(n), { message: 'product_id must be an integer' }),
       quantity: numField().refine(n => Number.isInteger(n) && n > 0, { message: 'quantity must be a positive integer' }),

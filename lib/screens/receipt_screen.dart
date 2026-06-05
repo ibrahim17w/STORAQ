@@ -84,18 +84,14 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
         store = await OfflineService.getCachedStore();
       } catch (_) {}
 
-      // Try cached receipt settings (fast)
-      try {
-        final prefs = await OfflineService.getCachedStore();
-        // Note: receipt settings aren't cached yet; we'll use defaults
-      } catch (_) {}
+      settings = await OrderService.getReceiptSettingsOffline();
 
       // Try server (may fail if offline)
       try {
         store ??= await StoreService.getMyStore();
       } catch (_) {}
       try {
-        settings ??= await OrderService.getReceiptSettings();
+        settings = await OrderService.loadReceiptSettings();
       } catch (_) {}
 
       if (mounted && store != null) {
@@ -126,7 +122,7 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
         store = await OfflineService.getCachedStore();
       }
       try {
-        settings = await OrderService.getReceiptSettings();
+        settings = await OrderService.loadReceiptSettings();
       } catch (_) {}
 
       if (mounted) {

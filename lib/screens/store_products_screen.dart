@@ -1,12 +1,17 @@
-//store_products_screen
+// lib/screens/store_products_screen.dart
+// FIXED: Image resolution now uses centralized CachedAppImage widget
+// to properly display cached local images when offline.
+
 import 'package:flutter/material.dart';
 import 'package:latlong2/latlong.dart';
 import '../services/api_service.dart';
 import '../lang/translations.dart';
+import '../widgets/cached_image.dart';
 import 'store_map_screen.dart';
 import '../services/store_service.dart';
 import '../services/location_service.dart';
 import '../services/product_service.dart';
+import '../services/offline_service.dart';
 
 class StoreProductsScreen extends StatefulWidget {
   final int storeId;
@@ -61,7 +66,6 @@ class _StoreProductsScreenState extends State<StoreProductsScreen> {
       ).showSnackBar(const SnackBar(content: Text('Location not available')));
       return;
     }
-    // CHANGED: StoreLocationView + pass store data + all stores list
     Navigator.push(
       context,
       MaterialPageRoute(
@@ -74,6 +78,25 @@ class _StoreProductsScreenState extends State<StoreProductsScreen> {
           targetImageUrl: _storeData?['image_url']?.toString(),
           stores: _storeData != null ? [_storeData!] : [],
         ),
+      ),
+    );
+  }
+
+  // CRITICAL FIX: Use CachedAppImage which properly handles all image types
+  Widget _buildProductImage(Map<String, dynamic> product) {
+    final imagePaths = OfflineService.getProductImagePaths(product);
+    final firstPath = imagePaths.isNotEmpty ? imagePaths.first : null;
+
+    return CachedAppImage(
+      imageUrl: firstPath,
+      height: 180,
+      width: double.infinity,
+      fit: BoxFit.cover,
+      borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
+      placeholder: Container(
+        height: 180,
+        color: Colors.grey.shade800,
+        child: const Icon(Icons.image_not_supported, size: 50),
       ),
     );
   }
@@ -111,26 +134,12 @@ class _StoreProductsScreenState extends State<StoreProductsScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      if (p['image_url'] != null)
-                        ClipRRect(
-                          borderRadius: const BorderRadius.vertical(
-                            top: Radius.circular(12),
-                          ),
-                          child: Image.network(
-                            p['image_url'],
-                            height: 180,
-                            width: double.infinity,
-                            fit: BoxFit.cover,
-                            errorBuilder: (_, __, ___) => Container(
-                              height: 180,
-                              color: Colors.grey.shade800,
-                              child: const Icon(
-                                Icons.image_not_supported,
-                                size: 50,
-                              ),
-                            ),
-                          ),
+                      ClipRRect(
+                        borderRadius: const BorderRadius.vertical(
+                          top: Radius.circular(12),
                         ),
+                        child: _buildProductImage(p),
+                      ),
                       Padding(
                         padding: const EdgeInsets.all(16),
                         child: Column(

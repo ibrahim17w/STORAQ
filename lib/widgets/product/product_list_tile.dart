@@ -1,6 +1,7 @@
 // lib/widgets/product/product_list_tile.dart
 import 'package:flutter/material.dart';
 import '../cached_image.dart';
+import '../../services/offline_service.dart';
 
 class ProductListTile extends StatelessWidget {
   final dynamic product;
@@ -22,6 +23,8 @@ class ProductListTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final productImages = OfflineService.getProductImagePaths(product);
+
     return GestureDetector(
       onTap: onTap,
       child: Container(
@@ -43,7 +46,7 @@ class ProductListTile extends StatelessWidget {
                 left: Radius.circular(14),
               ),
               child: CachedAppImage(
-                imageUrl: product['image_url'],
+                imageUrl: productImages.isNotEmpty ? productImages.first : null,
                 width: 100,
                 height: 100,
                 fit: BoxFit.cover,

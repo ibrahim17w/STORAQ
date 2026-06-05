@@ -216,7 +216,18 @@ router.post('/orders', authenticateToken, requireRealUser, attachStoreContext, r
     const finalSubtotal = (!isNaN(frontendSubtotal) && frontendSubtotal > 0) ? frontendSubtotal : subtotal;
     const computedTotal = Math.max(0, finalSubtotal - discount + tax);
     const finalTotal = (!isNaN(frontendTotal) && frontendTotal > 0) ? frontendTotal : computedTotal;
-    const receiptNumber = generateReceiptNumber();
+
+    let receiptNumber = generateReceiptNumber();
+    const requestedReceipt = req.validatedBody.receipt_number?.trim();
+    if (requestedReceipt) {
+      const dup = await client.query(
+        'SELECT id FROM orders WHERE receipt_number = $1 AND store_id = $2',
+        [requestedReceipt, storeId]
+      );
+      if (dup.rows.length === 0) {
+        receiptNumber = sanitizeString(requestedReceipt, 50);
+      }
+    }
 
     // Get cashier name for receipt (survives account deletion)
     const cashierResult = await client.query(

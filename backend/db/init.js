@@ -507,14 +507,26 @@ async function initAuthTables() {
   `);
   // ==================== FAVORITES ====================
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS favorites (
+CREATE TABLE IF NOT EXISTS favorites (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(user_id, product_id)
+);
+  `);
+    // ==================== FAVORITE STORES ====================
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS favorite_stores (
       id SERIAL PRIMARY KEY,
       user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+      store_id INTEGER NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      UNIQUE(user_id, product_id)
+      UNIQUE(user_id, store_id)
     );
   `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_favorite_stores_user ON favorite_stores(user_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_favorite_stores_store ON favorite_stores(store_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_favorites_user ON favorites(user_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_favorites_product ON favorites(product_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_store_staff_user ON store_staff(user_id);`);
