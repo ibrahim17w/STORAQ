@@ -1,4 +1,4 @@
-// explore_screen.dart (FIXED – inline search, modern transparent bar, distance on image-search closest)
+// lib/screens/explore_screen.dart
 import 'dart:async';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
@@ -10,7 +10,6 @@ import '../widgets/cached_image.dart';
 import 'store_products_screen.dart';
 import 'store_map_screen.dart';
 import 'product_detail_screen.dart';
-import 'login_screen.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:flutter/services.dart';
 import '../utils/location_helper.dart';
@@ -19,12 +18,13 @@ import '../services/marketplace_service.dart';
 import '../services/location_service.dart';
 import '../services/image_search_service.dart';
 import '../services/store_service.dart';
-
-String _tr(String key, {required String fallback}) {
-  final result = t(key);
-  if (result == null || result == key) return fallback;
-  return result;
-}
+import '../services/favorites_service.dart';
+import '../widgets/product/product_card.dart';
+import '../widgets/product/product_list_tile.dart';
+import '../widgets/store/store_card.dart';
+import '../widgets/store/store_list_tile.dart';
+import '../widgets/guest_login_sheet.dart' as guest;
+import '../utils/tr.dart';
 
 class ExploreScreen extends StatefulWidget {
   const ExploreScreen({super.key});
@@ -40,19 +40,15 @@ class _ExploreScreenState extends State<ExploreScreen> {
   bool _isLoading = true;
   bool _isGridView = true;
 
-  // ── Location / distance sort ──
   Position? _userPosition;
   bool _sortByClosest = false;
   bool _locationLoading = false;
 
-  // ── Image search state ──
   bool _isImageSearchActive = false;
   List<dynamic> _imageSearchResults = [];
   Uint8List? _imageSearchBytes;
-  String _imageSearchSort =
-      'similarity'; // 'similarity' | 'price_asc' | 'price_desc' | 'closest'
+  String _imageSearchSort = 'similarity';
 
-  // ── Inline text search state ──
   final _searchController = TextEditingController();
   final _searchFocusNode = FocusNode();
   List<dynamic> _searchProductResults = [];
@@ -61,9 +57,10 @@ class _ExploreScreenState extends State<ExploreScreen> {
   bool _hasSearched = false;
   static const String _historyKey = 'search_history';
 
-  // ── Pending views (for tracking) ──
   static final List<String> _pendingViews = [];
   static Timer? _viewFlushTimer;
+
+  Set<int> _favoriteIds = {};
 
   @override
   void initState() {
@@ -72,6 +69,27 @@ class _ExploreScreenState extends State<ExploreScreen> {
     _loadData();
     _loadHistory();
     _searchController.addListener(_onSearchChanged);
+    _loadFavorites();
+  }
+
+  Future<void> _loadFavorites() async {
+    try {
+      final ids = await FavoritesService.getLocalFavoriteIds();
+      if (mounted) setState(() => _favoriteIds = ids.toSet());
+    } catch (_) {}
+  }
+
+  Future<void> _toggleFavorite(int productId) async {
+    await FavoritesService.toggleFavorite(productId);
+    final ids = await FavoritesService.getLocalFavoriteIds();
+    if (mounted) setState(() => _favoriteIds = ids.toSet());
+  }
+
+  int? _productId(dynamic product) {
+    final id = product['id'];
+    if (id == null) return null;
+    if (id is int) return id;
+    return int.tryParse(id.toString());
   }
 
   @override
@@ -88,7 +106,6 @@ class _ExploreScreenState extends State<ExploreScreen> {
       setState(() => _isGridView = prefs.getBool('explore_grid_view') ?? true);
   }
 
-  // ── Location for closest-store sort ──
   Future<void> _initLocation() async {
     setState(() => _locationLoading = true);
     final pos = await LocationHelper.getCurrentPosition();
@@ -120,11 +137,8 @@ class _ExploreScreenState extends State<ExploreScreen> {
     );
   }
 
-  // NEW: distance from user to the store that sells this product
   double _distanceToProduct(dynamic product) {
     if (_userPosition == null) return double.infinity;
-
-    // Try shop_id first
     final shopId = product['shop_id'];
     if (shopId != null) {
       for (final store in _stores) {
@@ -133,8 +147,6 @@ class _ExploreScreenState extends State<ExploreScreen> {
         }
       }
     }
-
-    // Fallback: match by shop_name -> store name
     final shopName = product['shop_name']?.toString();
     if (shopName != null && shopName.isNotEmpty) {
       for (final store in _stores) {
@@ -143,7 +155,6 @@ class _ExploreScreenState extends State<ExploreScreen> {
         }
       }
     }
-
     return double.infinity;
   }
 
@@ -167,7 +178,6 @@ class _ExploreScreenState extends State<ExploreScreen> {
 
   Future<void> _loadData() async {
     setState(() => _isLoading = true);
-    // Get location in parallel with data loading
     _initLocation();
     try {
       final results = await Future.wait([
@@ -187,23 +197,8 @@ class _ExploreScreenState extends State<ExploreScreen> {
     }
   }
 
-  Future<bool> _requireAuth() async {
-    final isGuest = await ApiService.isGuest();
-    final isLoggedIn = await ApiService.isLoggedIn();
-    if (!isGuest || isLoggedIn) return true;
-    final result = await showModalBottomSheet<bool>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (_) => const _GuestAuthSheet(),
-    );
-    return result == true;
-  }
-
-  // NEW: Enrich product with shop_id if missing (fallback via stores list or store_id)
   dynamic _enrichProductWithStoreInfo(dynamic product) {
     if (product['shop_id'] != null) return product;
-
     final shopName = product['shop_name']?.toString();
     if (shopName != null && shopName.isNotEmpty && _stores.isNotEmpty) {
       for (final store in _stores) {
@@ -214,20 +209,17 @@ class _ExploreScreenState extends State<ExploreScreen> {
         }
       }
     }
-
     if (product['store_id'] != null) {
       final enriched = Map<String, dynamic>.from(product);
       enriched['shop_id'] = product['store_id'];
       return enriched;
     }
-
     return product;
   }
 
   void _onProductTap(dynamic product) async {
-    final canProceed = await _requireAuth();
+    final canProceed = await guest.requireAuth(context);
     if (!canProceed) return;
-
     final enriched = _enrichProductWithStoreInfo(product);
     _trackProductView(enriched);
     Navigator.push(
@@ -259,7 +251,6 @@ class _ExploreScreenState extends State<ExploreScreen> {
     );
   }
 
-  // ── Inline search logic ──
   void _onSearchChanged() {
     _performInlineSearch(_searchController.text);
   }
@@ -355,11 +346,8 @@ class _ExploreScreenState extends State<ExploreScreen> {
     await _saveHistory();
   }
 
-  // ── Search by image using CLIP embeddings ──
   Future<void> _openImageSearch() async {
-    // Dismiss keyboard if inline search is active
     _searchFocusNode.unfocus();
-
     final picker = ImagePicker();
     final picked = await picker.pickImage(
       source: ImageSource.gallery,
@@ -416,24 +404,22 @@ class _ExploreScreenState extends State<ExploreScreen> {
           errStr.contains('currently unavailable')) {
         errorMsg =
             t('image_search_model_unavailable') ??
-            'Image search is temporarily unavailable. Please try again later.';
+            'Image search is temporarily unavailable.';
         isServerError = true;
       } else if (errStr.contains('socket') ||
           errStr.contains('connection') ||
           errStr.contains('network')) {
         errorMsg =
             t('image_search_network_error') ??
-            'Network error. Please check your connection and try again.';
+            'Network error. Please check your connection.';
         isServerError = true;
       } else if (errStr.contains('429') || errStr.contains('too many')) {
         errorMsg =
             t('image_search_rate_limited') ??
-            'Too many searches. Please wait a minute and try again.';
+            'Too many searches. Please wait a minute.';
         isServerError = true;
       } else {
-        errorMsg =
-            t('image_search_failed') ??
-            'Image search failed. Please try again.';
+        errorMsg = t('image_search_failed') ?? 'Image search failed.';
         isServerError = true;
       }
     }
@@ -452,9 +438,7 @@ class _ExploreScreenState extends State<ExploreScreen> {
         });
       }
     } else if (errorMsg != null) {
-      if (mounted) {
-        setState(() => _isImageSearchActive = false);
-      }
+      if (mounted) setState(() => _isImageSearchActive = false);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(errorMsg),
@@ -468,19 +452,17 @@ class _ExploreScreenState extends State<ExploreScreen> {
         ),
       );
     } else {
-      if (mounted) {
-        setState(() => _isImageSearchActive = false);
-      }
+      if (mounted) setState(() => _isImageSearchActive = false);
       final reason = result?['reason'] as String?;
       String noResultMsg;
       if (reason == 'out_of_stock') {
         noResultMsg =
             t('image_search_out_of_stock') ??
-            'We found similar products but they are currently out of stock.';
+            'Similar products found but out of stock.';
       } else {
         noResultMsg =
             t('image_search_no_similar_products') ??
-            'No visually similar products found in the marketplace. Try a different image or angle.';
+            'No visually similar products found.';
       }
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -502,7 +484,6 @@ class _ExploreScreenState extends State<ExploreScreen> {
           automaticallyImplyLeading: false,
           title: Text(t('explore') ?? 'Explore'),
           actions: [
-            // Closest stores toggle
             if (!_isImageSearchActive && !isSearching)
               IconButton(
                 icon: Icon(
@@ -538,7 +519,6 @@ class _ExploreScreenState extends State<ExploreScreen> {
         ),
         body: Column(
           children: [
-            // ── Modern inline search bar (blends with scaffold in both themes) ──
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
               child: Container(
@@ -592,7 +572,6 @@ class _ExploreScreenState extends State<ExploreScreen> {
                         style: const TextStyle(fontSize: 15),
                       ),
                     ),
-                    // Camera / Clear button
                     if (!_isImageSearchActive)
                       Material(
                         color: Colors.transparent,
@@ -646,9 +625,7 @@ class _ExploreScreenState extends State<ExploreScreen> {
                 ),
               ),
             ),
-
             if (_isImageSearchActive) _buildImageSearchHeader(),
-
             Expanded(
               child: _isLoading
                   ? const Center(child: CircularProgressIndicator())
@@ -666,7 +643,6 @@ class _ExploreScreenState extends State<ExploreScreen> {
     );
   }
 
-  // ── Inline Search Results (products first, then stores) ──
   Widget _buildInlineSearchResults() {
     final hasQuery = _searchController.text.trim().isNotEmpty;
 
@@ -687,7 +663,7 @@ class _ExploreScreenState extends State<ExploreScreen> {
                 const Spacer(),
                 TextButton(
                   onPressed: _clearHistory,
-                  child: Text(_tr('clear_all', fallback: 'Clear All')),
+                  child: Text(tr('clear_all', fallback: 'Clear All')),
                 ),
               ],
             ),
@@ -775,7 +751,6 @@ class _ExploreScreenState extends State<ExploreScreen> {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        // ── PRODUCTS FIRST ──
         if (_searchProductResults.isNotEmpty) ...[
           Row(
             children: [
@@ -801,32 +776,38 @@ class _ExploreScreenState extends State<ExploreScreen> {
               ? Wrap(
                   spacing: 10,
                   runSpacing: 10,
-                  children: _searchProductResults
-                      .map(
-                        (p) => _ProductSearchCard(
-                          product: p,
-                          onTap: _onProductTap,
-                        ),
-                      )
-                      .toList(),
+                  children: _searchProductResults.map((p) {
+                    final pid = _productId(p);
+                    return ProductCard(
+                      product: p,
+                      onTap: () => _onProductTap(p),
+                      showFavorite: pid != null,
+                      isFavorite: pid != null && _favoriteIds.contains(pid),
+                      onFavoriteToggle: pid != null
+                          ? () => _toggleFavorite(pid)
+                          : null,
+                    );
+                  }).toList(),
                 )
               : Column(
-                  children: _searchProductResults
-                      .map(
-                        (p) => Padding(
-                          padding: const EdgeInsets.only(bottom: 8),
-                          child: _ProductListTile(
-                            product: p,
-                            onTap: _onProductTap,
-                          ),
-                        ),
-                      )
-                      .toList(),
+                  children: _searchProductResults.map((p) {
+                    final pid = _productId(p);
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: ProductListTile(
+                        product: p,
+                        onTap: () => _onProductTap(p),
+                        showFavorite: pid != null,
+                        isFavorite: pid != null && _favoriteIds.contains(pid),
+                        onFavoriteToggle: pid != null
+                            ? () => _toggleFavorite(pid)
+                            : null,
+                      ),
+                    );
+                  }).toList(),
                 ),
           const SizedBox(height: 20),
         ],
-
-        // ── STORES SECOND ──
         if (_searchStoreResults.isNotEmpty) ...[
           Row(
             children: [
@@ -854,65 +835,63 @@ class _ExploreScreenState extends State<ExploreScreen> {
                   child: ListView.builder(
                     scrollDirection: Axis.horizontal,
                     itemCount: _searchStoreResults.length,
-                    itemBuilder: (context, i) => _StoreSearchCard(
+                    itemBuilder: (context, i) => StoreCard(
                       store: _searchStoreResults[i],
-                      onTap: (store) async {
-                        final canProceed = await _requireAuth();
+                      onTap: () async {
+                        final canProceed = await guest.requireAuth(context);
                         if (!canProceed) return;
                         Navigator.push(
                           context,
                           MaterialPageRoute(
                             builder: (_) => StoreProductsScreen(
-                              storeId: store['id'],
+                              storeId: _searchStoreResults[i]['id'],
                               storeName:
-                                  store['name']?.toString() ?? 'Unknown Store',
+                                  _searchStoreResults[i]['name']?.toString() ??
+                                  'Unknown Store',
                             ),
                           ),
                         );
                       },
+                      isCompact: true,
+                      width: 140,
                     ),
                   ),
                 )
               : Column(
-                  children: _searchStoreResults
-                      .map(
-                        (s) => Padding(
-                          padding: const EdgeInsets.only(bottom: 8),
-                          child: _StoreListTile(
-                            store: s,
-                            onTap: (store) async {
-                              final canProceed = await _requireAuth();
-                              if (!canProceed) return;
-                              Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                  builder: (_) => StoreProductsScreen(
-                                    storeId: store['id'],
-                                    storeName:
-                                        store['name']?.toString() ??
-                                        'Unknown Store',
-                                  ),
-                                ),
-                              );
-                            },
-                          ),
-                        ),
-                      )
-                      .toList(),
+                  children: _searchStoreResults.map((s) {
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: StoreListTile(
+                        store: s,
+                        onTap: () async {
+                          final canProceed = await guest.requireAuth(context);
+                          if (!canProceed) return;
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => StoreProductsScreen(
+                                storeId: s['id'],
+                                storeName:
+                                    s['name']?.toString() ?? 'Unknown Store',
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    );
+                  }).toList(),
                 ),
         ],
       ],
     );
   }
 
-  // ── Image Search Results Header ──
   Widget _buildImageSearchHeader() {
     return Container(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Searched image thumbnail + result count
           Row(
             children: [
               if (_imageSearchBytes != null)
@@ -951,7 +930,6 @@ class _ExploreScreenState extends State<ExploreScreen> {
             ],
           ),
           const SizedBox(height: 10),
-          // Sort chips
           SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: Wrap(
@@ -972,7 +950,6 @@ class _ExploreScreenState extends State<ExploreScreen> {
                   value: 'price_desc',
                   icon: Icons.arrow_downward,
                 ),
-                // NEW: Closest first for image search results
                 if (_userPosition != null)
                   _buildSortChip(
                     label: t('closest_first') ?? 'Closest First',
@@ -1054,7 +1031,7 @@ class _ExploreScreenState extends State<ExploreScreen> {
         results.sort((a, b) {
           final sa = (a['similarity_score'] as num?) ?? 0;
           final sb = (b['similarity_score'] as num?) ?? 0;
-          return sb.compareTo(sa); // highest first
+          return sb.compareTo(sa);
         });
         break;
     }
@@ -1090,6 +1067,7 @@ class _ExploreScreenState extends State<ExploreScreen> {
             final distance = _distanceToProduct(product);
             final showDistance =
                 _imageSearchSort == 'closest' && distance != double.infinity;
+            final pid = _productId(product);
             return GestureDetector(
               onTap: () => _onProductTap(product),
               child: Container(
@@ -1123,7 +1101,6 @@ class _ExploreScreenState extends State<ExploreScreen> {
                             memCacheWidth: 400,
                           ),
                         ),
-                        // Similarity badge (when NOT closest sort)
                         if (!showDistance)
                           Positioned(
                             top: 8,
@@ -1147,7 +1124,6 @@ class _ExploreScreenState extends State<ExploreScreen> {
                               ),
                             ),
                           ),
-                        // Store name badge
                         if (product['shop_name'] != null)
                           Positioned(
                             top: 8,
@@ -1167,6 +1143,31 @@ class _ExploreScreenState extends State<ExploreScreen> {
                                   color: Colors.white,
                                   fontSize: 10,
                                   fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                            ),
+                          ),
+                        if (pid != null)
+                          Positioned(
+                            top: showDistance ? 8 : 36,
+                            right: 8,
+                            child: Material(
+                              color: Colors.black.withOpacity(0.35),
+                              borderRadius: BorderRadius.circular(12),
+                              child: InkWell(
+                                borderRadius: BorderRadius.circular(12),
+                                onTap: () => _toggleFavorite(pid),
+                                child: Padding(
+                                  padding: const EdgeInsets.all(4),
+                                  child: Icon(
+                                    _favoriteIds.contains(pid)
+                                        ? Icons.favorite
+                                        : Icons.favorite_border,
+                                    size: 18,
+                                    color: _favoriteIds.contains(pid)
+                                        ? Colors.red
+                                        : Colors.white,
+                                  ),
                                 ),
                               ),
                             ),
@@ -1241,7 +1242,6 @@ class _ExploreScreenState extends State<ExploreScreen> {
       );
     }
 
-    // List view
     return ListView.builder(
       padding: const EdgeInsets.all(16),
       itemCount: results.length,
@@ -1251,18 +1251,23 @@ class _ExploreScreenState extends State<ExploreScreen> {
         final distance = _distanceToProduct(product);
         final showDistance =
             _imageSearchSort == 'closest' && distance != double.infinity;
+        final pid = _productId(product);
         return Padding(
           padding: const EdgeInsets.only(bottom: 10),
           child: GestureDetector(
             onTap: () => _onProductTap(product),
             child: Stack(
               children: [
-                _ProductListTile(
+                ProductListTile(
                   product: product,
-                  onTap: _onProductTap,
+                  onTap: () => _onProductTap(product),
                   distanceKm: showDistance ? distance : null,
+                  showFavorite: pid != null,
+                  isFavorite: pid != null && _favoriteIds.contains(pid),
+                  onFavoriteToggle: pid != null
+                      ? () => _toggleFavorite(pid)
+                      : null,
                 ),
-                // Similarity badge (when NOT closest sort)
                 if (!showDistance)
                   Positioned(
                     top: 8,
@@ -1286,7 +1291,6 @@ class _ExploreScreenState extends State<ExploreScreen> {
                       ),
                     ),
                   ),
-                // Store name badge
                 if (product['shop_name'] != null)
                   Positioned(
                     top: 8,
@@ -1328,8 +1332,17 @@ class _ExploreScreenState extends State<ExploreScreen> {
         alignment: WrapAlignment.start,
         children: stores
             .map(
-              (store) => _StoreCard(
+              (store) => StoreCard(
                 store: store,
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => StoreProductsScreen(
+                      storeId: store['id'],
+                      storeName: store['name']?.toString() ?? 'Unknown Store',
+                    ),
+                  ),
+                ),
                 distanceKm: _sortByClosest ? _distanceToStore(store) : null,
               ),
             )
@@ -1417,7 +1430,6 @@ class _ExploreScreenState extends State<ExploreScreen> {
                             ),
                           ),
                         ],
-                        // Show distance when closest sort is active
                         if (_sortByClosest && _userPosition != null) ...[
                           const SizedBox(height: 4),
                           Row(
@@ -1473,501 +1485,8 @@ class _ExploreScreenState extends State<ExploreScreen> {
   }
 }
 
-class _StoreCard extends StatelessWidget {
-  final dynamic store;
-  final double? distanceKm;
-
-  const _StoreCard({required this.store, this.distanceKm});
-
-  @override
-  Widget build(BuildContext context) {
-    final description =
-        store['location_description']?.toString() ??
-        store['description']?.toString() ??
-        '';
-
-    return GestureDetector(
-      onTap: () => Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) => StoreProductsScreen(
-            storeId: store['id'],
-            storeName: store['name']?.toString() ?? 'Unknown Store',
-          ),
-        ),
-      ),
-      child: Container(
-        width: 160,
-        decoration: BoxDecoration(
-          color: Theme.of(context).cardColor,
-          borderRadius: BorderRadius.circular(14),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.04),
-              blurRadius: 8,
-              offset: const Offset(0, 2),
-            ),
-          ],
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ClipRRect(
-              borderRadius: const BorderRadius.vertical(
-                top: Radius.circular(14),
-              ),
-              child: CachedAppImage(
-                imageUrl: store['image_url'],
-                height: 120,
-                width: double.infinity,
-                fit: BoxFit.cover,
-                memCacheWidth: 400,
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(10, 8, 10, 6),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    store['name'] ?? '',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontWeight: FontWeight.w600,
-                      fontSize: 12,
-                    ),
-                  ),
-                  const SizedBox(height: 3),
-                  Text(
-                    '${store['city'] ?? ''}, ${store['country'] ?? ''}',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(fontSize: 10, color: Colors.grey.shade500),
-                  ),
-                  if (description.isNotEmpty) ...[
-                    const SizedBox(height: 3),
-                    Text(
-                      description,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 9,
-                        color: Colors.grey.shade600,
-                      ),
-                    ),
-                  ],
-                  if (distanceKm != null && distanceKm != double.infinity) ...[
-                    const SizedBox(height: 4),
-                    Row(
-                      children: [
-                        Icon(
-                          Icons.location_on,
-                          size: 10,
-                          color: Theme.of(context).colorScheme.primary,
-                        ),
-                        const SizedBox(width: 2),
-                        Text(
-                          '${distanceKm!.toStringAsFixed(1)} km',
-                          style: TextStyle(
-                            fontSize: 9,
-                            fontWeight: FontWeight.w600,
-                            color: Theme.of(context).colorScheme.primary,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
 // ============================================================
-// SEARCH RESULT WIDGETS (reused for inline & image search)
-// ============================================================
-
-class _StoreSearchCard extends StatelessWidget {
-  final dynamic store;
-  final void Function(dynamic) onTap;
-
-  const _StoreSearchCard({required this.store, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    final description =
-        store['location_description']?.toString() ??
-        store['description']?.toString() ??
-        '';
-
-    return GestureDetector(
-      onTap: () => onTap(store),
-      child: Container(
-        width: 140,
-        margin: const EdgeInsets.only(right: 10),
-        decoration: BoxDecoration(
-          color: Theme.of(context).cardColor,
-          borderRadius: BorderRadius.circular(14),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.04),
-              blurRadius: 8,
-              offset: const Offset(0, 2),
-            ),
-          ],
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ClipRRect(
-              borderRadius: const BorderRadius.vertical(
-                top: Radius.circular(14),
-              ),
-              child: CachedAppImage(
-                imageUrl: store['image_url'],
-                height: 90,
-                width: double.infinity,
-                fit: BoxFit.cover,
-                memCacheWidth: 300,
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(8, 6, 8, 4),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    store['name'] ?? '',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontWeight: FontWeight.w600,
-                      fontSize: 11,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    '${store['city'] ?? ''}, ${store['country'] ?? ''}',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(fontSize: 9, color: Colors.grey.shade500),
-                  ),
-                  if (description.isNotEmpty) ...[
-                    const SizedBox(height: 2),
-                    Text(
-                      description,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 8,
-                        color: Colors.grey.shade600,
-                      ),
-                    ),
-                  ],
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _ProductSearchCard extends StatelessWidget {
-  final dynamic product;
-  final void Function(dynamic) onTap;
-
-  const _ProductSearchCard({required this.product, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: () => onTap(product),
-      child: Container(
-        width: 160,
-        decoration: BoxDecoration(
-          color: Theme.of(context).cardColor,
-          borderRadius: BorderRadius.circular(14),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.04),
-              blurRadius: 8,
-              offset: const Offset(0, 2),
-            ),
-          ],
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ClipRRect(
-              borderRadius: const BorderRadius.vertical(
-                top: Radius.circular(14),
-              ),
-              child: CachedAppImage(
-                imageUrl: product['image_url'],
-                height: 140,
-                width: double.infinity,
-                fit: BoxFit.cover,
-                memCacheWidth: 400,
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(10, 8, 10, 6),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    product['name'] ?? '',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontWeight: FontWeight.w600,
-                      fontSize: 12,
-                    ),
-                  ),
-                  const SizedBox(height: 3),
-                  Text(
-                    '\$${product['price']}',
-                    style: TextStyle(
-                      fontWeight: FontWeight.bold,
-                      fontSize: 13,
-                      color: Theme.of(context).colorScheme.primary,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    product['shop_name'] ?? '',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(fontSize: 10, color: Colors.grey.shade500),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _StoreListTile extends StatelessWidget {
-  final dynamic store;
-  final void Function(dynamic) onTap;
-
-  const _StoreListTile({required this.store, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    final description =
-        store['location_description']?.toString() ??
-        store['description']?.toString() ??
-        '';
-
-    return GestureDetector(
-      onTap: () => onTap(store),
-      child: Container(
-        decoration: BoxDecoration(
-          color: Theme.of(context).cardColor,
-          borderRadius: BorderRadius.circular(14),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.04),
-              blurRadius: 8,
-              offset: const Offset(0, 2),
-            ),
-          ],
-        ),
-        child: Row(
-          children: [
-            ClipRRect(
-              borderRadius: const BorderRadius.horizontal(
-                left: Radius.circular(14),
-              ),
-              child: CachedAppImage(
-                imageUrl: store['image_url'],
-                width: 80,
-                height: 80,
-                fit: BoxFit.cover,
-                memCacheWidth: 200,
-              ),
-            ),
-            Expanded(
-              child: Padding(
-                padding: const EdgeInsets.all(12),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      store['name'] ?? '',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontWeight: FontWeight.w600,
-                        fontSize: 14,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      '${store['city'] ?? ''}, ${store['country'] ?? ''}',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Colors.grey.shade500,
-                      ),
-                    ),
-                    if (description.isNotEmpty) ...[
-                      const SizedBox(height: 4),
-                      Text(
-                        description,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: Colors.grey.shade600,
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-            ),
-            const Padding(
-              padding: EdgeInsets.only(right: 12),
-              child: Icon(Icons.chevron_right, color: Colors.grey),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _ProductListTile extends StatelessWidget {
-  final dynamic product;
-  final void Function(dynamic) onTap;
-  final double? distanceKm;
-
-  const _ProductListTile({
-    required this.product,
-    required this.onTap,
-    this.distanceKm,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: () => onTap(product),
-      child: Container(
-        decoration: BoxDecoration(
-          color: Theme.of(context).cardColor,
-          borderRadius: BorderRadius.circular(14),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.04),
-              blurRadius: 8,
-              offset: const Offset(0, 2),
-            ),
-          ],
-        ),
-        child: Row(
-          children: [
-            ClipRRect(
-              borderRadius: const BorderRadius.horizontal(
-                left: Radius.circular(14),
-              ),
-              child: CachedAppImage(
-                imageUrl: product['image_url'],
-                width: 100,
-                height: 100,
-                fit: BoxFit.cover,
-                memCacheWidth: 300,
-              ),
-            ),
-            Expanded(
-              child: Padding(
-                padding: const EdgeInsets.all(12),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      product['name'] ?? '',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontWeight: FontWeight.w600,
-                        fontSize: 14,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      '\$${product['price']}',
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 16,
-                        color: Theme.of(context).colorScheme.primary,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            product['shop_name'] ?? '',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: Colors.grey.shade500,
-                            ),
-                          ),
-                        ),
-                        if (distanceKm != null &&
-                            distanceKm != double.infinity) ...[
-                          Icon(
-                            Icons.location_on,
-                            size: 12,
-                            color: Theme.of(context).colorScheme.primary,
-                          ),
-                          const SizedBox(width: 4),
-                          Text(
-                            '${distanceKm!.toStringAsFixed(1)} km',
-                            style: TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                              color: Theme.of(context).colorScheme.primary,
-                            ),
-                          ),
-                        ],
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            const Padding(
-              padding: EdgeInsets.only(right: 12),
-              child: Icon(Icons.chevron_right, color: Colors.grey),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-// ============================================================
-// IMAGE SEARCH PREVIEW SHEET
+// IMAGE SEARCH PREVIEW SHEET (explore-unique, stays here)
 // ============================================================
 
 class _ImageSearchPreviewSheet extends StatefulWidget {
@@ -2142,104 +1661,6 @@ class _ImageSearchPreviewSheetState extends State<_ImageSearchPreviewSheet> {
             ),
           ],
         ),
-      ),
-    );
-  }
-}
-
-// ============================================================
-// GUEST AUTH SHEET (copied from home_screen for consistency)
-// ============================================================
-
-class _GuestAuthSheet extends StatelessWidget {
-  const _GuestAuthSheet();
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      constraints: BoxConstraints(
-        maxHeight: MediaQuery.of(context).size.height * 0.5,
-      ),
-      decoration: BoxDecoration(
-        color: Theme.of(context).scaffoldBackgroundColor,
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const SizedBox(height: 12),
-          Container(
-            width: 40,
-            height: 4,
-            decoration: BoxDecoration(
-              color: Colors.grey.shade300,
-              borderRadius: BorderRadius.circular(2),
-            ),
-          ),
-          const SizedBox(height: 24),
-          Icon(
-            Icons.lock_outline,
-            size: 48,
-            color: Theme.of(context).colorScheme.primary,
-          ),
-          const SizedBox(height: 16),
-          Text(
-            t('login_required') ?? 'Login Required',
-            style: Theme.of(
-              context,
-            ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
-          ),
-          const SizedBox(height: 8),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 32),
-            child: Text(
-              t('guest_login_prompt') ??
-                  'Please log in or register to access this feature.',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                color: Theme.of(context).colorScheme.onSurface.withOpacity(0.6),
-              ),
-            ),
-          ),
-          const SizedBox(height: 24),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20),
-            child: SizedBox(
-              width: double.infinity,
-              child: ElevatedButton(
-                onPressed: () {
-                  Navigator.pop(context, true);
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (_) => const LoginScreen()),
-                  );
-                },
-                style: ElevatedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                ),
-                child: Text(
-                  t('login_or_register') ?? 'Log In / Register',
-                  style: const TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(height: 8),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20),
-            child: TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: Text(t('continue_browsing') ?? 'Continue Browsing'),
-            ),
-          ),
-          const SizedBox(height: 20),
-        ],
       ),
     );
   }

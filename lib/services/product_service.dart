@@ -1,5 +1,6 @@
 // lib/services/product_service.dart
 // FIXED: syncPendingChanges now reads category_ids (plural) from pending creates
+// FIXED: image sync for offline products via individual multipart uploads
 
 import 'dart:convert';
 import 'dart:io';
@@ -40,14 +41,12 @@ class ProductService {
         return products;
       }
     } catch (e) {
-      // SocketException, timeout, server error — all fall through to cache
       if (!fallbackToCache) rethrow;
     }
 
     if (fallbackToCache) {
       final cached = await OfflineService.getCachedProducts(storeId: storeId);
       if (cached.isNotEmpty) return cached;
-      // Also include pending creates/updates/deletes in the merged view
       final merged = await OfflineService.getMergedProducts(storeId);
       if (merged.isNotEmpty) return merged;
     }
@@ -67,11 +66,9 @@ class ProductService {
 
   static Future<bool> _isOnline() async {
     final connectivity = await Connectivity().checkConnectivity();
-    // FIXED: v6+ connectivity API — List.contains instead of !=
     return !connectivity.contains(ConnectivityResult.none);
   }
 
-  /// Creates a product. If offline, queues it for later sync.
   static Future<Map<String, dynamic>> createProductOfflineAware({
     required String name,
     required double price,
@@ -100,7 +97,6 @@ class ProductService {
       );
     }
 
-    // Offline: queue pending create
     await OfflineService.addPending({
       'name': name,
       'price': price,
@@ -114,30 +110,13 @@ class ProductService {
       'action': 'create',
     }, storeId);
 
-    // Optimistic: add to cache immediately so UI shows it
     final tempId = DateTime.now().millisecondsSinceEpoch;
-    await OfflineService.cacheProducts(storeId, [
-      {
-        'id': 'pending_$tempId',
-        'name': name,
-        'price': price,
-        'quantity': quantity,
-        'description': description,
-        'barcode': barcode,
-        'category_id': categoryId,
-        'currency': currency ?? 'SYP',
-        'image_url': image != null ? image.path : null,
-        'images': extraImages?.map((f) => f.path).toList() ?? [],
-        'low_stock_threshold': lowStockThreshold ?? 5,
-        'updated_at': DateTime.now().toIso8601String(),
-        '_pendingCreate': true,
-      },
-    ]);
-
+    // Do NOT cache pending creates in cached_products — getMergedProducts()
+    // already surfaces them from pending_products. Caching here caused
+    // duplicate products after sync (temp 'pending_' ID vs real server ID).
     return {'offline': true, 'pending': true, 'id': 'pending_$tempId'};
   }
 
-  /// Updates a product. If offline, queues it for later sync.
   static Future<Map<String, dynamic>> updateProductOfflineAware({
     required int id,
     required String name,
@@ -170,7 +149,6 @@ class ProductService {
       );
     }
 
-    // Offline: queue pending update
     await OfflineService.addPendingUpdate(
       {
         'server_id': id,
@@ -189,7 +167,6 @@ class ProductService {
       storeId,
     );
 
-    // Optimistic: update cache immediately
     await OfflineService.updateCachedProduct({
       'id': id,
       'name': name,
@@ -205,22 +182,23 @@ class ProductService {
     return {'offline': true, 'pending': true, 'id': id};
   }
 
-  /// Deletes a product. If offline, queues it for later sync.
   static Future<void> deleteProductOfflineAware(int id, int storeId) async {
     try {
       if (await _isOnline()) {
         return await deleteProduct(id);
       }
-    } catch (e) {
-      // Server call failed mid-delete — fall through to offline queue
-    }
+    } catch (e) {}
 
-    // Offline: queue for sync and remove from local cache immediately
     await OfflineService.addPendingDelete(id, storeId);
     await OfflineService.removeCachedProduct(id);
   }
 
+  // ============================================================
+  // BULK SYNC (with image-aware individual uploads)
+  // ============================================================
+
   /// Syncs all pending changes (creates, updates, deletes, stock changes) to server.
+  /// Products with local images are synced individually via multipart to preserve images.
   static Future<Map<String, dynamic>> syncPendingChanges(int storeId) async {
     if (!await _isOnline()) {
       throw Exception('Cannot sync while offline');
@@ -238,40 +216,132 @@ class ProductService {
       return {'status': 'nothing_to_sync'};
     }
 
+    final bulkCreates = <Map<String, dynamic>>[];
+    final imageCreates = <Map<String, dynamic>>[];
+    for (final c in creates) {
+      if (_pendingHasImages(c)) {
+        imageCreates.add(c);
+      } else {
+        bulkCreates.add({
+          'local_id': c['id'],
+          'name': c['name'],
+          'price': c['price'],
+          'quantity': c['quantity'],
+          'description': c['description'],
+          'barcode': c['barcode'],
+          'category_id': _extractCategoryId(c),
+          'low_stock_threshold': c['low_stock_threshold'] ?? 5,
+          'currency': c['currency'] ?? 'SYP',
+        });
+      }
+    }
+
+    final bulkUpdates = <Map<String, dynamic>>[];
+    final imageUpdates = <Map<String, dynamic>>[];
+    for (final u in updates) {
+      if (_pendingHasImages(u)) {
+        imageUpdates.add(u);
+      } else {
+        bulkUpdates.add({
+          'local_id': u['id'],
+          'server_id': u['server_id'],
+          'name': u['name'],
+          'price': u['price'],
+          'quantity': u['quantity'],
+          'description': u['description'],
+          'barcode': u['barcode'],
+          'category_id': _extractCategoryId(u),
+          'low_stock_threshold': u['low_stock_threshold'] ?? 5,
+          'currency': u['currency'] ?? 'SYP',
+        });
+      }
+    }
+
+    final results = <String, dynamic>{
+      'status': 'synced',
+      'creates': <Map<String, dynamic>>[],
+      'updates': <Map<String, dynamic>>[],
+      'deletes': <Map<String, dynamic>>[],
+      'stock_changes': <Map<String, dynamic>>[],
+    };
+
+    // --- CREATES WITH IMAGES (individual multipart) ---
+    for (final c in imageCreates) {
+      try {
+        final imageFiles = _extractImageFiles(c);
+        final result = await createProduct(
+          name: c['name']?.toString() ?? '',
+          price: (c['price'] as num?)?.toDouble() ?? 0,
+          quantity: c['quantity'] is int
+              ? c['quantity']
+              : int.tryParse(c['quantity']?.toString() ?? '0') ?? 0,
+          description: c['description']?.toString(),
+          barcode: c['barcode']?.toString(),
+          categoryId: _extractCategoryId(c),
+          lowStockThreshold: c['low_stock_threshold'] is int
+              ? c['low_stock_threshold']
+              : int.tryParse(c['low_stock_threshold']?.toString() ?? '5') ?? 5,
+          currency: c['currency']?.toString() ?? 'SYP',
+          image: imageFiles.isNotEmpty ? imageFiles.first : null,
+          extraImages: imageFiles.length > 1 ? imageFiles.sublist(1) : null,
+        );
+        (results['creates'] as List<Map<String, dynamic>>).add({
+          'local_id': c['id'],
+          'status': 'success',
+          'server_id': result['id'],
+          'product': result,
+        });
+        await OfflineService.removePending(c['id'] as int);
+      } catch (e) {
+        (results['creates'] as List<Map<String, dynamic>>).add({
+          'local_id': c['id'],
+          'status': 'error',
+          'error': e.toString(),
+        });
+      }
+    }
+
+    // --- UPDATES WITH IMAGES (individual multipart) ---
+    for (final u in imageUpdates) {
+      try {
+        final imageFiles = _extractImageFiles(u);
+        final serverId = u['server_id'] as int;
+        final result = await updateProduct(
+          id: serverId,
+          name: u['name']?.toString() ?? '',
+          price: (u['price'] as num?)?.toDouble() ?? 0,
+          quantity: u['quantity'] is int
+              ? u['quantity']
+              : int.tryParse(u['quantity']?.toString() ?? '0') ?? 0,
+          description: u['description']?.toString(),
+          barcode: u['barcode']?.toString(),
+          categoryId: _extractCategoryId(u),
+          lowStockThreshold: u['low_stock_threshold'] is int
+              ? u['low_stock_threshold']
+              : int.tryParse(u['low_stock_threshold']?.toString() ?? '5') ?? 5,
+          currency: u['currency']?.toString() ?? 'SYP',
+          image: imageFiles.isNotEmpty ? imageFiles.first : null,
+          extraImages: imageFiles.length > 1 ? imageFiles.sublist(1) : null,
+        );
+        (results['updates'] as List<Map<String, dynamic>>).add({
+          'local_id': u['id'],
+          'status': 'success',
+          'product': result,
+        });
+        await OfflineService.removePending(u['id'] as int);
+      } catch (e) {
+        (results['updates'] as List<Map<String, dynamic>>).add({
+          'local_id': u['id'],
+          'status': 'error',
+          'error': e.toString(),
+        });
+      }
+    }
+
+    // --- BULK SYNC for no-image items ---
     final body = <String, dynamic>{
-      'creates': creates
-          .map(
-            (c) => {
-              'local_id': c['id'],
-              'name': c['name'],
-              'price': c['price'],
-              'quantity': c['quantity'],
-              'description': c['description'],
-              'barcode': c['barcode'],
-              // FIXED: Read category_ids (plural, list) from pending create
-              // The backend sync endpoint expects category_id (singular int)
-              'category_id': _extractCategoryId(c),
-              'low_stock_threshold': c['low_stock_threshold'] ?? 5,
-              'currency': c['currency'] ?? 'SYP',
-            },
-          )
-          .toList(),
-      'updates': updates
-          .map(
-            (u) => {
-              'local_id': u['id'],
-              'server_id': u['server_id'],
-              'name': u['name'],
-              'price': u['price'],
-              'quantity': u['quantity'],
-              'description': u['description'],
-              'barcode': u['barcode'],
-              'category_id': _extractCategoryId(u),
-              'low_stock_threshold': u['low_stock_threshold'] ?? 5,
-              'currency': u['currency'] ?? 'SYP',
-            },
-          )
-          .toList(),
+      'creates': bulkCreates,
+      'updates': bulkUpdates,
       'deletes': deletes
           .map((d) => {'local_id': d['id'], 'product_id': d['product_id']})
           .toList(),
@@ -286,46 +356,123 @@ class ProductService {
           .toList(),
     };
 
-    final response = await ApiService.postWithTimeout(
-      '${ApiService.baseUrl}/api/products/sync',
-      headers: await ApiService.authHeaders,
-      body: jsonEncode(body),
-    );
+    if (bulkCreates.isNotEmpty ||
+        bulkUpdates.isNotEmpty ||
+        deletes.isNotEmpty ||
+        stockChanges.isNotEmpty) {
+      final response = await ApiService.postWithTimeout(
+        '${ApiService.baseUrl}/api/products/sync',
+        headers: await ApiService.authHeaders,
+        body: jsonEncode(body),
+      );
 
-    final data = jsonDecode(response.body) as Map<String, dynamic>;
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
 
-    if (response.statusCode == 200) {
-      // Clear successfully synced pending items
-      for (final c in creates) {
-        await OfflineService.removePending(c['id'] as int);
-      }
-      for (final u in updates) {
-        await OfflineService.removePending(u['id'] as int);
-      }
-      for (final d in deletes) {
-        await OfflineService.clearPendingDelete(d['id'] as int);
-      }
-      for (final s in stockChanges) {
-        await OfflineService.markStockChangeSynced(s['id'] as int);
-      }
+      if (response.statusCode == 200) {
+        (results['creates'] as List<Map<String, dynamic>>).addAll(
+          (data['creates'] as List<dynamic>? ?? [])
+              .cast<Map<String, dynamic>>(),
+        );
+        (results['updates'] as List<Map<String, dynamic>>).addAll(
+          (data['updates'] as List<dynamic>? ?? [])
+              .cast<Map<String, dynamic>>(),
+        );
+        (results['deletes'] as List<Map<String, dynamic>>).addAll(
+          (data['deletes'] as List<dynamic>? ?? [])
+              .cast<Map<String, dynamic>>(),
+        );
+        (results['stock_changes'] as List<Map<String, dynamic>>).addAll(
+          (data['stock_changes'] as List<dynamic>? ?? [])
+              .cast<Map<String, dynamic>>(),
+        );
 
-      // Refresh cache from server
-      await fetchProducts(storeId, useCache: false);
-      return data;
+        for (final c in bulkCreates) {
+          final localId = c['local_id'] as int;
+          final success = (results['creates'] as List<Map<String, dynamic>>)
+              .any((r) => r['local_id'] == localId && r['status'] == 'success');
+          if (success) await OfflineService.removePending(localId);
+        }
+        for (final u in bulkUpdates) {
+          final localId = u['local_id'] as int;
+          final success = (results['updates'] as List<Map<String, dynamic>>)
+              .any((r) => r['local_id'] == localId && r['status'] == 'success');
+          if (success) await OfflineService.removePending(localId);
+        }
+        for (final d in deletes) {
+          final localId = d['id'] as int;
+          final success = (results['deletes'] as List<Map<String, dynamic>>)
+              .any((r) => r['local_id'] == localId && r['status'] == 'success');
+          if (success) await OfflineService.clearPendingDelete(localId);
+        }
+        for (final s in stockChanges) {
+          final localId = s['id'] as int;
+          final success =
+              (results['stock_changes'] as List<Map<String, dynamic>>).any(
+                (r) => r['local_id'] == localId && r['status'] == 'success',
+              );
+          if (success) await OfflineService.markStockChangeSynced(localId);
+        }
+      } else {
+        throw Exception(data['error']?.toString() ?? 'Sync failed');
+      }
     }
 
-    throw Exception(data['error']?.toString() ?? 'Sync failed');
+    // Refresh cache from server so IDs match and old temp entries are gone
+    try {
+      await OfflineService.clearCachedProducts(storeId);
+      await fetchProducts(storeId, useCache: false);
+    } catch (_) {}
+    return results;
+  }
+
+  // ============================================================
+  // IMAGE HELPERS
+  // ============================================================
+
+  static bool _pendingHasImages(Map<String, dynamic> pending) {
+    final raw = pending['image_paths'];
+    if (raw == null) return false;
+    List<dynamic> paths = [];
+    if (raw is String) {
+      try {
+        paths = jsonDecode(raw) as List<dynamic>;
+      } catch (_) {
+        return false;
+      }
+    } else if (raw is List) {
+      paths = raw;
+    }
+    return paths.any((p) => p != null && p.toString().isNotEmpty);
+  }
+
+  static List<File> _extractImageFiles(Map<String, dynamic> pending) {
+    final raw = pending['image_paths'];
+    if (raw == null) return [];
+    List<dynamic> paths = [];
+    if (raw is String) {
+      try {
+        paths = jsonDecode(raw) as List<dynamic>;
+      } catch (_) {
+        return [];
+      }
+    } else if (raw is List) {
+      paths = raw;
+    }
+    return paths
+        .whereType<String>()
+        .where((p) => p.isNotEmpty)
+        .map((p) => File(p))
+        .where((f) => f.existsSync())
+        .toList();
   }
 
   /// Extracts a single category ID from pending data that may have
   /// category_id (int), category_ids (List), or null.
   static int? _extractCategoryId(Map<String, dynamic> pending) {
-    // Try category_id first (from updates or direct creates)
     final direct = pending['category_id'];
     if (direct is int) return direct;
     if (direct is String) return int.tryParse(direct);
 
-    // Try category_ids (list from add_product_screen offline create)
     final list = pending['category_ids'];
     if (list is List && list.isNotEmpty) {
       final first = list.first;
@@ -337,7 +484,7 @@ class ProductService {
   }
 
   // ============================================================
-  // CREATE / UPDATE / DELETE (original methods — UNCHANGED)
+  // CREATE / UPDATE / DELETE
   // ============================================================
 
   static Future<Map<String, dynamic>> createProduct({
@@ -448,7 +595,7 @@ class ProductService {
   }
 
   // ============================================================
-  // PRODUCT IMAGES (UNCHANGED)
+  // PRODUCT IMAGES
   // ============================================================
 
   static Future<List<dynamic>> fetchProductImages(int productId) async {
@@ -477,7 +624,7 @@ class ProductService {
   }
 
   // ============================================================
-  // BARCODE (UNCHANGED)
+  // BARCODE
   // ============================================================
 
   static Future<Map<String, dynamic>?> lookupBarcode(String barcode) async {
@@ -534,7 +681,7 @@ class ProductService {
   }
 
   // ============================================================
-  // PRODUCT SEARCH (for checkout) (UNCHANGED)
+  // PRODUCT SEARCH
   // ============================================================
 
   static Future<List<dynamic>> searchStoreProducts({

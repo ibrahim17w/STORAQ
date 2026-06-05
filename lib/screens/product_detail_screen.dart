@@ -1,14 +1,14 @@
-//product_detail_screen.dart
+// lib/screens/product_detail_screen.dart
 import 'package:flutter/material.dart';
 import 'package:latlong2/latlong.dart';
 import '../services/api_service.dart';
+import '../services/favorites_service.dart';
 import '../lang/translations.dart';
 import '../widgets/cached_image.dart';
-import 'store_map_screen.dart'; // Already correct
+import 'store_map_screen.dart';
 import 'store_products_screen.dart';
 import '../services/store_service.dart';
 
-/// Product Detail Screen — shows a single product with its shop info and map link.
 class ProductDetailScreen extends StatefulWidget {
   final dynamic product;
   const ProductDetailScreen({super.key, required this.product});
@@ -20,15 +20,32 @@ class ProductDetailScreen extends StatefulWidget {
 class _ProductDetailScreenState extends State<ProductDetailScreen> {
   Map<String, dynamic>? _storeData;
   bool _loadingStore = true;
+  bool _isFavorite = false;
 
   @override
   void initState() {
     super.initState();
     _loadStore();
+    _checkFavorite();
+  }
+
+  Future<void> _checkFavorite() async {
+    final id = widget.product['id'];
+    if (id == null) return;
+    final pid = id is int ? id : int.tryParse(id.toString()) ?? 0;
+    final fav = await FavoritesService.isFavorite(pid);
+    if (mounted) setState(() => _isFavorite = fav);
+  }
+
+  Future<void> _toggleFavorite() async {
+    final id = widget.product['id'];
+    if (id == null) return;
+    final pid = id is int ? id : int.tryParse(id.toString()) ?? 0;
+    await FavoritesService.toggleFavorite(pid);
+    if (mounted) setState(() => _isFavorite = !_isFavorite);
   }
 
   Future<void> _loadStore() async {
-    // Backend uses 'store_id', frontend sometimes passes 'shop_id'
     final shopId = widget.product['shop_id'] ?? widget.product['store_id'];
     if (shopId == null) {
       setState(() => _loadingStore = false);
@@ -100,12 +117,18 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
         ),
+        actions: [
+          IconButton(
+            icon: Icon(_isFavorite ? Icons.favorite : Icons.favorite_border),
+            color: _isFavorite ? Colors.red : null,
+            onPressed: _toggleFavorite,
+          ),
+        ],
       ),
       body: SingleChildScrollView(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // ── Product Image ──
             CachedAppImage(
               imageUrl: p['image_url'],
               width: double.infinity,
@@ -113,8 +136,6 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
               fit: BoxFit.cover,
               memCacheWidth: 600,
             ),
-
-            // ── Product Info ──
             Padding(
               padding: const EdgeInsets.all(20),
               child: Column(
@@ -197,10 +218,7 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
                 ],
               ),
             ),
-
             const Divider(height: 1),
-
-            // ── Shop Info Section ──
             Padding(
               padding: const EdgeInsets.all(20),
               child: Column(

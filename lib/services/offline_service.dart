@@ -378,6 +378,17 @@ class OfflineService {
     return store?['id'] as int?;
   }
 
+  // ==================== CLEAR CACHED PRODUCTS ====================
+
+  static Future<void> clearCachedProducts(int storeId) async {
+    final database = await db;
+    await database.delete(
+      'cached_products',
+      where: 'store_id = ?',
+      whereArgs: [storeId],
+    );
+  }
+
   // ==================== USER CACHE (SharedPreferences) ====================
   static Future<void> cacheUser(Map<String, dynamic> user) async {
     final prefs = await SharedPreferences.getInstance();
@@ -729,6 +740,27 @@ class OfflineService {
     for (final row in cachedRows) {
       final id = row['id'] as int;
       if (pendingDeleteIds.contains(id)) continue;
+
+      // Skip orphaned temp cached products from old bug.
+      // Temp offline-created products had local file paths in image_url/images
+      // instead of HTTP URLs. After sync they remain as ghosts with different IDs.
+      final imageUrl = row['image_url'] as String?;
+      if (imageUrl != null &&
+          imageUrl.isNotEmpty &&
+          !imageUrl.startsWith('http')) {
+        continue;
+      }
+      final imagesJson = row['images'] as String?;
+      if (imagesJson != null && imagesJson.isNotEmpty) {
+        try {
+          final imagesList = jsonDecode(imagesJson) as List<dynamic>;
+          if (imagesList.any(
+            (img) => img is String && img.isNotEmpty && !img.startsWith('http'),
+          )) {
+            continue;
+          }
+        } catch (_) {}
+      }
 
       final map = Map<String, dynamic>.from(row);
       if (map['images'] != null) {

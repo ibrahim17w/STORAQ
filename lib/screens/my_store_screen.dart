@@ -104,16 +104,51 @@ class _MyStoreScreenState extends State<MyStoreScreen>
       _error = null;
     });
 
-    Map<String, dynamic>? store;
-    int? storeId;
-    List<dynamic> products = [];
-    List<dynamic> staff = [];
-    int pending = 0;
-
-    // Step 1: Get store (try server, then cache, then context fallback)
     try {
-      store = await StoreService.getMyStore();
-      storeId = store['id'] as int;
+      // Step 1: Get store (try server, then cache, then context fallback)
+      final store = await StoreService.getMyStore();
+      final storeId = store['id'] as int;
+
+      // Step 2: Load everything in PARALLEL (products, staff, pending count)
+      final results = await Future.wait([
+        _isOffline
+            ? OfflineService.getMergedProducts(storeId)
+            : ProductService.fetchProducts(
+                storeId,
+                useCache: false,
+              ).catchError((_) => OfflineService.getMergedProducts(storeId)),
+        ApiService.isStoreOwner().catchError((_) => false),
+        OfflineService.pendingProductChangeCount().catchError((_) => 0),
+        // Staff only loads if owner — wrapped to not block others
+        Future.value(null), // placeholder, loaded separately if needed
+      ]);
+
+      List<dynamic> products = results[0] as List<dynamic>;
+      final isOwner = results[1] as bool;
+      final pending = results[2] as int;
+
+      // Load staff in parallel with setting state (non-blocking)
+      List<dynamic> staff = [];
+      if (isOwner) {
+        StoreService.fetchMyStoreStaff()
+            .then((s) {
+              if (mounted) setState(() => _staff = s);
+            })
+            .catchError((_) {});
+      }
+
+      if (mounted) {
+        setState(() {
+          _store = store;
+          _products = products;
+          _isOwner = isOwner;
+          _canManageInventory =
+              isOwner; // Owner always can; staff check done in _loadPermissions
+          _pendingCount = pending;
+          _staff = staff;
+          _loading = false;
+        });
+      }
     } catch (e) {
       // getMyStore() already tried cache and context fallback — if all failed, we have nothing
       if (mounted) {
@@ -124,45 +159,6 @@ class _MyStoreScreenState extends State<MyStoreScreen>
           _loading = false;
         });
       }
-      return;
-    }
-
-    // Step 2: Get products (merged view handles offline gracefully)
-    try {
-      if (_isOffline) {
-        products = await OfflineService.getMergedProducts(storeId);
-      } else {
-        products = await ProductService.fetchProducts(storeId, useCache: false);
-      }
-    } catch (e) {
-      // Fallback to merged products (cache + pending) on any error
-      try {
-        products = await OfflineService.getMergedProducts(storeId);
-      } catch (_) {
-        products = [];
-      }
-    }
-
-    // Step 3: Count pending changes
-    try {
-      pending = await OfflineService.pendingProductChangeCount();
-    } catch (_) {}
-
-    // Step 4: Load staff if owner (optional, don't crash if fails)
-    try {
-      if (await ApiService.isStoreOwner()) {
-        staff = await StoreService.fetchMyStoreStaff();
-      }
-    } catch (_) {}
-
-    if (mounted) {
-      setState(() {
-        _store = store;
-        _products = products;
-        _staff = staff;
-        _pendingCount = pending;
-        _loading = false;
-      });
     }
   }
 
@@ -539,9 +535,8 @@ class _MyStoreScreenState extends State<MyStoreScreen>
     final theme = Theme.of(context);
 
     if (_loading && _products.isEmpty) {
-      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+      return const _MyStoreSkeleton();
     }
-
     if (_error != null && _products.isEmpty) {
       return Scaffold(
         body: Center(
@@ -605,22 +600,6 @@ class _MyStoreScreenState extends State<MyStoreScreen>
                   icon: const Icon(Icons.refresh),
                   onPressed: _loadData,
                   tooltip: t('refresh') ?? 'Refresh',
-                ),
-                // Pending orders sync badge
-                FutureBuilder<int>(
-                  future: OfflineService.pendingOrderCount(),
-                  builder: (context, snap) {
-                    final count = snap.data ?? 0;
-                    if (count == 0) return const SizedBox.shrink();
-                    return IconButton(
-                      icon: Badge(
-                        label: Text('$count'),
-                        child: const Icon(Icons.sync),
-                      ),
-                      onPressed: _syncAllPending,
-                      tooltip: t('sync_orders') ?? 'Sync orders',
-                    );
-                  },
                 ),
               ],
             ),
@@ -1094,6 +1073,81 @@ class _PendingBadge extends StatelessWidget {
           fontWeight: FontWeight.bold,
           color: color,
         ),
+      ),
+    );
+  }
+}
+// ============================================================
+// MY STORE SKELETON LOADING
+// ============================================================
+
+class _MyStoreSkeleton extends StatelessWidget {
+  const _MyStoreSkeleton();
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final baseColor = theme.colorScheme.surfaceContainerHighest;
+
+    return Scaffold(
+      body: CustomScrollView(
+        slivers: [
+          // App bar skeleton
+          SliverAppBar(
+            expandedHeight: 180,
+            pinned: true,
+            flexibleSpace: FlexibleSpaceBar(
+              background: Container(color: baseColor),
+            ),
+          ),
+          // Stats row skeleton
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Container(
+                      height: 80,
+                      decoration: BoxDecoration(
+                        color: baseColor,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Container(
+                      height: 80,
+                      decoration: BoxDecoration(
+                        color: baseColor,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          // Product cards skeleton
+          SliverPadding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            sliver: SliverList(
+              delegate: SliverChildBuilderDelegate((context, index) {
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: Container(
+                    height: 100,
+                    decoration: BoxDecoration(
+                      color: baseColor,
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                  ),
+                );
+              }, childCount: 6),
+            ),
+          ),
+        ],
       ),
     );
   }

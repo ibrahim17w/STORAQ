@@ -378,6 +378,8 @@ final Map<String, Map<String, String>> _translations = {
     'no_store_found': 'No store found. Please login online first.',
     'product_saved_offline': 'Product saved offline',
     'product_updated_offline': 'Product updated offline',
+    'no_favorites': 'No favorites yet',
+    'tap_heart_to_add': 'Tap the heart on products to add them',
   },
 
   'ar': {

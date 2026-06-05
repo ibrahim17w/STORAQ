@@ -95,81 +95,124 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
   @override
   void initState() {
     super.initState();
-    _loadCashier();
-    _loadStoreProducts();
+    // Load both in parallel for faster startup
+    Future.wait([_loadCashier(), _loadStoreProducts()]);
   }
 
   Future<void> _loadStoreProducts() async {
-    setState(() => _isLoading = true);
+    if (mounted) setState(() => _isLoading = true);
+
+    // ── Phase 1: Load from local cache immediately (never blocks UI) ──
+    int? cachedStoreId;
     try {
-      final store = await StoreService.getMyStore();
-      _storeId = store['id'];
-      final products = await ProductService.fetchProducts(
-        _storeId!,
-        useCache: true,
+      final cachedStore = await OfflineService.getCachedStore().timeout(
+        const Duration(seconds: 2),
       );
-      if (mounted) {
+      cachedStoreId = cachedStore?['id'] as int?;
+    } catch (_) {}
+
+    if (cachedStoreId != null) {
+      _storeId = cachedStoreId;
+      try {
+        final merged = await OfflineService.getMergedProducts(
+          cachedStoreId,
+        ).timeout(const Duration(seconds: 3));
+        if (mounted) {
+          setState(() {
+            _allProducts = merged;
+            _searchResults = merged;
+            _isLoading = false;
+          });
+        }
+      } catch (_) {
+        try {
+          final cached = await OfflineService.getCachedProducts(
+            storeId: cachedStoreId,
+          ).timeout(const Duration(seconds: 2));
+          if (mounted) {
+            setState(() {
+              _allProducts = cached;
+              _searchResults = cached;
+              _isLoading = false;
+            });
+          }
+        } catch (_) {
+          if (mounted) setState(() => _isLoading = false);
+        }
+      }
+    }
+
+    // ── Phase 2: Refresh from server in background (non-blocking) ──
+    _refreshStoreFromServer(cachedStoreId);
+  }
+
+  Future<void> _refreshStoreFromServer(int? knownStoreId) async {
+    try {
+      final store = await StoreService.getMyStore().timeout(
+        const Duration(seconds: 4),
+      );
+      final storeId = store['id'] as int?;
+      if (storeId == null) return;
+
+      if (mounted && _storeId != storeId) {
+        setState(() => _storeId = storeId);
+      }
+
+      List<dynamic> products = [];
+      try {
+        products = await ProductService.fetchProducts(
+          storeId,
+          useCache: true,
+        ).timeout(const Duration(seconds: 4));
+        await OfflineService.cacheProducts(storeId, products);
+      } catch (_) {
+        if (knownStoreId != null) {
+          products = await OfflineService.getMergedProducts(
+            knownStoreId,
+          ).timeout(const Duration(seconds: 2));
+        }
+      }
+
+      if (mounted && products.isNotEmpty) {
         setState(() {
           _allProducts = products;
           _searchResults = products;
-          _isLoading = false;
         });
       }
-      await OfflineService.cacheProducts(_storeId!, products);
-    } catch (e) {
-      // Server is down — use cached data only
-      try {
-        // Try store context first (fastest, no network)
-        _storeId ??= await ApiService.getMyStoreId();
-
-        // Try cached store if context is empty
-        if (_storeId == null) {
-          final cachedStore = await OfflineService.getCachedStore();
-          _storeId = cachedStore?['id'] as int?;
-        }
-
-        if (_storeId != null) {
-          // Get merged products (cached + pending creates/updates/deletes)
-          final merged = await OfflineService.getMergedProducts(_storeId!);
-          if (mounted) {
-            setState(() {
-              _allProducts = merged;
-              _searchResults = merged;
-              _isLoading = false;
-            });
-            return;
-          }
-        }
-
-        // Last resort: any cached products at all
-        final cached = await OfflineService.getCachedProducts();
-        if (mounted && cached.isNotEmpty) {
-          setState(() {
-            _allProducts = cached;
-            _searchResults = cached;
-            _isLoading = false;
-          });
-        } else {
-          if (mounted) setState(() => _isLoading = false);
-        }
-      } catch (_) {
-        if (mounted) setState(() => _isLoading = false);
+    } catch (_) {
+      // Server unavailable — cached data already on screen, nothing to do
+      if (mounted && _allProducts.isEmpty) {
+        setState(() => _isLoading = false);
       }
     }
   }
 
   Future<void> _loadCashier() async {
-    try {
-      final user = await AuthService.getCurrentUser();
-      if (mounted) setState(() => _cashierName = user['full_name']?.toString());
-    } catch (_) {
-      // Offline fallback: try cached user
-      try {
-        final cachedUser = await OfflineService.getCachedUser();
-        if (mounted && cachedUser != null) {
-          setState(() => _cashierName = cachedUser['full_name']?.toString());
-        }
-      } catch (_) {}
+    // Try both sources in parallel — with strict timeouts so offline never hangs
+    final results = await Future.wait([
+      AuthService.getCurrentUser()
+          .timeout(
+            const Duration(seconds: 2),
+            onTimeout: () => Future.value(null),
+          )
+          .catchError((_) => null),
+      OfflineService.getCachedUser()
+          .timeout(
+            const Duration(seconds: 2),
+            onTimeout: () => Future.value(null),
+          )
+          .catchError((_) => null),
+    ]);
+
+    final user = results[0] as Map<String, dynamic>?;
+    final cachedUser = results[1] as Map<String, dynamic>?;
+
+    if (mounted) {
+      setState(
+        () => _cashierName =
+            user?['full_name']?.toString() ??
+            cachedUser?['full_name']?.toString(),
+      );
     }
   }
 
@@ -189,7 +232,8 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     } catch (e) {
       // Offline fallback: search in cached products by barcode
       try {
-        final storeIdFallback = _storeId ?? await ApiService.getMyStoreId();
+        final storeIdFallback =
+            _storeId ?? await OfflineService.getCachedStoreId();
         final cached = storeIdFallback != null
             ? await OfflineService.getCachedProducts(storeId: storeIdFallback)
             : await OfflineService.getCachedProducts();
@@ -685,7 +729,10 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                       ],
                     ),
                     const SizedBox(height: 12),
-                    if (_isSearching)
+                    // FIXED: Added skeleton loading when loading with no products
+                    if (_isLoading && _allProducts.isEmpty)
+                      const Expanded(child: _CheckoutSkeleton())
+                    else if (_isSearching)
                       const LinearProgressIndicator()
                     else if (_searchResults.isNotEmpty)
                       Expanded(
@@ -1043,5 +1090,36 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     _taxCtrl.dispose();
     _notesCtrl.dispose();
     super.dispose();
+  }
+}
+
+// ============================================================
+// CHECKOUT SKELETON LOADING
+// ============================================================
+
+class _CheckoutSkeleton extends StatelessWidget {
+  const _CheckoutSkeleton();
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final baseColor = theme.colorScheme.surfaceContainerHighest;
+
+    return ListView.builder(
+      padding: const EdgeInsets.only(top: 12),
+      itemCount: 8,
+      itemBuilder: (_, __) {
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 8),
+          child: Container(
+            height: 64,
+            decoration: BoxDecoration(
+              color: baseColor,
+              borderRadius: BorderRadius.circular(12),
+            ),
+          ),
+        );
+      },
+    );
   }
 }
