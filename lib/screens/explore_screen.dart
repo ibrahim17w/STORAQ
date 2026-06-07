@@ -482,12 +482,16 @@ class _ExploreScreenState extends ConsumerState<ExploreScreen> {
 
     final results = result?['results'] as List<dynamic>?;
     if (results != null && results.isNotEmpty) {
+      if (_userPosition == null) {
+        await _initLocation();
+      }
       if (mounted) {
         setState(() {
           _isImageSearchActive = true;
           _imageSearchResults = results;
           _imageSearchBytes = bytes;
-          _imageSearchSort = 'similarity';
+          _imageSearchSort =
+              _userPosition != null ? 'closest' : 'similarity';
         });
       }
     } else if (errorMsg != null) {
@@ -1033,12 +1037,11 @@ class _ExploreScreenState extends ConsumerState<ExploreScreen> {
                   value: 'price_desc',
                   icon: Icons.arrow_downward,
                 ),
-                if (_userPosition != null)
-                  _buildSortChip(
-                    label: t('closest_first') ?? 'Closest First',
-                    value: 'closest',
-                    icon: Icons.near_me,
-                  ),
+                _buildSortChip(
+                  label: t('closest_first') ?? 'Closest First',
+                  value: 'closest',
+                  icon: Icons.near_me,
+                ),
               ],
             ),
           ),
@@ -1077,8 +1080,13 @@ class _ExploreScreenState extends ConsumerState<ExploreScreen> {
         fontSize: 12,
         fontWeight: FontWeight.w500,
       ),
-      onSelected: (_) {
-        setState(() => _imageSearchSort = value);
+      onSelected: (_) async {
+        if (value == 'closest' && _userPosition == null) {
+          await _initLocation();
+        }
+        if (mounted) {
+          setState(() => _imageSearchSort = value);
+        }
       },
     );
   }
@@ -1152,185 +1160,31 @@ class _ExploreScreenState extends ConsumerState<ExploreScreen> {
     }
 
     if (_isGridView) {
+      final cardWidth = (MediaQuery.of(context).size.width - 44) / 2;
       return SingleChildScrollView(
         padding: const EdgeInsets.all(16),
         child: Wrap(
           spacing: 12,
           runSpacing: 12,
           children: results.map((product) {
-            final similarity = product['similarity_score'] as num? ?? 0;
+            final similarity =
+                (product['similarity_score'] as num? ?? 0).toDouble();
             final distance = _distanceToProduct(product);
-            final showDistance =
-                _imageSearchSort == 'closest' && distance != double.infinity;
             final pid = _productId(product);
-            return GestureDetector(
+            return ProductCard(
+              product: product,
+              width: cardWidth,
               onTap: () => _onProductTap(product),
-              child: Container(
-                width: (MediaQuery.of(context).size.width - 56) / 2,
-                decoration: BoxDecoration(
-                  color: Theme.of(context).cardColor,
-                  borderRadius: BorderRadius.circular(14),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.04),
-                      blurRadius: 8,
-                      offset: const Offset(0, 2),
-                    ),
-                  ],
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Stack(
-                      children: [
-                        ClipRRect(
-                          borderRadius: const BorderRadius.vertical(
-                            top: Radius.circular(14),
-                          ),
-                          child: CachedAppImage(
-                            imageUrl: product['image_url'],
-                            height: 140,
-                            width: double.infinity,
-                            fit: BoxFit.cover,
-                            memCacheWidth: 400,
-                          ),
-                        ),
-                        if (!showDistance)
-                          Positioned(
-                            top: 8,
-                            right: 8,
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 8,
-                                vertical: 4,
-                              ),
-                              decoration: BoxDecoration(
-                                color: Theme.of(context).colorScheme.primary,
-                                borderRadius: BorderRadius.circular(20),
-                              ),
-                              child: Text(
-                                '${(similarity * 100).toStringAsFixed(0)}%',
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            ),
-                          ),
-                        if (product['shop_name'] != null)
-                          Positioned(
-                            top: 8,
-                            left: 8,
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 8,
-                                vertical: 4,
-                              ),
-                              decoration: BoxDecoration(
-                                color: Colors.black.withOpacity(0.7),
-                                borderRadius: BorderRadius.circular(20),
-                              ),
-                              child: Text(
-                                product['shop_name'].toString(),
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                            ),
-                          ),
-                        if (pid != null)
-                          Positioned(
-                            top: showDistance ? 8 : 36,
-                            right: 8,
-                            child: Material(
-                              color: Colors.black.withOpacity(0.35),
-                              borderRadius: BorderRadius.circular(12),
-                              child: InkWell(
-                                borderRadius: BorderRadius.circular(12),
-                                onTap: () => _toggleFavorite(pid, product),
-                                child: Padding(
-                                  padding: const EdgeInsets.all(4),
-                                  child: Icon(
-                                    _favoriteIds.contains(pid)
-                                        ? Icons.favorite
-                                        : Icons.favorite_border,
-                                    size: 18,
-                                    color: _favoriteIds.contains(pid)
-                                        ? Colors.red
-                                        : Colors.white,
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ),
-                      ],
-                    ),
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(10, 8, 10, 6),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            product['name'] ?? '',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              fontWeight: FontWeight.w600,
-                              fontSize: 12,
-                            ),
-                          ),
-                          const SizedBox(height: 3),
-                          Text(
-                            '\$${product['price']}',
-                            style: TextStyle(
-                              fontWeight: FontWeight.bold,
-                              fontSize: 13,
-                              color: Theme.of(context).colorScheme.primary,
-                            ),
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            product['shop_name'] ?? '',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              fontSize: 10,
-                              color: Colors.grey.shade500,
-                            ),
-                          ),
-                          if (showDistance) ...[
-                            const SizedBox(height: 2),
-                            Row(
-                              children: [
-                                Icon(
-                                  Icons.location_on,
-                                  size: 10,
-                                  color: Theme.of(context).colorScheme.primary,
-                                ),
-                                const SizedBox(width: 2),
-                                Text(
-                                  LocationHelper.formatDistanceKm(distance),
-                                  style: TextStyle(
-                                    fontSize: 10,
-                                    fontWeight: FontWeight.w600,
-                                    color: Theme.of(
-                                      context,
-                                    ).colorScheme.primary,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ],
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
+              showFavorite: pid != null,
+              isFavorite: pid != null && _favoriteIds.contains(pid),
+              onFavoriteToggle: pid != null
+                  ? () => _toggleFavorite(pid, product)
+                  : null,
+              currencySettings:
+                  ref.watch(viewerCurrencyProvider).currencySettings,
+              distanceKm: distance != double.infinity ? distance : null,
+              similarityScore:
+                  _imageSearchSort != 'closest' ? similarity : null,
             );
           }).toList(),
         ),
@@ -1344,8 +1198,7 @@ class _ExploreScreenState extends ConsumerState<ExploreScreen> {
         final product = results[i];
         final similarity = product['similarity_score'] as num? ?? 0;
         final distance = _distanceToProduct(product);
-        final showDistance =
-            _imageSearchSort == 'closest' && distance != double.infinity;
+        final showDistance = distance != double.infinity;
         final pid = _productId(product);
         return Padding(
           padding: const EdgeInsets.only(bottom: 10),
@@ -1364,7 +1217,7 @@ class _ExploreScreenState extends ConsumerState<ExploreScreen> {
                       : null,
                   currencySettings: ref.watch(viewerCurrencyProvider).currencySettings,
                 ),
-                if (!showDistance)
+                if (_imageSearchSort != 'closest')
                   Positioned(
                     top: 8,
                     right: 8,

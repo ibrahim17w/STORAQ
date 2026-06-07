@@ -88,12 +88,26 @@ class MarketplaceService {
       );
       if (response.statusCode == 200) {
         final list = jsonDecode(response.body) as List<dynamic>;
-        return list
-            .map((e) => Product.fromJson(e as Map<String, dynamic>))
-            .toList();
+        return list.map((e) => Product.fromJson(_normalizeProductJson(e))).toList();
       }
     } catch (_) {}
     return [];
+  }
+
+  static Map<String, dynamic> _normalizeProductJson(dynamic raw) {
+    final map = Map<String, dynamic>.from(raw as Map<String, dynamic>);
+    final images = map['images'];
+    if (images is String && images.isNotEmpty) {
+      try {
+        final decoded = jsonDecode(images);
+        if (decoded is List) {
+          map['images'] = decoded.map((e) => e.toString()).toList();
+        }
+      } catch (_) {
+        map.remove('images');
+      }
+    }
+    return map;
   }
 
   static Future<List<Store>> fetchSponsoredStores() async {

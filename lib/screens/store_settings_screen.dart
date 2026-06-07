@@ -8,8 +8,11 @@ import '../providers/store_provider.dart';
 import '../services/api_service.dart';
 import '../services/store_service.dart';
 import '../services/offline_service.dart';
+import '../services/auth_service.dart';
+import '../providers/auth_provider.dart';
 import '../widgets/cached_image.dart';
 import 'map_picker_screen.dart';
+import 'main_nav_screen.dart';
 
 class StoreSettingsScreen extends ConsumerStatefulWidget {
   const StoreSettingsScreen({super.key});
@@ -322,9 +325,99 @@ class _StoreSettingsScreenState extends ConsumerState<StoreSettingsScreen> {
                 child: Text(t('save_settings') ?? 'Save Settings'),
               ),
             ),
+            const SizedBox(height: 32),
+            Card(
+              color: Colors.red.shade50,
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      t('danger_zone') ?? 'Danger Zone',
+                      style: TextStyle(
+                        color: Colors.red.shade800,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 16,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      t('delete_account_hint') ??
+                          'Permanently delete your account and all associated data.',
+                      style: TextStyle(
+                        color: Colors.red.shade700,
+                        fontSize: 13,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    OutlinedButton.icon(
+                      onPressed: _confirmDeleteAccount,
+                      icon: const Icon(Icons.delete_forever, color: Colors.red),
+                      label: Text(
+                        t('delete_account') ?? 'Delete Account',
+                        style: const TextStyle(color: Colors.red),
+                      ),
+                      style: OutlinedButton.styleFrom(
+                        side: const BorderSide(color: Colors.red),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
           ],
         ),
       ),
     );
+  }
+
+  Future<void> _confirmDeleteAccount() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Text(t('delete_account') ?? 'Delete Account'),
+        content: Text(
+          t('delete_account_confirm') ??
+              'Are you sure you want to delete your account? This cannot be undone.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(t('cancel') ?? 'Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: Text(
+              t('confirm') ?? 'Confirm',
+              style: const TextStyle(color: Colors.red, fontWeight: FontWeight.bold),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    try {
+      await AuthService.deleteAccount();
+      await ref.read(authProvider.notifier).logout();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(t('account_deleted') ?? 'Account deleted'),
+          backgroundColor: Colors.green,
+        ),
+      );
+      Navigator.pushAndRemoveUntil(
+        context,
+        MaterialPageRoute(builder: (_) => const MainNavScreen()),
+        (route) => false,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.toString())),
+      );
+    }
   }
 }

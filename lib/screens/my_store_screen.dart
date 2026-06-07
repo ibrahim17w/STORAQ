@@ -27,6 +27,24 @@ import '../models/models.dart';
 import 'subscription_upgrade_screen.dart';
 import 'online_products_screen.dart';
 
+Color _storePageBg(ThemeData theme) => theme.scaffoldBackgroundColor;
+
+Color _storeCardSurface(ThemeData theme) => theme.colorScheme.surface;
+
+Color _storeCardBorder(ThemeData theme) {
+  return theme.dividerColor.withValues(
+    alpha: theme.brightness == Brightness.dark ? 0.5 : 0.35,
+  );
+}
+
+BoxDecoration _storeCardDecoration(ThemeData theme) {
+  return BoxDecoration(
+    color: _storeCardSurface(theme),
+    borderRadius: BorderRadius.circular(16),
+    border: Border.all(color: _storeCardBorder(theme)),
+  );
+}
+
 class MyStoreScreen extends ConsumerStatefulWidget {
   const MyStoreScreen({super.key});
 
@@ -50,6 +68,7 @@ class _MyStoreScreenState extends ConsumerState<MyStoreScreen>
   };
 
   Map<String, dynamic>? _subscriptionStatus;
+  bool _subscriptionLoading = false;
 
   @override
   bool get wantKeepAlive => true;
@@ -58,20 +77,13 @@ class _MyStoreScreenState extends ConsumerState<MyStoreScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    Future.microtask(() => ref.read(storeProvider.notifier).refresh());
-    _loadPermissions();
-    _loadCurrencySettings();
+    Future.microtask(_loadData);
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
-  }
-
-  Future<void> _loadPermissions() async {
-    _isOwner = await ApiService.isStoreOwner();
-    _canManageInventory = await ApiService.canManageInventory();
   }
 
   Future<void> _loadCurrencySettings() async {
@@ -84,8 +96,15 @@ class _MyStoreScreenState extends ConsumerState<MyStoreScreen>
   Future<void> _loadSubscriptionStatus() async {
     try {
       final status = await SubscriptionService.getStatus();
-      if (mounted) setState(() => _subscriptionStatus = status);
-    } catch (_) {}
+      if (mounted) {
+        setState(() {
+          _subscriptionStatus = status;
+          _subscriptionLoading = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) setState(() => _subscriptionLoading = false);
+    }
   }
 
   @override
@@ -124,11 +143,19 @@ class _MyStoreScreenState extends ConsumerState<MyStoreScreen>
         _isOwner = isOwner;
         _canManageInventory = canManage;
         _pendingCount = pending;
+        if (isOwner) {
+          _subscriptionLoading = true;
+        } else {
+          _subscriptionLoading = false;
+          _subscriptionStatus = null;
+        }
       });
     }
 
     unawaited(_loadCurrencySettings());
-    unawaited(_loadSubscriptionStatus());
+    if (isOwner) {
+      await _loadSubscriptionStatus();
+    }
   }
 
   Future<void> _navigateToAddProduct() async {
@@ -549,38 +576,151 @@ class _MyStoreScreenState extends ConsumerState<MyStoreScreen>
     final storeImage = store?.imageUrl;
 
     return Scaffold(
-      backgroundColor: theme.brightness == Brightness.light
-          ? const Color(0xFFF8F9FA)
-          : theme.scaffoldBackgroundColor,
+      backgroundColor: _storePageBg(theme),
       body: RefreshIndicator(
         onRefresh: _loadData,
         child: CustomScrollView(
           slivers: [
             SliverAppBar(
-              expandedHeight: 180,
               pinned: true,
-              flexibleSpace: FlexibleSpaceBar(
-                title: Text(
-                  storeName,
-                  style: const TextStyle(fontWeight: FontWeight.w700),
+              elevation: 0,
+              scrolledUnderElevation: 0,
+              surfaceTintColor: Colors.transparent,
+              backgroundColor: _storePageBg(theme),
+              foregroundColor: theme.colorScheme.onSurface,
+              iconTheme: IconThemeData(color: theme.colorScheme.onSurface),
+              title: Text(
+                storeName,
+                style: theme.textTheme.titleLarge?.copyWith(
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: -0.02,
+                  color: theme.colorScheme.onSurface,
                 ),
-                background: storeImage != null && storeImage.isNotEmpty
-                    ? CachedAppImage(
-                        imageUrl: storeImage,
-                        fit: BoxFit.cover,
-                        placeholder: Container(
-                          color: theme.colorScheme.primaryContainer,
-                        ),
-                      )
-                    : Container(color: theme.colorScheme.primaryContainer),
               ),
               actions: [
                 IconButton(
-                  icon: const Icon(Icons.refresh),
+                  icon: Icon(
+                    Icons.refresh_rounded,
+                    color: theme.colorScheme.onSurface,
+                  ),
                   onPressed: _loadData,
                   tooltip: t('refresh') ?? 'Refresh',
                 ),
               ],
+            ),
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(16),
+                  child: SizedBox(
+                    height: 128,
+                    width: double.infinity,
+                    child: storeImage != null && storeImage.isNotEmpty
+                        ? CachedAppImage(
+                            imageUrl: storeImage,
+                            fit: BoxFit.cover,
+                            memCacheWidth: 800,
+                            placeholder: ColoredBox(
+                              color: theme.colorScheme.surfaceContainerHighest,
+                            ),
+                          )
+                        : ColoredBox(
+                            color: theme.colorScheme.surfaceContainerHigh,
+                            child: Icon(
+                              Icons.storefront_outlined,
+                              size: 48,
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                  ),
+                ),
+              ),
+            ),
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                child: Row(
+                  children: [
+                    Container(
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                          color: _storeCardBorder(theme),
+                          width: 2,
+                        ),
+                      ),
+                      child: CircleAvatar(
+                        radius: 28,
+                        backgroundColor: theme.colorScheme.surfaceContainerHighest,
+                        child: storeImage != null && storeImage.isNotEmpty
+                            ? ClipOval(
+                                child: CachedAppImage(
+                                  imageUrl: storeImage,
+                                  width: 56,
+                                  height: 56,
+                                  fit: BoxFit.cover,
+                                  memCacheWidth: 160,
+                                ),
+                              )
+                            : Icon(
+                                Icons.storefront_outlined,
+                                size: 26,
+                                color: theme.colorScheme.onSurfaceVariant,
+                              ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            storeName,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: theme.textTheme.titleMedium?.copyWith(
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          Text(
+                            '${products.length} ${t('products') ?? 'products'}',
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    if (_isOwner)
+                      FilledButton.icon(
+                        onPressed: () async {
+                          await Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => const OnlineProductsScreen(),
+                            ),
+                          );
+                          await _loadData();
+                        },
+                        icon: const Icon(Icons.view_list_rounded, size: 18),
+                        label: Text(t('manage_online_products') ?? 'Manage'),
+                        style: FilledButton.styleFrom(
+                          backgroundColor: theme.colorScheme.primary,
+                          foregroundColor: theme.colorScheme.onPrimary,
+                          elevation: 0,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 10,
+                          ),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
             ),
 
             if (isOffline)
@@ -661,108 +801,126 @@ class _MyStoreScreenState extends ConsumerState<MyStoreScreen>
                 ),
               ),
 
-            // Subscription card (owner only)
-            if (_isOwner && _subscriptionStatus != null)
-              SliverToBoxAdapter(
-                child: _SubscriptionCard(
-                  status: _subscriptionStatus!,
-                  onUpgrade: () async {
-                    await Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => SubscriptionUpgradeScreen(
-                          initialStatus: _subscriptionStatus,
-                        ),
-                      ),
-                    );
-                    await _loadSubscriptionStatus();
-                  },
-                  onManageOnline: () async {
-                    await Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => const OnlineProductsScreen(),
-                      ),
-                    );
-                    await _loadData();
-                  },
-                ),
-              ),
-
-            // Currency Settings card (owner only) — near top of screen.
             if (_isOwner)
               SliverToBoxAdapter(
-                child: _CurrencySettingsCard(
-                  settings: _currencySettings,
-                  onTap: _openCurrencySettings,
-                ),
-              ),
-
-            if (_isOwner && store?.intId != null)
-              SliverToBoxAdapter(
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  child: Card(
-                    elevation: 0,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(14),
-                      side: BorderSide(color: Colors.grey.shade300),
-                    ),
-                    child: ListTile(
-                      onTap: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => StoreQrScreen(
-                              storeId: store!.intId!,
-                              storeName: storeName,
-                            ),
+                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      final narrow = constraints.maxWidth < 520;
+                      final actionCards = Column(
+                        children: [
+                          _CurrencySettingsCard(
+                            settings: _currencySettings,
+                            onTap: _openCurrencySettings,
                           ),
+                          if (store?.intId != null)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 8),
+                              child: _StoreActionRow(
+                                icon: Icons.qr_code_2_outlined,
+                                title: t('store_qr_code') ?? 'Store QR Code',
+                                subtitle: t('store_qr_short_hint') ??
+                                    'Share this QR so customers can find your store',
+                                onTap: () {
+                                  Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (_) => StoreQrScreen(
+                                        storeId: store!.intId!,
+                                        storeName: storeName,
+                                      ),
+                                    ),
+                                  );
+                                },
+                              ),
+                            ),
+                        ],
+                      );
+
+                      Widget? subscriptionCard;
+                      if (_subscriptionStatus != null) {
+                        subscriptionCard = _SubscriptionCompactCard(
+                          status: _subscriptionStatus!,
+                          onUpgrade: () async {
+                            await Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => SubscriptionUpgradeScreen(
+                                  initialStatus: _subscriptionStatus,
+                                ),
+                              ),
+                            );
+                            setState(() => _subscriptionLoading = true);
+                            await _loadSubscriptionStatus();
+                          },
                         );
-                      },
-                      leading: CircleAvatar(
-                        backgroundColor: theme.colorScheme.primaryContainer,
-                        child: Icon(
-                          Icons.qr_code_2,
-                          color: theme.colorScheme.primary,
+                      } else if (_subscriptionLoading) {
+                        subscriptionCard = _SubscriptionCompactSkeleton(theme: theme);
+                      }
+
+                      if (subscriptionCard == null) return actionCards;
+
+                      if (narrow) {
+                        return Column(
+                          children: [
+                            actionCards,
+                            const SizedBox(height: 8),
+                            SizedBox(
+                              width: double.infinity,
+                              height: 168,
+                              child: subscriptionCard,
+                            ),
+                          ],
+                        );
+                      }
+
+                      return IntrinsicHeight(
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Expanded(flex: 3, child: actionCards),
+                            const SizedBox(width: 12),
+                            Expanded(flex: 2, child: subscriptionCard),
+                          ],
                         ),
-                      ),
-                      title: Text(
-                        t('store_qr_code') ?? 'Store QR Code',
-                        style: const TextStyle(fontWeight: FontWeight.w600),
-                      ),
-                      subtitle: Text(
-                        t('store_qr_short_hint') ??
-                            'Show, print, or share your store QR',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: theme.colorScheme.onSurfaceVariant,
-                        ),
-                      ),
-                      trailing: const Icon(Icons.chevron_right),
-                    ),
+                      );
+                    },
                   ),
                 ),
               ),
 
             SliverToBoxAdapter(
               child: Padding(
-                padding: const EdgeInsets.all(16),
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
                 child: Row(
                   children: [
                     Expanded(
                       child: Text(
-                        '${products.length} ${t('products') ?? 'Products'}',
+                        t('inventory') ?? 'Inventory',
                         style: theme.textTheme.titleMedium?.copyWith(
                           fontWeight: FontWeight.w600,
+                          letterSpacing: -0.02,
                         ),
                       ),
                     ),
                     if (_canManageInventory)
                       FilledButton.icon(
                         onPressed: _navigateToAddProduct,
-                        icon: const Icon(Icons.add, size: 18),
+                        icon: const Icon(Icons.add, size: 16),
                         label: Text(t('add_product') ?? 'Add Product'),
+                        style: FilledButton.styleFrom(
+                          backgroundColor: theme.colorScheme.primary,
+                          foregroundColor: theme.colorScheme.onPrimary,
+                          elevation: 0,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 8,
+                          ),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                        ),
                       ),
                   ],
                 ),
@@ -774,24 +932,41 @@ class _MyStoreScreenState extends ConsumerState<MyStoreScreen>
                 child: Padding(
                   padding: const EdgeInsets.symmetric(
                     horizontal: 16,
-                    vertical: 8,
+                    vertical: 6,
                   ),
-                  child: Card(
-                    elevation: 0,
+                  child: Material(
+                    color: _storeCardSurface(theme),
                     shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(14),
-                      side: BorderSide(color: Colors.grey.shade300),
+                      borderRadius: BorderRadius.circular(16),
+                      side: BorderSide(color: _storeCardBorder(theme)),
                     ),
+                    clipBehavior: Clip.antiAlias,
                     child: ExpansionTile(
-                      leading: const Icon(Icons.people),
+                      backgroundColor: _storeCardSurface(theme),
+                      collapsedBackgroundColor: _storeCardSurface(theme),
+                      tilePadding: const EdgeInsets.symmetric(horizontal: 16),
+                      leading: Container(
+                        width: 36,
+                        height: 36,
+                        decoration: BoxDecoration(
+                          color: theme.colorScheme.onSurface.withValues(alpha: 0.06),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Icon(
+                          Icons.people_outline_rounded,
+                          size: 20,
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
+                      ),
                       title: Text(
                         t('staff_management') ?? 'Staff Management',
-                        style: const TextStyle(fontWeight: FontWeight.w600),
+                        style: theme.textTheme.bodyLarge?.copyWith(
+                          fontWeight: FontWeight.w500,
+                        ),
                       ),
                       subtitle: Text(
                         '${staff.length} ${t('members') ?? 'members'}',
-                        style: TextStyle(
-                          fontSize: 12,
+                        style: theme.textTheme.bodySmall?.copyWith(
                           color: theme.colorScheme.onSurfaceVariant,
                         ),
                       ),
@@ -814,7 +989,10 @@ class _MyStoreScreenState extends ConsumerState<MyStoreScreen>
                                 s['email']?.toString() ??
                                 'Unknown';
                             final canManage = s['can_manage_inventory'] == true;
-                            return ListTile(
+                            return Material(
+                              color: Colors.transparent,
+                              child: ListTile(
+                              tileColor: _storeCardSurface(theme),
                               leading: CircleAvatar(
                                 backgroundColor:
                                     theme.colorScheme.primaryContainer,
@@ -870,6 +1048,7 @@ class _MyStoreScreenState extends ConsumerState<MyStoreScreen>
                                   ),
                                 ],
                               ),
+                            ),
                             );
                           }).toList(),
                         Padding(
@@ -943,13 +1122,23 @@ class _MyStoreScreenState extends ConsumerState<MyStoreScreen>
                 ),
               ),
 
-            const SliverPadding(padding: EdgeInsets.only(bottom: 80)),
+            SliverPadding(
+              padding: EdgeInsets.only(
+                bottom: MediaQuery.of(context).padding.bottom + 100,
+              ),
+            ),
           ],
         ),
       ),
       floatingActionButton: _canManageInventory
           ? FloatingActionButton(
               onPressed: _navigateToAddProduct,
+              backgroundColor: theme.colorScheme.primary,
+              foregroundColor: theme.colorScheme.onPrimary,
+              elevation: 0,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(14),
+              ),
               child: const Icon(Icons.add),
             )
           : null,
@@ -961,15 +1150,149 @@ class _MyStoreScreenState extends ConsumerState<MyStoreScreen>
 // CURRENCY SETTINGS CARD (summary + entry point)
 // ============================================================
 
-class _SubscriptionCard extends StatelessWidget {
+class _StoreActionRow extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final VoidCallback onTap;
+
+  const _StoreActionRow({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(12),
+        child: Ink(
+          decoration: _storeCardDecoration(theme),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          child: Row(
+            children: [
+              Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.primary.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                    color: theme.colorScheme.primary.withValues(alpha: 0.2),
+                  ),
+                ),
+                child: Icon(icon, size: 20, color: theme.colorScheme.primary),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: theme.textTheme.bodyLarge?.copyWith(
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      subtitle,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                        height: 1.35,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Icon(
+                Icons.chevron_right_rounded,
+                size: 22,
+                color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.55),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SubscriptionCompactSkeleton extends StatelessWidget {
+  final ThemeData theme;
+
+  const _SubscriptionCompactSkeleton({required this.theme});
+
+  @override
+  Widget build(BuildContext context) {
+    final placeholder = theme.colorScheme.surfaceContainerHighest;
+    return DecoratedBox(
+      decoration: _storeCardDecoration(theme),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              width: 32,
+              height: 32,
+              decoration: BoxDecoration(color: placeholder, shape: BoxShape.circle),
+            ),
+            const SizedBox(height: 10),
+            Container(
+              height: 12,
+              width: 100,
+              decoration: BoxDecoration(
+                color: placeholder,
+                borderRadius: BorderRadius.circular(4),
+              ),
+            ),
+            const SizedBox(height: 6),
+            Container(
+              height: 10,
+              width: 72,
+              decoration: BoxDecoration(
+                color: placeholder,
+                borderRadius: BorderRadius.circular(4),
+              ),
+            ),
+            const SizedBox(height: 16),
+            Container(
+              height: 10,
+              width: double.infinity,
+              decoration: BoxDecoration(
+                color: placeholder,
+                borderRadius: BorderRadius.circular(4),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Container(
+              height: 5,
+              width: double.infinity,
+              decoration: BoxDecoration(
+                color: placeholder,
+                borderRadius: BorderRadius.circular(4),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _SubscriptionCompactCard extends StatelessWidget {
   final Map<String, dynamic> status;
   final VoidCallback onUpgrade;
-  final VoidCallback onManageOnline;
 
-  const _SubscriptionCard({
+  const _SubscriptionCompactCard({
     required this.status,
     required this.onUpgrade,
-    required this.onManageOnline,
   });
 
   @override
@@ -977,80 +1300,79 @@ class _SubscriptionCard extends StatelessWidget {
     final theme = Theme.of(context);
     final onlineCount = status['online_count'] as int? ?? 0;
     final onlineLimit = status['online_limit'] as int? ?? 5;
-    final progress = onlineLimit > 0 ? (onlineCount / onlineLimit).clamp(0.0, 1.0) : 0.0;
+    final progress =
+        onlineLimit > 0 ? (onlineCount / onlineLimit).clamp(0.0, 1.0) : 0.0;
     final tier = status['tier'] as Map<String, dynamic>?;
 
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      child: Card(
-        elevation: 0,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(14),
-          side: BorderSide(color: Colors.grey.shade300),
-        ),
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  CircleAvatar(
-                    backgroundColor: theme.colorScheme.primaryContainer,
-                    child: Icon(Icons.storefront, color: theme.colorScheme.primary),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          t('marketplace_listing') ?? 'Marketplace Listing',
-                          style: const TextStyle(fontWeight: FontWeight.w600),
-                        ),
-                        Text(
-                          tier != null
-                              ? '${tier['name']} ${t('plan') ?? 'plan'}'
-                              : (t('free_plan') ?? 'Free plan'),
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: theme.colorScheme.onSurfaceVariant,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  TextButton(
-                    onPressed: onUpgrade,
-                    child: Text(t('upgrade') ?? 'Upgrade'),
-                  ),
-                ],
+    return DecoratedBox(
+      decoration: _storeCardDecoration(theme),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              width: 32,
+              height: 32,
+              decoration: BoxDecoration(
+                color: theme.colorScheme.primary.withValues(alpha: 0.12),
+                shape: BoxShape.circle,
               ),
-              const SizedBox(height: 12),
-              Text(
-                '${t('online') ?? 'Online'}: $onlineCount / $onlineLimit',
-                style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+              child: Icon(
+                Icons.storefront_outlined,
+                size: 18,
+                color: theme.colorScheme.primary,
               ),
-              const SizedBox(height: 6),
-              ClipRRect(
-                borderRadius: BorderRadius.circular(6),
-                child: LinearProgressIndicator(
-                  value: progress,
-                  minHeight: 8,
-                  backgroundColor: Colors.grey.shade200,
+            ),
+            const SizedBox(height: 10),
+            Text(
+              t('marketplace_listing') ?? 'Marketplace Listing',
+              style: theme.textTheme.labelMedium?.copyWith(
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              tier != null
+                  ? '${tier['name']} ${t('plan') ?? 'plan'}'
+                  : (t('free_plan') ?? 'Free plan'),
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 12),
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton(
+                onPressed: onUpgrade,
+                style: TextButton.styleFrom(
+                  foregroundColor: theme.colorScheme.primary,
+                  padding: EdgeInsets.zero,
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                 ),
+                child: Text(t('upgrade') ?? 'Upgrade'),
               ),
-              const SizedBox(height: 12),
-              SizedBox(
-                width: double.infinity,
-                child: OutlinedButton.icon(
-                  onPressed: onManageOnline,
-                  icon: const Icon(Icons.tune, size: 18),
-                  label: Text(t('manage_online_products') ?? 'Manage Online Products'),
-                ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '${t('online') ?? 'Online'}: $onlineCount / $onlineLimit',
+              style: theme.textTheme.labelSmall?.copyWith(
+                fontWeight: FontWeight.w600,
               ),
-            ],
-          ),
+            ),
+            const SizedBox(height: 6),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(4),
+              child: LinearProgressIndicator(
+                value: progress,
+                minHeight: 5,
+                backgroundColor:
+                    theme.colorScheme.onSurface.withValues(alpha: 0.08),
+                color: theme.colorScheme.primary,
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -1065,7 +1387,6 @@ class _CurrencySettingsCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     final displayCurrency = settings['display_currency']?.toString();
     final rates = CurrencyService.parseRates(settings['exchange_rates']);
     final hasCurrency = displayCurrency != null && displayCurrency.isNotEmpty;
@@ -1074,37 +1395,11 @@ class _CurrencySettingsCard extends StatelessWidget {
         ? '${t('display') ?? 'Display'}: $displayCurrency • ${rates.length} ${t('exchange_rates') ?? 'exchange rates'}'
         : (t('no_display_currency_set') ?? 'No display currency set');
 
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      child: Card(
-        elevation: 0,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(14),
-          side: BorderSide(color: Colors.grey.shade300),
-        ),
-        child: ListTile(
-          onTap: onTap,
-          leading: CircleAvatar(
-            backgroundColor: theme.colorScheme.primaryContainer,
-            child: Icon(
-              Icons.currency_exchange,
-              color: theme.colorScheme.primary,
-            ),
-          ),
-          title: Text(
-            t('currency_settings') ?? 'Currency Settings',
-            style: const TextStyle(fontWeight: FontWeight.w600),
-          ),
-          subtitle: Text(
-            subtitle,
-            style: TextStyle(
-              fontSize: 12,
-              color: theme.colorScheme.onSurfaceVariant,
-            ),
-          ),
-          trailing: const Icon(Icons.chevron_right),
-        ),
-      ),
+    return _StoreActionRow(
+      icon: Icons.currency_exchange_rounded,
+      title: t('currency_settings') ?? 'Currency Settings',
+      subtitle: subtitle,
+      onTap: onTap,
     );
   }
 }
@@ -1730,14 +2025,26 @@ class _ProductCard extends StatelessWidget {
     final imagePaths = OfflineService.getProductImagePaths(product);
     final firstPath = imagePaths.isNotEmpty ? imagePaths.first : null;
 
-    return CachedAppImage(
-      imageUrl: firstPath,
+    return Container(
       width: 72,
       height: 72,
-      borderRadius: BorderRadius.circular(10),
-      placeholder: Container(
+      decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.surfaceContainerHighest,
-        child: const Icon(Icons.inventory_2_outlined),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: _storeCardBorder(Theme.of(context)),
+        ),
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(12),
+        child: CachedAppImage(
+          imageUrl: firstPath,
+          width: 72,
+          height: 72,
+          fit: BoxFit.contain,
+          memCacheWidth: 220,
+          placeholder: const Icon(Icons.inventory_2_outlined),
+        ),
       ),
     );
   }
@@ -1765,121 +2072,108 @@ class _ProductCard extends StatelessWidget {
         : CurrencyService.formatPrice(originalPrice, originalCurrency);
     final showSecondary = hasDisplay && showBoth;
 
-    return Card(
-      margin: const EdgeInsets.only(bottom: 12),
-      elevation: 0,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(14),
-        side: BorderSide(color: Colors.grey.shade200),
-      ),
-      child: InkWell(
-        onTap: onEdit,
-        borderRadius: BorderRadius.circular(14),
-        child: Padding(
-          padding: const EdgeInsets.all(12),
-          child: Row(
-            children: [
-              ClipRRect(
-                borderRadius: BorderRadius.circular(10),
-                child: _buildProductImage(context),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            name,
-                            style: theme.textTheme.titleSmall?.copyWith(
-                              fontWeight: FontWeight.w600,
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onEdit,
+          borderRadius: BorderRadius.circular(12),
+          child: Ink(
+            decoration: _storeCardDecoration(theme),
+            padding: const EdgeInsets.all(12),
+            child: Row(
+              children: [
+                _buildProductImage(context),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              name,
+                              style: theme.textTheme.bodyLarge?.copyWith(
+                                fontWeight: FontWeight.w500,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
                             ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
                           ),
-                        ),
-                        if (isPendingCreate)
-                          _PendingBadge(
-                            label: t('pending_create') ?? 'Pending create',
-                            color: Colors.green,
-                          )
-                        else if (isPendingUpdate)
-                          _PendingBadge(
-                            label: t('pending_update') ?? 'Pending update',
-                            color: Colors.orange,
-                          )
-                        else if (isStoreOnly)
-                          _PendingBadge(
-                            label: t('store_only') ?? 'Store only',
-                            color: Colors.grey,
-                          ),
-                      ],
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      primaryPriceText,
-                      style: theme.textTheme.bodyMedium?.copyWith(
-                        color: theme.colorScheme.primary,
-                        fontWeight: FontWeight.w600,
+                          if (isPendingCreate)
+                            _PendingBadge(
+                              label: t('pending_create') ?? 'Pending create',
+                              color: Colors.green,
+                            )
+                          else if (isPendingUpdate)
+                            _PendingBadge(
+                              label: t('pending_update') ?? 'Pending update',
+                              color: Colors.orange,
+                            )
+                          else if (isStoreOnly)
+                            _PendingBadge(
+                              label: t('store_only') ?? 'Store only',
+                              color: Colors.grey,
+                            ),
+                        ],
                       ),
-                    ),
-                    if (showSecondary)
+                      const SizedBox(height: 4),
                       Text(
-                        '(${CurrencyService.formatPrice(originalPrice, originalCurrency)})',
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: theme.colorScheme.onSurfaceVariant,
+                        primaryPriceText,
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          color: theme.colorScheme.primary,
+                          fontWeight: FontWeight.w600,
                         ),
                       ),
-                    const SizedBox(height: 4),
-                    Row(
-                      children: [
-                        Icon(
-                          isLowStock ? Icons.warning_amber : Icons.inventory_2,
-                          size: 14,
+                      if (showSecondary)
+                        Text(
+                          '(${CurrencyService.formatPrice(originalPrice, originalCurrency)})',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                      const SizedBox(height: 4),
+                      Text(
+                        '$qty ${t('in_stock') ?? 'in stock'}',
+                        style: theme.textTheme.labelSmall?.copyWith(
                           color: isLowStock
-                              ? Colors.orange
+                              ? Colors.orange.shade700
                               : theme.colorScheme.onSurfaceVariant,
                         ),
-                        const SizedBox(width: 4),
-                        Text(
-                          '$qty ${t('in_stock') ?? 'in stock'}',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: isLowStock
-                                ? Colors.orange
-                                : theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ],
+                  ),
+                ),
+                if (onEdit != null || onDelete != null)
+                  PopupMenuButton<String>(
+                    icon: Icon(
+                      Icons.more_vert_rounded,
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                    onSelected: (value) {
+                      if (value == 'edit') onEdit?.call();
+                      if (value == 'delete') onDelete?.call();
+                    },
+                    itemBuilder: (_) => [
+                      if (onEdit != null)
+                        PopupMenuItem(
+                          value: 'edit',
+                          child: Text(t('edit') ?? 'Edit'),
+                        ),
+                      if (onDelete != null)
+                        PopupMenuItem(
+                          value: 'delete',
+                          child: Text(
+                            t('delete') ?? 'Delete',
+                            style: const TextStyle(color: Colors.red),
                           ),
                         ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-              if (onEdit != null || onDelete != null)
-                PopupMenuButton<String>(
-                  onSelected: (value) {
-                    if (value == 'edit') onEdit?.call();
-                    if (value == 'delete') onDelete?.call();
-                  },
-                  itemBuilder: (_) => [
-                    if (onEdit != null)
-                      PopupMenuItem(
-                        value: 'edit',
-                        child: Text(t('edit') ?? 'Edit'),
-                      ),
-                    if (onDelete != null)
-                      PopupMenuItem(
-                        value: 'delete',
-                        child: Text(
-                          t('delete') ?? 'Delete',
-                          style: const TextStyle(color: Colors.red),
-                        ),
-                      ),
-                  ],
-                ),
-            ],
+                    ],
+                  ),
+              ],
+            ),
           ),
         ),
       ),

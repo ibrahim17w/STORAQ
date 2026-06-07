@@ -162,32 +162,44 @@ class ProfileScreen extends ConsumerWidget {
                 final invitations = inviteSnap.data ?? [];
                 final hasPendingInvites = invitations.isNotEmpty;
 
+                final theme = Theme.of(context);
+                final pageBg = theme.brightness == Brightness.dark
+                    ? const Color(0xFF121212)
+                    : const Color(0xFFF5F5F7);
+
                 return Scaffold(
+                  backgroundColor: pageBg,
                   body: CustomScrollView(
                     slivers: [
                       SliverAppBar(
-                        expandedHeight: 120,
-                        flexibleSpace: FlexibleSpaceBar(
-                          title: Text(t('profile') ?? 'My Profile'),
+                        pinned: true,
+                        elevation: 0,
+                        scrolledUnderElevation: 0,
+                        surfaceTintColor: Colors.transparent,
+                        backgroundColor: pageBg,
+                        title: Text(
+                          t('profile') ?? 'My Profile',
+                          style: theme.textTheme.titleLarge?.copyWith(
+                            fontWeight: FontWeight.w600,
+                            letterSpacing: -0.02,
+                          ),
                         ),
                         actions: const [ThemeToggle(), SizedBox(width: 8)],
                       ),
                       SliverToBoxAdapter(
                         child: Padding(
-                          padding: const EdgeInsets.all(16),
+                          padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
                           child: Column(
                             children: [
-                              // ── Avatar & Name ──
-                              if (hasError || user == null)
-                                _OfflineProfileHeader()
-                              else
-                                _ProfileAvatarHeader(
-                                  user: user,
-                                  onUpdated: () {
-                                    (context as Element).markNeedsBuild();
-                                  },
-                                ),
-                              const SizedBox(height: 24),
+                              hasError || user == null
+                                  ? _OfflineProfileHeader()
+                                  : _ProfileAvatarHeader(
+                                      user: user,
+                                      onUpdated: () {
+                                        (context as Element).markNeedsBuild();
+                                      },
+                                    ),
+                              const SizedBox(height: 20),
 
                               // ── Offline warning banner ──
                               if (hasError)
@@ -217,52 +229,42 @@ class ProfileScreen extends ConsumerWidget {
                                   context,
                                   t('store_tools') ?? 'Store Tools',
                                 ),
-                                ListTile(
-                                  leading: const Icon(Icons.store),
-                                  title: Text(t('my_store') ?? 'My Store'),
-                                  trailing: const Icon(
-                                    Icons.arrow_forward_ios,
-                                    size: 16,
-                                  ),
-                                  onTap: () => Navigator.push(
-                                    context,
-                                    MaterialPageRoute(
-                                      builder: (_) => const MyStoreScreen(),
-                                    ),
-                                  ),
-                                ),
-                                ListTile(
-                                  leading: const Icon(Icons.point_of_sale),
-                                  title: Text(t('checkout') ?? 'Checkout'),
-                                  trailing: const Icon(
-                                    Icons.arrow_forward_ios,
-                                    size: 16,
-                                  ),
-                                  onTap: () => Navigator.push(
-                                    context,
-                                    MaterialPageRoute(
-                                      builder: (_) => const CheckoutScreen(),
-                                    ),
-                                  ),
-                                ),
-                                if (isOwner)
-                                  ListTile(
-                                    leading: const Icon(Icons.settings),
-                                    title: Text(
-                                      t('store_settings') ?? 'Store Settings',
-                                    ),
-                                    trailing: const Icon(
-                                      Icons.arrow_forward_ios,
-                                      size: 16,
-                                    ),
-                                    onTap: () => Navigator.push(
-                                      context,
-                                      MaterialPageRoute(
-                                        builder: (_) =>
-                                            const StoreSettingsScreen(),
+                                _ProfileMenuCard(
+                                  children: [
+                                    _ProfileListTile(
+                                      icon: Icons.storefront_outlined,
+                                      title: t('my_store') ?? 'My Store',
+                                      onTap: () => Navigator.push(
+                                        context,
+                                        MaterialPageRoute(
+                                          builder: (_) => const MyStoreScreen(),
+                                        ),
                                       ),
                                     ),
-                                  ),
+                                    _ProfileListTile(
+                                      icon: Icons.point_of_sale_outlined,
+                                      title: t('checkout') ?? 'Checkout',
+                                      onTap: () => Navigator.push(
+                                        context,
+                                        MaterialPageRoute(
+                                          builder: (_) => const CheckoutScreen(),
+                                        ),
+                                      ),
+                                    ),
+                                    if (isOwner)
+                                      _ProfileListTile(
+                                        icon: Icons.settings_outlined,
+                                        title: t('store_settings') ?? 'Store Settings',
+                                        onTap: () => Navigator.push(
+                                          context,
+                                          MaterialPageRoute(
+                                            builder: (_) =>
+                                                const StoreSettingsScreen(),
+                                          ),
+                                        ),
+                                      ),
+                                  ],
+                                ),
                                 const SizedBox(height: 8),
                               ],
 
@@ -271,22 +273,21 @@ class ProfileScreen extends ConsumerWidget {
                                   context,
                                   t('admin') ?? 'Admin',
                                 ),
-                                ListTile(
-                                  leading: const Icon(Icons.payments_outlined),
-                                  title: Text(
-                                    t('subscription_payments') ?? 'Subscription Payments',
-                                  ),
-                                  trailing: const Icon(
-                                    Icons.arrow_forward_ios,
-                                    size: 16,
-                                  ),
-                                  onTap: () => Navigator.push(
-                                    context,
-                                    MaterialPageRoute(
-                                      builder: (_) =>
-                                          const AdminSubscriptionPaymentsScreen(),
+                                _ProfileMenuCard(
+                                  children: [
+                                    _ProfileListTile(
+                                      icon: Icons.payments_outlined,
+                                      title: t('subscription_payments') ??
+                                          'Subscription Payments',
+                                      onTap: () => Navigator.push(
+                                        context,
+                                        MaterialPageRoute(
+                                          builder: (_) =>
+                                              const AdminSubscriptionPaymentsScreen(),
+                                        ),
+                                      ),
                                     ),
-                                  ),
+                                  ],
                                 ),
                                 const SizedBox(height: 8),
                               ],
@@ -296,118 +297,97 @@ class ProfileScreen extends ConsumerWidget {
                                 context,
                                 t('general') ?? 'General',
                               ),
-                              ListTile(
-                                leading: const Icon(Icons.shopping_cart_outlined),
-                                title: Text(t('cart') ?? 'Cart'),
-                                subtitle: Text(
-                                  t('cart_saved_hint') ??
-                                      'Products grouped by store — tap to visit',
-                                  style: const TextStyle(fontSize: 12),
-                                ),
-                                trailing: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    if (ref.watch(cartProvider).itemCount > 0)
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(
-                                          horizontal: 8,
-                                          vertical: 2,
-                                        ),
-                                        decoration: BoxDecoration(
-                                          color: Theme.of(context)
-                                              .colorScheme
-                                              .primary,
-                                          borderRadius: BorderRadius.circular(12),
-                                        ),
-                                        child: Text(
-                                          '${ref.watch(cartProvider).itemCount}',
-                                          style: TextStyle(
-                                            color: Theme.of(context)
-                                                .colorScheme
-                                                .onPrimary,
-                                            fontSize: 12,
-                                            fontWeight: FontWeight.w700,
-                                          ),
-                                        ),
+                              _ProfileMenuCard(
+                                children: [
+                                  _ProfileListTile(
+                                    icon: Icons.shopping_cart_outlined,
+                                    title: t('cart') ?? 'Cart',
+                                    subtitle: t('cart_saved_hint') ??
+                                        'Products grouped by store — tap to visit',
+                                    trailing: ref.watch(cartProvider).itemCount > 0
+                                        ? Container(
+                                            padding: const EdgeInsets.symmetric(
+                                              horizontal: 8,
+                                              vertical: 3,
+                                            ),
+                                            decoration: BoxDecoration(
+                                              color: theme.colorScheme.primary
+                                                  .withValues(alpha: 0.12),
+                                              borderRadius:
+                                                  BorderRadius.circular(10),
+                                              border: Border.all(
+                                                color: theme.colorScheme.primary
+                                                    .withValues(alpha: 0.25),
+                                              ),
+                                            ),
+                                            child: Text(
+                                              '${ref.watch(cartProvider).itemCount}',
+                                              style: theme.textTheme.labelSmall
+                                                  ?.copyWith(
+                                                color: theme.colorScheme.primary,
+                                                fontWeight: FontWeight.w700,
+                                              ),
+                                            ),
+                                          )
+                                        : null,
+                                    onTap: () => Navigator.push(
+                                      context,
+                                      MaterialPageRoute(
+                                        builder: (_) => const ShoppingCartScreen(),
                                       ),
-                                    const SizedBox(width: 4),
-                                    const Icon(
-                                      Icons.arrow_forward_ios,
-                                      size: 16,
                                     ),
-                                  ],
-                                ),
-                                onTap: () => Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (_) => const ShoppingCartScreen(),
                                   ),
-                                ),
-                              ),
-                              ListTile(
-                                leading: const Icon(Icons.support_agent_outlined),
-                                title: Text(t('help_support') ?? 'Help & Support'),
-                                subtitle: Text(
-                                  t('support_ticket_hint_short') ??
-                                      'Contact STORAQ support team',
-                                  style: const TextStyle(fontSize: 12),
-                                ),
-                                trailing: const Icon(
-                                  Icons.arrow_forward_ios,
-                                  size: 16,
-                                ),
-                                onTap: () => Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (_) =>
-                                        const SupportTicketsScreen(),
+                                  _ProfileListTile(
+                                    icon: Icons.support_agent_outlined,
+                                    title: t('help_support') ?? 'Help & Support',
+                                    subtitle: t('support_ticket_hint_short') ??
+                                        'Contact STORAQ support team',
+                                    onTap: () => Navigator.push(
+                                      context,
+                                      MaterialPageRoute(
+                                        builder: (_) =>
+                                            const SupportTicketsScreen(),
+                                      ),
+                                    ),
                                   ),
-                                ),
-                              ),
-                              ListTile(
-                                leading: const Icon(Icons.chat_bubble_outline),
-                                title: Text(t('store_messages') ?? 'Store Messages'),
-                                subtitle: Text(
-                                  t('store_messages_hint') ??
-                                      'Chat with shops you buy from',
-                                  style: const TextStyle(fontSize: 12),
-                                ),
-                                trailing: const Icon(
-                                  Icons.arrow_forward_ios,
-                                  size: 16,
-                                ),
-                                onTap: () => Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (_) =>
-                                        const ChatConversationsScreen(),
+                                  _ProfileListTile(
+                                    icon: Icons.chat_bubble_outline_rounded,
+                                    title: t('store_messages') ?? 'Store Messages',
+                                    subtitle: t('store_messages_hint') ??
+                                        'Chat with shops you buy from',
+                                    onTap: () => Navigator.push(
+                                      context,
+                                      MaterialPageRoute(
+                                        builder: (_) =>
+                                            const ChatConversationsScreen(),
+                                      ),
+                                    ),
                                   ),
-                                ),
-                              ),
-                              ListTile(
-                                leading: const Icon(Icons.receipt_long),
-                                title: Text(
-                                  t('order_history') ?? 'Order History',
-                                ),
-                                trailing: const Icon(
-                                  Icons.arrow_forward_ios,
-                                  size: 16,
-                                ),
-                                onTap: () => Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (_) => const OrderHistoryScreen(),
+                                  _ProfileListTile(
+                                    icon: Icons.receipt_long_outlined,
+                                    title: t('order_history') ?? 'Order History',
+                                    onTap: () => Navigator.push(
+                                      context,
+                                      MaterialPageRoute(
+                                        builder: (_) => const OrderHistoryScreen(),
+                                      ),
+                                    ),
                                   ),
-                                ),
-                              ),
-                              ListTile(
-                                leading: const Icon(Icons.language),
-                                title: Text(t('language') ?? 'Language'),
-                                trailing: Text(
-                                  localeNotifier.value.languageCode
-                                      .toUpperCase(),
-                                ),
-                                onTap: () => showLanguagePicker(context),
+                                  _ProfileListTile(
+                                    icon: Icons.language_outlined,
+                                    title: t('language') ?? 'Language',
+                                    trailing: Text(
+                                      localeNotifier.value.languageCode
+                                          .toUpperCase(),
+                                      style: theme.textTheme.labelMedium?.copyWith(
+                                        color: theme.colorScheme.onSurfaceVariant,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                    showChevron: false,
+                                    onTap: () => showLanguagePicker(context),
+                                  ),
+                                ],
                               ),
                               const SizedBox(height: 8),
 
@@ -417,30 +397,27 @@ class ProfileScreen extends ConsumerWidget {
                                 t('account') ?? 'Account',
                                 isDanger: true,
                               ),
-                              ListTile(
-                                leading: const Icon(
-                                  Icons.logout,
-                                  color: Colors.red,
-                                ),
-                                title: Text(
-                                  t('logout') ?? 'Logout',
-                                  style: const TextStyle(color: Colors.red),
-                                ),
-                                onTap: () => _logout(context, ref),
-                              ),
-                              ListTile(
-                                leading: const Icon(
-                                  Icons.delete_forever,
-                                  color: Colors.red,
-                                ),
-                                title: Text(
-                                  t('delete_account') ?? 'Delete Account',
-                                  style: const TextStyle(
-                                    color: Colors.red,
-                                    fontWeight: FontWeight.w600,
+                              _ProfileMenuCard(
+                                isDanger: true,
+                                children: [
+                                  _ProfileListTile(
+                                    icon: Icons.logout_rounded,
+                                    title: t('logout') ?? 'Logout',
+                                    isDanger: true,
+                                    showChevron: false,
+                                    onTap: () => _logout(context, ref),
                                   ),
-                                ),
-                                onTap: () => _confirmDeleteAccount(context, ref),
+                                  _ProfileListTile(
+                                    icon: Icons.delete_outline_rounded,
+                                    title: t('delete_account') ?? 'Delete Account',
+                                    isDanger: true,
+                                    showChevron: false,
+                                    onTap: () => _confirmDeleteAccount(context, ref),
+                                  ),
+                                ],
+                              ),
+                              SizedBox(
+                                height: MediaQuery.of(context).padding.bottom + 100,
                               ),
                             ],
                           ),
@@ -508,21 +485,159 @@ class ProfileScreen extends ConsumerWidget {
     String title, {
     bool isDanger = false,
   }) {
+    final theme = Theme.of(context);
     return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 16, 12, 8),
+      padding: const EdgeInsets.fromLTRB(4, 20, 4, 8),
       child: Align(
         alignment: AlignmentDirectional.centerStart,
         child: Text(
-          title.toUpperCase(),
-          style: TextStyle(
-            fontSize: 12,
-            fontWeight: FontWeight.w700,
+          title,
+          style: theme.textTheme.labelLarge?.copyWith(
+            fontWeight: FontWeight.w600,
             color: isDanger
                 ? Colors.red.shade400
-                : Theme.of(context).colorScheme.primary,
-            letterSpacing: 1.2,
+                : theme.colorScheme.onSurfaceVariant,
+            letterSpacing: 0.1,
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _ProfileListTile extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String? subtitle;
+  final Widget? trailing;
+  final VoidCallback onTap;
+  final bool isDanger;
+  final bool showChevron;
+
+  const _ProfileListTile({
+    required this.icon,
+    required this.title,
+    required this.onTap,
+    this.subtitle,
+    this.trailing,
+    this.isDanger = false,
+    this.showChevron = true,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final fg = isDanger ? Colors.red.shade400 : theme.colorScheme.onSurface;
+    final iconBg = isDanger
+        ? Colors.red.withValues(alpha: 0.1)
+        : theme.colorScheme.onSurface.withValues(alpha: 0.06);
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          child: Row(
+            children: [
+              Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  color: iconBg,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Icon(icon, size: 20, color: fg),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: theme.textTheme.bodyLarge?.copyWith(
+                        fontWeight: FontWeight.w500,
+                        color: fg,
+                      ),
+                    ),
+                    if (subtitle != null) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        subtitle!,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                          height: 1.35,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              if (trailing != null) ...[
+                trailing!,
+                if (showChevron) const SizedBox(width: 6),
+              ],
+              if (showChevron)
+                Icon(
+                  Icons.chevron_right_rounded,
+                  size: 22,
+                  color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.55),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ProfileMenuCard extends StatelessWidget {
+  final List<Widget> children;
+  final bool isDanger;
+
+  const _ProfileMenuCard({
+    required this.children,
+    this.isDanger = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final surface = theme.brightness == Brightness.dark
+        ? const Color(0xFF1E1E1E)
+        : Colors.white;
+    return Container(
+      decoration: BoxDecoration(
+        color: isDanger
+            ? Colors.red.withValues(
+                alpha: theme.brightness == Brightness.dark ? 0.1 : 0.04,
+              )
+            : surface,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: isDanger
+              ? Colors.red.withValues(alpha: 0.22)
+              : theme.dividerColor.withValues(
+                  alpha: theme.brightness == Brightness.dark ? 0.55 : 0.35,
+                ),
+        ),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (var i = 0; i < children.length; i++) ...[
+            children[i],
+            if (i < children.length - 1)
+              Divider(
+                height: 1,
+                indent: 66,
+                endIndent: 16,
+                color: theme.dividerColor.withValues(alpha: 0.4),
+              ),
+          ],
+        ],
       ),
     );
   }
@@ -629,14 +744,19 @@ class _ProfileSkeleton extends StatelessWidget {
         ? Colors.grey.shade800
         : Colors.grey.shade200;
 
+    final pageBg = Theme.of(context).brightness == Brightness.dark
+        ? const Color(0xFF121212)
+        : const Color(0xFFF5F5F7);
+
     return Scaffold(
+      backgroundColor: pageBg,
       body: CustomScrollView(
         slivers: [
           SliverAppBar(
-            expandedHeight: 120,
-            flexibleSpace: FlexibleSpaceBar(
-              title: Text(t('profile') ?? 'My Profile'),
-            ),
+            pinned: true,
+            elevation: 0,
+            backgroundColor: pageBg,
+            title: Text(t('profile') ?? 'My Profile'),
             actions: const [ThemeToggle(), SizedBox(width: 8)],
           ),
           SliverToBoxAdapter(
@@ -910,79 +1030,112 @@ class _ProfileAvatarHeaderState extends State<_ProfileAvatarHeader> {
         ? widget.user.fullName!.substring(0, 1).toUpperCase()
         : '?';
 
-    return Column(
-      children: [
-        Stack(
-          alignment: Alignment.bottomRight,
-          children: [
-            CircleAvatar(
-              radius: 44,
-              backgroundColor: theme.colorScheme.primaryContainer,
-              child: _avatarUrl != null && _avatarUrl!.isNotEmpty
-                  ? ClipOval(
-                      child: CachedAppImage(
-                        imageUrl: _avatarUrl,
-                        width: 88,
-                        height: 88,
-                        fit: BoxFit.cover,
-                        memCacheWidth: 180,
-                      ),
-                    )
-                  : Text(
-                      initial,
-                      style: TextStyle(
-                        fontSize: 34,
-                        color: theme.colorScheme.primary,
-                      ),
-                    ),
-            ),
-            Material(
-              color: theme.colorScheme.primary,
-              shape: const CircleBorder(),
-              clipBehavior: Clip.antiAlias,
-              child: InkWell(
-                onTap: _uploading ? null : _pickAvatar,
-                child: Padding(
-                  padding: const EdgeInsets.all(8),
-                  child: _uploading
-                      ? SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: theme.colorScheme.onPrimary,
+    final surface = theme.brightness == Brightness.dark
+        ? const Color(0xFF1E1E1E)
+        : Colors.white;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(vertical: 28, horizontal: 20),
+      decoration: BoxDecoration(
+        color: surface,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: theme.dividerColor.withValues(
+            alpha: theme.brightness == Brightness.dark ? 0.55 : 0.35,
+          ),
+        ),
+      ),
+      child: Column(
+        children: [
+          Stack(
+            clipBehavior: Clip.none,
+            children: [
+              Container(
+                width: 96,
+                height: 96,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: theme.dividerColor.withValues(alpha: 0.45),
+                    width: 1.5,
+                  ),
+                ),
+                child: CircleAvatar(
+                  radius: 46,
+                  backgroundColor: theme.colorScheme.surfaceContainerHighest,
+                  child: _avatarUrl != null && _avatarUrl!.isNotEmpty
+                      ? ClipOval(
+                          child: CachedAppImage(
+                            imageUrl: _avatarUrl,
+                            width: 92,
+                            height: 92,
+                            fit: BoxFit.cover,
+                            memCacheWidth: 180,
                           ),
                         )
-                      : Icon(
-                          Icons.camera_alt_rounded,
-                          size: 16,
-                          color: theme.colorScheme.onPrimary,
+                      : Text(
+                          initial,
+                          style: theme.textTheme.headlineMedium?.copyWith(
+                            fontWeight: FontWeight.w600,
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
                         ),
                 ),
               ),
+              Positioned(
+                right: -2,
+                bottom: -2,
+                child: Material(
+                  color: theme.colorScheme.primary,
+                  shape: const CircleBorder(),
+                  elevation: 0,
+                  child: InkWell(
+                    onTap: _uploading ? null : _pickAvatar,
+                    customBorder: const CircleBorder(),
+                    child: Container(
+                      width: 32,
+                      height: 32,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        border: Border.all(color: surface, width: 2),
+                      ),
+                      child: _uploading
+                          ? Padding(
+                              padding: const EdgeInsets.all(7),
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: theme.colorScheme.onPrimary,
+                              ),
+                            )
+                          : Icon(
+                              Icons.edit_outlined,
+                              size: 15,
+                              color: theme.colorScheme.onPrimary,
+                            ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Text(
+            widget.user.fullName ?? '',
+            style: theme.textTheme.titleLarge?.copyWith(
+              fontWeight: FontWeight.w600,
+              letterSpacing: -0.02,
             ),
-          ],
-        ),
-        const SizedBox(height: 12),
-        Text(
-          widget.user.fullName ?? '',
-          style: const TextStyle(
-            fontSize: 20,
-            fontWeight: FontWeight.bold,
           ),
-        ),
-        Text(
-          widget.user.email ?? '',
-          style: TextStyle(color: Colors.grey.shade600),
-        ),
-        const SizedBox(height: 4),
-        Text(
-          t('tap_to_change_photo') ?? 'Tap the camera icon to change photo',
-          style: theme.textTheme.labelSmall?.copyWith(
-            color: theme.colorScheme.onSurfaceVariant,
+          const SizedBox(height: 4),
+          Text(
+            widget.user.email ?? '',
+            style: theme.textTheme.bodyMedium?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }

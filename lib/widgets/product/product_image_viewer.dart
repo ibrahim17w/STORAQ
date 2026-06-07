@@ -2,16 +2,27 @@ import 'package:flutter/material.dart';
 import '../cached_image.dart';
 
 /// Swipeable product gallery with thumbnails and fullscreen zoom.
+enum ProductImageDisplayStyle {
+  /// Full-width banner crop — good for wide hero shots.
+  banner,
+  /// Framed square with contain — best for product photos of any aspect ratio.
+  product,
+  /// Swipeable stacked cards with peeking neighbors (product detail hero).
+  cardCarousel,
+}
+
 class ProductImageViewer extends StatefulWidget {
   final List<String> images;
   final double height;
   final BorderRadius borderRadius;
+  final ProductImageDisplayStyle displayStyle;
 
   const ProductImageViewer({
     super.key,
     required this.images,
     this.height = 340,
     this.borderRadius = BorderRadius.zero,
+    this.displayStyle = ProductImageDisplayStyle.banner,
   });
 
   static void openGallery(
@@ -41,10 +52,15 @@ class _ProductImageViewerState extends State<ProductImageViewer> {
   List<String> get _images =>
       widget.images.where((path) => path.trim().isNotEmpty).toList();
 
+  bool get _isCardCarousel =>
+      widget.displayStyle == ProductImageDisplayStyle.cardCarousel;
+
   @override
   void initState() {
     super.initState();
-    _pageController = PageController();
+    _pageController = PageController(
+      viewportFraction: _isCardCarousel ? 0.86 : 1.0,
+    );
   }
 
   @override
@@ -97,89 +113,140 @@ class _ProductImageViewerState extends State<ProductImageViewer> {
 
     final safeIndex = _index.clamp(0, images.length - 1);
     final hasMultiple = images.length > 1;
+    final isProductStyle =
+        widget.displayStyle == ProductImageDisplayStyle.product;
+    final isCardCarousel = _isCardCarousel;
+    final imageFit = (isProductStyle || isCardCarousel)
+        ? BoxFit.contain
+        : BoxFit.cover;
+    final frameRadius = isCardCarousel
+        ? BorderRadius.circular(18)
+        : isProductStyle
+            ? BorderRadius.circular(20)
+            : widget.borderRadius;
+
+    if (isCardCarousel) {
+      return _buildCardCarousel(
+        context,
+        theme: theme,
+        images: images,
+        safeIndex: safeIndex,
+        hasMultiple: hasMultiple,
+        frameRadius: frameRadius,
+      );
+    }
+
+    Widget buildMainImage(String url, {required double h, required int index}) {
+      return GestureDetector(
+        onTap: () => ProductImageViewer.openGallery(
+          context,
+          images: images,
+          initialIndex: index,
+        ),
+        child: CachedAppImage(
+          imageUrl: url,
+          width: double.infinity,
+          height: h,
+          fit: imageFit,
+          memCacheWidth: isProductStyle ? 1200 : 900,
+          borderRadius: frameRadius,
+        ),
+      );
+    }
+
+    final gallery = SizedBox(
+      height: widget.height,
+      width: double.infinity,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          if (isProductStyle)
+            DecoratedBox(
+              decoration: BoxDecoration(
+                borderRadius: frameRadius,
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [
+                    theme.colorScheme.surfaceContainerHighest,
+                    theme.colorScheme.surfaceContainerLow,
+                  ],
+                ),
+              ),
+            ),
+          PageView.builder(
+            controller: _pageController,
+            itemCount: images.length,
+            onPageChanged: (i) => setState(() => _index = i),
+            itemBuilder: (_, i) {
+              return Padding(
+                padding: EdgeInsets.all(isProductStyle ? 20 : 0),
+                child: buildMainImage(images[i], h: widget.height, index: i),
+              );
+            },
+          ),
+          Positioned(
+            top: 12,
+            right: 12,
+            child: Material(
+              color: Colors.black.withValues(alpha: 0.45),
+              borderRadius: BorderRadius.circular(20),
+              child: InkWell(
+                borderRadius: BorderRadius.circular(20),
+                onTap: () => ProductImageViewer.openGallery(
+                  context,
+                  images: images,
+                  initialIndex: safeIndex,
+                ),
+                child: const Padding(
+                  padding: EdgeInsets.all(8),
+                  child: Icon(
+                    Icons.zoom_out_map_rounded,
+                    size: 20,
+                    color: Colors.white,
+                  ),
+                ),
+              ),
+            ),
+          ),
+          if (hasMultiple)
+            Positioned(
+              bottom: 12,
+              left: 0,
+              right: 0,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: List.generate(images.length, (i) {
+                  final active = i == safeIndex;
+                  return AnimatedContainer(
+                    duration: const Duration(milliseconds: 180),
+                    margin: const EdgeInsets.symmetric(horizontal: 3),
+                    width: active ? 18 : 6,
+                    height: 6,
+                    decoration: BoxDecoration(
+                      color: active
+                          ? Colors.white
+                          : Colors.white.withValues(alpha: 0.45),
+                      borderRadius: BorderRadius.circular(3),
+                    ),
+                  );
+                }),
+              ),
+            ),
+        ],
+      ),
+    );
 
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        SizedBox(
-          height: widget.height,
-          width: double.infinity,
-          child: Stack(
-            fit: StackFit.expand,
-            children: [
-              PageView.builder(
-                controller: _pageController,
-                itemCount: images.length,
-                onPageChanged: (i) => setState(() => _index = i),
-                itemBuilder: (_, i) {
-                  return GestureDetector(
-                    onTap: () => ProductImageViewer.openGallery(
-                      context,
-                      images: images,
-                      initialIndex: i,
-                    ),
-                    child: CachedAppImage(
-                      imageUrl: images[i],
-                      width: double.infinity,
-                      height: widget.height,
-                      fit: BoxFit.cover,
-                      memCacheWidth: 900,
-                      borderRadius: widget.borderRadius,
-                    ),
-                  );
-                },
-              ),
-              Positioned(
-                top: 12,
-                right: 12,
-                child: Material(
-                  color: Colors.black.withValues(alpha: 0.45),
-                  borderRadius: BorderRadius.circular(20),
-                  child: InkWell(
-                    borderRadius: BorderRadius.circular(20),
-                    onTap: () => ProductImageViewer.openGallery(
-                      context,
-                      images: images,
-                      initialIndex: safeIndex,
-                    ),
-                    child: const Padding(
-                      padding: EdgeInsets.all(8),
-                      child: Icon(
-                        Icons.zoom_out_map_rounded,
-                        size: 20,
-                        color: Colors.white,
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-              if (hasMultiple)
-                Positioned(
-                  bottom: 12,
-                  left: 0,
-                  right: 0,
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: List.generate(images.length, (i) {
-                      final active = i == safeIndex;
-                      return AnimatedContainer(
-                        duration: const Duration(milliseconds: 180),
-                        margin: const EdgeInsets.symmetric(horizontal: 3),
-                        width: active ? 18 : 6,
-                        height: 6,
-                        decoration: BoxDecoration(
-                          color: active
-                              ? Colors.white
-                              : Colors.white.withValues(alpha: 0.45),
-                          borderRadius: BorderRadius.circular(3),
-                        ),
-                      );
-                    }),
-                  ),
-                ),
-            ],
-          ),
-        ),
+        if (isProductStyle)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+            child: gallery,
+          )
+        else
+          gallery,
         if (hasMultiple)
           Container(
             width: double.infinity,
@@ -242,6 +309,147 @@ class _ProductImageViewerState extends State<ProductImageViewer> {
             ),
           ),
       ],
+    );
+  }
+
+  Widget _buildCardCarousel(
+    BuildContext context, {
+    required ThemeData theme,
+    required List<String> images,
+    required int safeIndex,
+    required bool hasMultiple,
+    required BorderRadius frameRadius,
+  }) {
+    final isDark = theme.brightness == Brightness.dark;
+    final plateColor = isDark ? const Color(0xFF1A1A1A) : const Color(0xFFECECEF);
+    final cardColor = isDark ? const Color(0xFF2A2A2A) : Colors.white;
+    final borderColor = theme.dividerColor.withValues(alpha: isDark ? 0.45 : 0.3);
+
+    return SizedBox(
+      height: widget.height,
+      width: double.infinity,
+      child: Stack(
+        alignment: Alignment.bottomCenter,
+        children: [
+          Positioned.fill(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(24, 16, 24, 36),
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: plateColor,
+                  borderRadius: BorderRadius.circular(22),
+                  border: Border.all(color: borderColor),
+                ),
+              ),
+            ),
+          ),
+          PageView.builder(
+            controller: _pageController,
+            padEnds: true,
+            itemCount: images.length,
+            onPageChanged: (i) => setState(() => _index = i),
+            itemBuilder: (_, i) {
+              return AnimatedBuilder(
+                animation: _pageController,
+                builder: (context, child) {
+                  var page = _index.toDouble();
+                  if (_pageController.hasClients &&
+                      _pageController.position.haveDimensions) {
+                    page = _pageController.page ?? page;
+                  }
+                  final delta = (page - i).abs();
+                  final scale = (1 - delta * 0.07).clamp(0.9, 1.0);
+                  final opacity = (1 - delta * 0.4).clamp(0.55, 1.0);
+                  return Transform.scale(
+                    scale: scale,
+                    child: Opacity(opacity: opacity, child: child),
+                  );
+                },
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 20),
+                  child: GestureDetector(
+                    onTap: () => ProductImageViewer.openGallery(
+                      context,
+                      images: images,
+                      initialIndex: i,
+                    ),
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: cardColor,
+                        borderRadius: frameRadius,
+                        border: Border.all(color: borderColor),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: isDark ? 0.35 : 0.1),
+                            blurRadius: 18,
+                            offset: const Offset(0, 8),
+                          ),
+                        ],
+                      ),
+                      child: ClipRRect(
+                        borderRadius: frameRadius,
+                        child: CachedAppImage(
+                          imageUrl: images[i],
+                          width: double.infinity,
+                          height: widget.height - 40,
+                          fit: BoxFit.contain,
+                          memCacheWidth: 1200,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+          Positioned(
+            top: 14,
+            right: 20,
+            child: Material(
+              color: Colors.black.withValues(alpha: 0.4),
+              borderRadius: BorderRadius.circular(20),
+              child: InkWell(
+                borderRadius: BorderRadius.circular(20),
+                onTap: () => ProductImageViewer.openGallery(
+                  context,
+                  images: images,
+                  initialIndex: safeIndex,
+                ),
+                child: const Padding(
+                  padding: EdgeInsets.all(8),
+                  child: Icon(
+                    Icons.zoom_out_map_rounded,
+                    size: 18,
+                    color: Colors.white,
+                  ),
+                ),
+              ),
+            ),
+          ),
+          if (hasMultiple)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: List.generate(images.length, (i) {
+                  final active = i == safeIndex;
+                  return AnimatedContainer(
+                    duration: const Duration(milliseconds: 180),
+                    margin: const EdgeInsets.symmetric(horizontal: 3),
+                    width: active ? 16 : 6,
+                    height: 6,
+                    decoration: BoxDecoration(
+                      color: active
+                          ? theme.colorScheme.primary
+                          : theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.35),
+                      borderRadius: BorderRadius.circular(3),
+                    ),
+                  );
+                }),
+              ),
+            ),
+        ],
+      ),
     );
   }
 }

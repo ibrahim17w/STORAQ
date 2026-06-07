@@ -70,11 +70,15 @@ class _MainNavScreenState extends ConsumerState<MainNavScreen> {
   }
 
   void _onTabSelected(int index) {
-    if (index == _currentIndex) return;
+    if (index == _currentIndex) {
+      if (index == 0) homeSponsoredRefreshTick.value++;
+      return;
+    }
     setState(() {
       _currentIndex = index;
       _tabCache.putIfAbsent(index, () => _buildScreen(index));
     });
+    if (index == 0) homeSponsoredRefreshTick.value++;
   }
 
   Widget _buildScreen(int index) {

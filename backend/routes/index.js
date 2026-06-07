@@ -16,6 +16,7 @@ const chatRoutes = require('./chat');
 const supportRoutes = require('./support');
 const sponsoredProductRoutes = require('./sponsored_products');
 const platformRatesRoutes = require('./platform_rates');
+const reviewRoutes = require('./reviews');
 const { authLimiter } = require('../middleware/auth');
 
 function mountRoutes(app) {
@@ -35,6 +36,7 @@ function mountRoutes(app) {
   app.use('/api', supportRoutes);
   app.use('/api', sponsoredProductRoutes);
   app.use('/api', platformRatesRoutes);
+  app.use('/api', reviewRoutes);
   // marketplaceRoutes MUST come LAST because it likely has catch-all or broad matchers
   app.use('/api', marketplaceRoutes);
 }

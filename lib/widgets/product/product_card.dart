@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../cached_image.dart';
 import '../../services/offline_service.dart';
 import '../../services/currency_service.dart';
+import '../../utils/location_helper.dart';
 import 'product_image_viewer.dart';
 
 class ProductCard extends StatelessWidget {
@@ -16,6 +17,8 @@ class ProductCard extends StatelessWidget {
   final String? trendingLabel;
   final String? sponsoredLabel;
   final Map<String, dynamic>? currencySettings;
+  final double? distanceKm;
+  final double? similarityScore;
   /// Tighter layout for fixed-height horizontal carousels on the home screen.
   final bool compact;
 
@@ -32,6 +35,8 @@ class ProductCard extends StatelessWidget {
     this.trendingLabel,
     this.sponsoredLabel,
     this.currencySettings,
+    this.distanceKm,
+    this.similarityScore,
     this.compact = false,
   });
 
@@ -112,6 +117,29 @@ class ProductCard extends StatelessWidget {
                                     color: theme.colorScheme.onPrimary,
                                     fontSize: 10,
                                     fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          if (similarityScore != null)
+                            PositionedDirectional(
+                              top: 8,
+                              start: 8,
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 4,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: theme.colorScheme.primary,
+                                  borderRadius: BorderRadius.circular(20),
+                                ),
+                                child: Text(
+                                  '${(similarityScore! * 100).toStringAsFixed(0)}%',
+                                  style: TextStyle(
+                                    color: theme.colorScheme.onPrimary,
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.bold,
                                   ),
                                 ),
                               ),
@@ -225,27 +253,46 @@ class ProductCard extends StatelessWidget {
                 ),
               ),
             ),
-          if (!compact && shopName.isNotEmpty) ...[
+          if (!compact &&
+              (shopName.isNotEmpty ||
+                  (distanceKm != null && distanceKm != double.infinity))) ...[
             const SizedBox(height: 4),
             Row(
               children: [
-                Icon(
-                  Icons.storefront_outlined,
-                  size: 12,
-                  color: theme.colorScheme.onSurfaceVariant,
-                ),
-                const SizedBox(width: 4),
-                Expanded(
-                  child: Text(
-                    shopName,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    textAlign: TextAlign.start,
-                    style: theme.textTheme.labelSmall?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
+                if (shopName.isNotEmpty) ...[
+                  Icon(
+                    Icons.storefront_outlined,
+                    size: 12,
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                  const SizedBox(width: 4),
+                  Expanded(
+                    child: Text(
+                      shopName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.start,
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
                     ),
                   ),
-                ),
+                ],
+                if (distanceKm != null && distanceKm != double.infinity) ...[
+                  Icon(
+                    Icons.near_me_outlined,
+                    size: 12,
+                    color: theme.colorScheme.primary,
+                  ),
+                  const SizedBox(width: 3),
+                  Text(
+                    LocationHelper.formatDistanceKm(distanceKm!),
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      fontWeight: FontWeight.w600,
+                      color: theme.colorScheme.primary,
+                    ),
+                  ),
+                ],
               ],
             ),
           ],

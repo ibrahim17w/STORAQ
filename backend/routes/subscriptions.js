@@ -108,11 +108,34 @@ router.get('/my-store/products/online-status', authenticateToken, requireRealUse
     const storeId = req.storeContext.store_id;
     const status = await getSubscriptionStatus(storeId);
     const products = await pool.query(
-      `SELECT id, name, price, quantity, image_url, is_online, went_online_at, created_at
-       FROM products WHERE store_id = $1 ORDER BY is_online DESC, name ASC`,
+      `SELECT p.id, p.name, p.price, p.quantity, p.image_url, p.is_online, p.went_online_at, p.created_at,
+              c.id AS sponsorship_id,
+              c.scope_type AS sponsorship_scope,
+              c.expires_at AS sponsorship_expires_at,
+              c.radius_km AS sponsorship_radius_km,
+              c.target_country AS sponsorship_target_country,
+              c.target_city AS sponsorship_target_city,
+              c.target_village AS sponsorship_target_village
+       FROM products p
+       LEFT JOIN LATERAL (
+         SELECT id, scope_type, expires_at, radius_km,
+                target_country, target_city, target_village
+         FROM sponsored_product_campaigns
+         WHERE product_id = p.id
+           AND status = 'active'
+           AND expires_at > NOW()
+         ORDER BY expires_at DESC
+         LIMIT 1
+       ) c ON TRUE
+       WHERE p.store_id = $1
+       ORDER BY p.is_online DESC, p.name ASC`,
       [storeId]
     );
-    res.json({ ...status, products: products.rows });
+    const rows = products.rows.map((row) => ({
+      ...row,
+      is_sponsored: row.sponsorship_id != null,
+    }));
+    res.json({ ...status, products: rows });
   } catch (err) {
     console.error('Online status error:', err);
     res.status(500).json({ error: 'Failed to load products' });

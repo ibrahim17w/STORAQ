@@ -4,6 +4,70 @@
  */
 
 const RATE_DECIMALS = 6;
+const FETCH_TIMEOUT_MS = 8000;
+
+// Per-host circuit breaker. After 2 consecutive failures the host is
+// short-circuited for COOLDOWN_MS so we stop spamming the logs every
+// few seconds with the same timeout/abort message.
+const COOLDOWN_MS = 10 * 60 * 1000;
+const FAIL_THRESHOLD = 2;
+const hostState = new Map();
+
+function hostKey(url) {
+  try {
+    return new URL(url).hostname;
+  } catch (_) {
+    return url;
+  }
+}
+
+function isHostBlocked(host) {
+  const s = hostState.get(host);
+  if (!s) return false;
+  if (s.fails < FAIL_THRESHOLD) return false;
+  if (Date.now() - s.lastAt > COOLDOWN_MS) {
+    hostState.delete(host);
+    return false;
+  }
+  return true;
+}
+
+function recordHostSuccess(host) {
+  hostState.delete(host);
+}
+
+function recordHostFailure(host, err) {
+  const s = hostState.get(host) || { fails: 0, lastAt: 0, warned: false };
+  s.fails += 1;
+  s.lastAt = Date.now();
+  if (s.fails === FAIL_THRESHOLD && !s.warned) {
+    s.warned = true;
+    const reason = err?.name === 'AbortError' ? 'timeout' : (err?.message || err);
+    console.warn(`[rates] ${host} unreachable (${reason}); skipping for ${Math.round(COOLDOWN_MS / 60000)}min.`);
+  }
+  hostState.set(host, s);
+}
+
+async function fetchWithTimeout(url, options = {}) {
+  const host = hostKey(url);
+  if (isHostBlocked(host)) {
+    const e = new Error('host circuit open');
+    e.code = 'CIRCUIT_OPEN';
+    throw e;
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  try {
+    const res = await fetch(url, { ...options, signal: controller.signal });
+    recordHostSuccess(host);
+    return res;
+  } catch (err) {
+    recordHostFailure(host, err);
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 const RATE_PROVIDERS = [
   { id: 'frankfurter', label: 'Frankfurter (official)' },
@@ -43,7 +107,7 @@ function roundConvertedPrice(amount, currency) {
 }
 
 async function fetchFrankfurter(f, t) {
-  const res = await fetch(
+  const res = await fetchWithTimeout(
     `https://api.frankfurter.app/latest?from=${encodeURIComponent(f)}&to=${encodeURIComponent(t)}`
   );
   if (!res.ok) return null;
@@ -57,7 +121,7 @@ async function fetchFrankfurter(f, t) {
 async function fetchFrankfurterMulti(from, targets) {
   const list = targets.filter((t) => t !== from);
   if (list.length === 0) return {};
-  const res = await fetch(
+  const res = await fetchWithTimeout(
     `https://api.frankfurter.app/latest?from=${encodeURIComponent(from)}&to=${list.join(',')}`
   );
   if (!res.ok) return {};
@@ -71,7 +135,7 @@ async function fetchFrankfurterMulti(from, targets) {
 }
 
 async function fetchExchangeRateApi(f, t) {
-  const res = await fetch(`https://open.er-api.com/v6/latest/${encodeURIComponent(f)}`);
+  const res = await fetchWithTimeout(`https://open.er-api.com/v6/latest/${encodeURIComponent(f)}`);
   if (!res.ok) return null;
   const data = await res.json();
   const rate = data && data.rates ? toNumber(data.rates[t]) : null;
@@ -88,7 +152,7 @@ async function fetchSyriaRate(f, t, marketType) {
   const wanted = marketType === 'official' ? 'central_bank' : 'market';
 
   async function rateToSyp(base) {
-    const res = await fetch(
+    const res = await fetchWithTimeout(
       `https://syriato.com/api/v1/latest-rates?base=${encodeURIComponent(base)}`
     );
     if (!res.ok) return null;
@@ -178,27 +242,55 @@ async function getPlatformPaymentRates() {
   const rates = { USD: 1 };
   const sources = { USD: 'base' };
 
-  const syp = await fetchSyriaRate('USD', 'SYP', 'market');
-  if (syp) {
-    rates.SYP = syp.rate;
-    sources.SYP = syp.source;
+  try {
+    const syp = await fetchSyriaRate('USD', 'SYP', 'market');
+    if (syp) {
+      rates.SYP = syp.rate;
+      sources.SYP = syp.source;
+    }
+  } catch (_) {
+    // Circuit breaker / fetchWithTimeout already logged the host warning
+    // once; swallow the per-call error and fall back to cached SYP if any.
+    if (paymentRatesCache?.rates?.SYP) {
+      rates.SYP = paymentRatesCache.rates.SYP;
+      sources.SYP = paymentRatesCache.sources?.SYP || 'cached';
+    }
   }
 
   const frankTargets = PAYMENT_CURRENCIES.filter(
     (c) => c !== 'USD' && c !== 'SYP'
   );
-  const frank = await fetchFrankfurterMulti('USD', frankTargets);
-  for (const [cur, info] of Object.entries(frank)) {
-    rates[cur] = info.rate;
-    sources[cur] = info.source;
+  try {
+    const frank = await fetchFrankfurterMulti('USD', frankTargets);
+    for (const [cur, info] of Object.entries(frank)) {
+      rates[cur] = info.rate;
+      sources[cur] = info.source;
+    }
+  } catch (_) {
+    // Circuit breaker logs once per host. Cached rates carry us through.
   }
 
   for (const cur of frankTargets) {
     if (rates[cur] != null) continue;
-    const fallback = await fetchExchangeRateApi('USD', cur);
-    if (fallback) {
-      rates[cur] = fallback.rate;
-      sources[cur] = fallback.source;
+    try {
+      const fallback = await fetchExchangeRateApi('USD', cur);
+      if (fallback) {
+        rates[cur] = fallback.rate;
+        sources[cur] = fallback.source;
+      }
+    } catch (_) {
+      // try next currency
+    }
+  }
+
+  // Fill any remaining missing currencies from the prior cache so callers
+  // never see a partially-populated result that triggers re-fetches.
+  if (paymentRatesCache?.rates) {
+    for (const [cur, val] of Object.entries(paymentRatesCache.rates)) {
+      if (rates[cur] == null && val != null) {
+        rates[cur] = val;
+        sources[cur] = paymentRatesCache.sources?.[cur] || 'cached';
+      }
     }
   }
 

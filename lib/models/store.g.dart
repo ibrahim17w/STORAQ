@@ -28,6 +28,8 @@ Store _$StoreFromJson(Map<String, dynamic> json) => Store(
   manualApprovalMode: json['manual_approval_mode'] as bool?,
   firstProductApproved: json['first_product_approved'] as bool?,
   createdAt: json['created_at'] as String?,
+  rating: parseJsonDouble(json['rating']),
+  reviewCount: parseJsonInt(json['review_count']),
 );
 
 Map<String, dynamic> _$StoreToJson(Store instance) => <String, dynamic>{
@@ -52,4 +54,6 @@ Map<String, dynamic> _$StoreToJson(Store instance) => <String, dynamic>{
   'manual_approval_mode': ?instance.manualApprovalMode,
   'first_product_approved': ?instance.firstProductApproved,
   'created_at': ?instance.createdAt,
+  'rating': ?instance.rating,
+  'review_count': ?instance.reviewCount,
 };

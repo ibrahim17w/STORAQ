@@ -3,25 +3,30 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Admin Dashboard</title>
+  <title>STORAQ Admin</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js" crossorigin=""></script>
+  <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
   <style>
     :root {
-      --bg: #0f1117;
-      --surface: #1a1d27;
-      --surface-hover: #22262f;
-      --border: #2a2e3a;
-      --text: #e4e4e7;
-      --text-muted: #8b8d97;
-      --primary: #6366f1;
-      --primary-hover: #4f46e5;
+      --bg: #0a0e1a;
+      --surface: #111827;
+      --surface-hover: #1a2235;
+      --border: #1e293b;
+      --text: #e2e8f0;
+      --text-muted: #94a3b8;
+      --primary: #06b6d4;
+      --primary-hover: #0891b2;
+      --primary-glow: rgba(6, 182, 212, 0.35);
+      --accent: #3b82f6;
       --success: #10b981;
       --danger: #ef4444;
       --warning: #f59e0b;
       --sidebar-width: 240px;
-      --radius: 8px;
+      --radius: 10px;
     }
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: 'Inter', -apple-system, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
@@ -110,6 +115,34 @@
     .support-item:hover, .support-item.active { background: var(--surface-hover); }
     .support-item .title { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
     .support-item .meta { font-size: 12px; color: var(--text-muted); }
+    .badge-cat-billing { background: rgba(59, 130, 246, 0.18); color: #93c5fd; }
+    .badge-cat-account { background: rgba(168, 85, 247, 0.18); color: #d8b4fe; }
+    .badge-cat-technical { background: rgba(245, 158, 11, 0.18); color: #fcd34d; }
+    .badge-cat-report { background: rgba(239, 68, 68, 0.18); color: #fca5a5; }
+    .badge-cat-review_removal { background: rgba(236, 72, 153, 0.18); color: #f9a8d4; }
+    .badge-cat-general { background: rgba(100, 116, 139, 0.18); color: #cbd5e1; }
+    .support-payment-banner {
+      margin: 12px 16px 0;
+      padding: 12px 14px;
+      border-radius: 10px;
+      border: 1px solid rgba(16, 185, 129, 0.35);
+      background: rgba(16, 185, 129, 0.1);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .support-payment-banner p { margin: 0; font-size: 13px; color: var(--text); }
+    .support-thread img.support-attach {
+      max-width: 240px;
+      max-height: 200px;
+      border-radius: 8px;
+      margin-top: 6px;
+      display: block;
+      cursor: zoom-in;
+      border: 1px solid var(--border);
+    }
     .support-thread { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); display: flex; flex-direction: column; min-height: 520px; }
     .support-thread-header { padding: 16px 20px; border-bottom: 1px solid var(--border); }
     .support-messages { flex: 1; overflow: auto; padding: 16px 20px; display: flex; flex-direction: column; gap: 10px; }
@@ -120,21 +153,140 @@
     .support-compose { padding: 16px 20px; border-top: 1px solid var(--border); display: flex; gap: 10px; align-items: flex-end; }
     .support-compose textarea { flex: 1; min-height: 72px; resize: vertical; }
 
+    /* ─── Analytics — flat fintech dashboard ─── */
+    .analytics-shell { display: flex; flex-direction: column; gap: 24px; }
+    .analytics-header { display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 16px; }
+    .analytics-header h2 { font-size: 22px; font-weight: 600; color: var(--text); letter-spacing: -0.02em; }
+    .analytics-header p { color: var(--text-muted); font-size: 13px; margin-top: 4px; line-height: 1.5; }
+    .analytics-refresh { font-size: 12px; color: var(--text-muted); }
+    .analytics-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+    .kpi-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+    .kpi-card {
+      background: #1e1e1e;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px;
+      display: flex;
+      gap: 12px;
+      align-items: flex-start;
+      min-height: 88px;
+      cursor: help;
+      transition: border-color 0.15s ease, transform 0.15s ease;
+    }
+    .kpi-card:hover {
+      border-color: var(--primary);
+      transform: translateY(-1px);
+    }
+    .kpi-icon {
+      width: 40px; height: 40px; border-radius: 10px;
+      background: rgba(6, 182, 212, 0.12);
+      border: 1px solid rgba(6, 182, 212, 0.2);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 18px; flex-shrink: 0;
+    }
+    .kpi-body { flex: 1; min-width: 0; }
+    .kpi-card .kpi-value { font-size: 22px; font-weight: 600; color: var(--text); margin-bottom: 2px; letter-spacing: -0.02em; }
+    .kpi-card .kpi-label { font-size: 12px; color: var(--text-muted); font-weight: 500; }
+    .kpi-card .kpi-sub { font-size: 11px; color: var(--primary); margin-top: 6px; line-height: 1.4; }
+
+    .analytics-nav {
+      display: flex; flex-wrap: wrap; gap: 8px;
+      padding: 4px;
+      background: #1e1e1e;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+    }
+    .analytics-tab {
+      padding: 10px 16px;
+      border: 1px solid transparent;
+      border-radius: 8px;
+      background: transparent;
+      color: var(--text-muted);
+      font-size: 13px;
+      font-weight: 500;
+      font-family: inherit;
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s, border-color 0.15s;
+    }
+    .analytics-tab:hover { background: var(--surface-hover); color: var(--text); }
+    .analytics-tab.active {
+      background: rgba(6, 182, 212, 0.12);
+      border-color: rgba(6, 182, 212, 0.35);
+      color: var(--primary);
+    }
+
+    .analytics-panel-wrap { min-height: 320px; }
+    .analytics-split { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .analytics-split.single { grid-template-columns: 1fr; }
+
+    .panel {
+      background: #1e1e1e;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 20px;
+      min-height: 0;
+    }
+    .panel-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 16px; gap: 8px; }
+    .panel-title { font-size: 14px; font-weight: 600; color: var(--text); }
+    .panel-sub { font-size: 11px; color: var(--text-muted); font-weight: 400; }
+
+    .chart-wrap { position: relative; height: 240px; }
+    .chart-wrap-lg { position: relative; height: 280px; }
+    .chart-wrap-sm { position: relative; height: 200px; }
+
+    .donut-layout { display: grid; grid-template-columns: 1fr 160px; gap: 16px; align-items: center; }
+    .chart-legend-external { display: flex; flex-direction: column; gap: 12px; }
+    .legend-item { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--text-muted); }
+    .legend-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    .legend-item strong { display: block; color: var(--text); font-size: 13px; font-weight: 600; }
+
+    #store-map { height: 400px; border-radius: 8px; z-index: 1; background: #121212; border: 1px solid var(--border); }
+    .leaflet-container { background: #121212 !important; font-family: Inter, sans-serif; }
+    .map-legend { display: flex; gap: 16px; margin-top: 12px; font-size: 12px; color: var(--text-muted); flex-wrap: wrap; }
+    .map-legend i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+    .legend-active { background: var(--primary); }
+    .legend-inactive { background: #64748b; }
+
+    .txn-list { display: flex; flex-direction: column; gap: 0; max-height: 300px; overflow-y: auto; }
+    .txn-item { display: flex; justify-content: space-between; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--border); font-size: 13px; gap: 12px; }
+    .txn-item:last-child { border-bottom: none; }
+    .txn-store { font-weight: 600; color: var(--text); font-size: 13px; }
+    .txn-meta { color: var(--text-muted); font-size: 11px; margin-top: 4px; }
+    .txn-amount { font-weight: 600; color: var(--primary); white-space: nowrap; font-size: 13px; }
+
+    .analytics-actions { display: flex; flex-direction: column; gap: 8px; }
+    .analytics-actions .btn { justify-content: center; width: 100%; }
+
+    .store-pin-popup { font-size: 12px; line-height: 1.5; }
+    .store-pin-popup strong { color: var(--primary); }
+
+    @media (max-width: 1200px) {
+      .kpi-grid { grid-template-columns: repeat(2, 1fr); }
+      .analytics-split { grid-template-columns: 1fr; }
+      .donut-layout { grid-template-columns: 1fr; }
+      #store-map { height: 320px; }
+    }
+
     @media (max-width: 768px) {
       .sidebar { width: 60px; }
       .sidebar .nav-item span:not(.nav-icon) { display: none; }
       .sidebar-header h1 { font-size: 14px; }
       .main-content { margin-left: 60px; padding: 16px; }
       .stats-grid { grid-template-columns: 1fr 1fr; }
+      .kpi-grid { grid-template-columns: 1fr; }
     }
   </style>
 </head>
 <body>
   <div id="app">
     <aside class="sidebar">
-      <div class="sidebar-header"><h1>MB Admin</h1></div>
+      <div class="sidebar-header"><h1>STORAQ</h1></div>
       <nav class="sidebar-nav">
-        <a href="#" class="nav-item active" data-page="dashboard"><span class="nav-icon">&#9632;</span> Dashboard</a>
+        <a href="#" class="nav-item active" data-page="analytics"><span class="nav-icon">&#128202;</span> Analytics</a>
+        <a href="#" class="nav-item" data-page="dashboard"><span class="nav-icon">&#9632;</span> Dashboard</a>
+        <a href="#" class="nav-item" data-page="users"><span class="nav-icon">&#128101;</span> Users</a>
+        <a href="#" class="nav-item" data-page="reviews"><span class="nav-icon">&#11088;</span> Reviews</a>
         <a href="#" class="nav-item" data-page="stores"><span class="nav-icon">&#127978;</span> Stores</a>
         <a href="#" class="nav-item" data-page="products"><span class="nav-icon">&#9998;</span> Product Approvals</a>
         <a href="#" class="nav-item" data-page="payments"><span class="nav-icon">&#36;</span> Payments</a>
@@ -142,6 +294,7 @@
         <a href="#" class="nav-item" data-page="promos"><span class="nav-icon">&#127991;</span> Promo Codes</a>
         <a href="#" class="nav-item" data-page="flagged"><span class="nav-icon">&#9888;</span> Flagged Stores</a>
         <a href="#" class="nav-item" data-page="support"><span class="nav-icon">&#128172;</span> Support Tickets</a>
+        <a href="#" class="nav-item" data-page="chats"><span class="nav-icon">&#128488;</span> Store Chats</a>
       </nav>
       <div class="sidebar-footer"><button id="logout-btn" class="btn btn-ghost">Logout</button></div>
     </aside>
@@ -163,6 +316,22 @@
 <script>
 // ─── API Helper ─────────────────────────────────────────────────────────────
 const API_BASE = window.location.origin; // e.g. http://localhost:4400
+// Fallback to common dev backend port so support images load even before
+// /api/config has been fetched. loadMediaConfig() will overwrite this.
+let MEDIA_BASE = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+  ? 'http://' + window.location.hostname + ':3000'
+  : '';
+let paymentHighlightId = null;
+let paymentHighlightType = null;
+
+const SUPPORT_CATEGORIES = {
+  general: 'General',
+  account: 'Account',
+  billing: 'Billing / Payments',
+  technical: 'Technical',
+  report: 'Report',
+  review_removal: 'Review Removal',
+};
 
 const API = {
   async request(method, url, body) {
@@ -209,7 +378,8 @@ document.getElementById('login-form').addEventListener('submit', async (e) => {
       password: document.getElementById('password').value
     });
     hideLogin();
-    navigateTo('dashboard');
+    await loadMediaConfig();
+    navigateTo('analytics');
   } catch (ex) {
     err.textContent = ex.message;
   } finally {
@@ -229,6 +399,10 @@ document.querySelectorAll('.nav-item').forEach(item => {
 });
 
 function navigateTo(page) {
+  if (currentPage === 'analytics' && page !== 'analytics') {
+    if (analyticsPollTimer) { clearInterval(analyticsPollTimer); analyticsPollTimer = null; }
+    destroyAnalyticsAll();
+  }
   currentPage = page;
   document.querySelectorAll('.nav-item').forEach(i => i.classList.toggle('active', i.dataset.page === page));
   renderPage(page);
@@ -237,7 +411,10 @@ function navigateTo(page) {
 function renderPage(page) {
   const c = document.getElementById('main-content');
   switch(page) {
+    case 'analytics': renderAnalytics(c); break;
     case 'dashboard': renderDashboard(c); break;
+    case 'users': renderUsers(c); break;
+    case 'reviews': renderReviews(c); break;
     case 'stores': renderStores(c); break;
     case 'products': renderProducts(c); break;
     case 'payments': renderPayments(c); break;
@@ -245,13 +422,609 @@ function renderPage(page) {
     case 'promos': renderPromos(c); break;
     case 'flagged': renderFlagged(c); break;
     case 'support': renderSupport(c); break;
+    case 'chats': renderChats(c); break;
   }
 }
 
 let activeSupportTicketId = null;
 let supportPollTimer = null;
+let analyticsCharts = [];
+let analyticsMap = null;
+let analyticsPollTimer = null;
+let analyticsActiveTab = 'overview';
+let analyticsDataCache = null;
 
 function esc(s) { if (!s) return ''; const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+async function loadMediaConfig() {
+  try {
+    const cfg = await API.get('/api/config');
+    if (cfg && cfg.mediaBaseUrl) MEDIA_BASE = String(cfg.mediaBaseUrl).replace(/\/$/, '');
+  } catch (_) {}
+}
+
+function fmtNum(n) {
+  const v = Number(n) || 0;
+  if (v >= 1e6) return (v / 1e6).toFixed(1) + 'M';
+  if (v >= 1e4) return (v / 1e3).toFixed(1) + 'K';
+  return v.toLocaleString(undefined, { maximumFractionDigits: 0 });
+}
+function fmtMoney(n, cur) {
+  const v = Number(n) || 0;
+  const c = cur || 'SYP';
+  if (v >= 1e6) return c + ' ' + (v / 1e6).toFixed(2) + 'M';
+  if (v >= 1e4) return c + ' ' + (v / 1e3).toFixed(1) + 'K';
+  return c + ' ' + v.toLocaleString(undefined, { maximumFractionDigits: 0 });
+}
+function fillDateSeries(rows, valueKey, days) {
+  const map = new Map();
+  (rows || []).forEach((r) => {
+    const d = r.date instanceof Date ? r.date.toISOString().slice(0, 10) : String(r.date).slice(0, 10);
+    map.set(d, Number(r[valueKey]) || 0);
+  });
+  const labels = [];
+  const data = [];
+  const now = new Date();
+  for (let i = days - 1; i >= 0; i--) {
+    const dt = new Date(now);
+    dt.setDate(dt.getDate() - i);
+    const key = dt.toISOString().slice(0, 10);
+    labels.push(dt.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }));
+    data.push(map.get(key) || 0);
+  }
+  return { labels, data };
+}
+function destroyAnalyticsCharts() {
+  analyticsCharts.forEach((c) => { try { c.destroy(); } catch (_) {} });
+  analyticsCharts = [];
+}
+function destroyAnalyticsMap() {
+  if (analyticsMap) { try { analyticsMap.remove(); } catch (_) {} analyticsMap = null; }
+}
+function destroyAnalyticsAll() {
+  destroyAnalyticsCharts();
+  destroyAnalyticsMap();
+}
+function chartDefaults(extra) {
+  const base = {
+    responsive: true,
+    maintainAspectRatio: false,
+    interaction: { mode: 'nearest', intersect: true },
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        backgroundColor: 'rgba(15, 23, 42, 0.92)',
+        titleFont: { size: 12, family: 'Inter' },
+        bodyFont: { size: 12, family: 'Inter' },
+        padding: 10,
+        cornerRadius: 8,
+      },
+    },
+    scales: {
+      x: {
+        grid: { color: 'rgba(51, 65, 85, 0.35)', drawBorder: false },
+        ticks: { color: '#64748b', font: { size: 11, family: 'Inter' }, maxTicksLimit: 7 },
+        border: { display: false },
+      },
+      y: {
+        grid: { color: 'rgba(51, 65, 85, 0.35)', drawBorder: false },
+        ticks: { color: '#64748b', font: { size: 11, family: 'Inter' } },
+        beginAtZero: true,
+        border: { display: false },
+      },
+    },
+  };
+  if (extra && extra.plugins) {
+    base.plugins = { ...base.plugins, ...extra.plugins };
+  }
+  return base;
+}
+function supportImageUrl(url) {
+  if (!url) return '';
+  if (url.startsWith('http://') || url.startsWith('https://')) return url;
+  const path = url.startsWith('/') ? url : '/' + url;
+  // Default to the backend (where multer wrote the file); the admin's
+  // own /uploads is used as a fallback via the <img> onerror handler.
+  if (MEDIA_BASE) return MEDIA_BASE + path;
+  return API_BASE + path;
+}
+function supportCategoryLabel(cat) {
+  return SUPPORT_CATEGORIES[cat] || cat || 'General';
+}
+function supportCategoryBadge(cat) {
+  const key = cat || 'general';
+  return 'badge-cat-' + key;
+}
+function renderSupportMessageBody(m) {
+  const type = m.message_type || 'text';
+  if (type === 'image' && m.attachment_url) {
+    const primarySrc = supportImageUrl(m.attachment_url);
+    const path = m.attachment_url.startsWith('/') ? m.attachment_url : '/' + m.attachment_url;
+    const fallbackSrc = API_BASE + path;
+    const cap = m.body ? '<div style="margin-top:6px;font-size:13px">' + esc(m.body) + '</div>' : '';
+    const onerror =
+      'if(this.dataset.tried!==\'1\'&&this.src!==' + JSON.stringify(fallbackSrc) + '){this.dataset.tried=\'1\';this.src=' + JSON.stringify(fallbackSrc) + ';}' +
+      'else{this.replaceWith(Object.assign(document.createElement(\'a\'),{href:' + JSON.stringify(primarySrc) + ',target:\'_blank\',textContent:\'Open image (\u2197) \u2014 \'+' + JSON.stringify(primarySrc) + ',style:\'color:var(--text-muted);font-size:12px;text-decoration:underline\'}));}';
+    return '<a href="' + primarySrc + '" target="_blank" rel="noopener"><img class="support-attach" src="' + primarySrc + '" alt="Support image attachment" loading="lazy" onerror="' + onerror.replace(/"/g, '&quot;') + '"></a>' + cap;
+  }
+  if (type === 'image_request') {
+    const approved = m.request_status === 'approved';
+    const badge = approved
+      ? '<span class="badge badge-success">Approved</span>'
+      : '<span class="badge badge-warning">Image request</span>';
+    return '<div class="support-system-msg">' + badge + '<div style="margin-top:6px">' + esc(m.body || 'User requested image upload') + '</div></div>';
+  }
+  if (type === 'system') {
+    return '<div class="support-system-msg"><span class="badge badge-success">Notice</span><div style="margin-top:6px">' + esc(m.body || '') + '</div></div>';
+  }
+  return esc(m.body || '');
+}
+function makeLineChart(canvasId, labels, data, color, opts) {
+  const el = document.getElementById(canvasId);
+  if (!el || typeof Chart === 'undefined') return;
+  const fill = opts && opts.fill;
+  const chart = new Chart(el, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [{
+        data,
+        borderColor: color,
+        backgroundColor: fill ? color.replace('rgb', 'rgba').replace(')', ', 0.08)') : 'transparent',
+        fill: !!fill,
+        tension: 0.3,
+        pointRadius: 0,
+        pointHoverRadius: 4,
+        borderWidth: 2,
+      }],
+    },
+    options: chartDefaults({
+      plugins: {
+        tooltip: {
+          callbacks: {
+            label: (ctx) => ' ' + (opts && opts.tooltipLabel ? opts.tooltipLabel(ctx.parsed.y) : fmtMoney(ctx.parsed.y, 'USD')),
+          },
+        },
+      },
+    }),
+  });
+  analyticsCharts.push(chart);
+}
+function makeBarChart(canvasId, labels, data, color, tooltipLabel) {
+  const el = document.getElementById(canvasId);
+  if (!el || typeof Chart === 'undefined') return;
+  const chart = new Chart(el, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{ data, backgroundColor: color, borderRadius: 6, maxBarThickness: 24 }],
+    },
+    options: chartDefaults({
+      plugins: {
+        tooltip: {
+          callbacks: {
+            label: (ctx) => ' ' + (tooltipLabel ? tooltipLabel(ctx.parsed.y) : fmtMoney(ctx.parsed.y, 'USD')),
+          },
+        },
+      },
+    }),
+  });
+  analyticsCharts.push(chart);
+}
+function makeDoughnutChart(canvasId, labels, data, legendId) {
+  const el = document.getElementById(canvasId);
+  if (!el || typeof Chart === 'undefined') return;
+  const palette = ['#06b6d4', '#f59e0b', '#3b82f6', '#10b981'];
+  const chart = new Chart(el, {
+    type: 'doughnut',
+    data: {
+      labels,
+      datasets: [{
+        data,
+        backgroundColor: labels.map((_, i) => palette[i % palette.length]),
+        borderWidth: 0,
+        spacing: 2,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      cutout: '68%',
+      interaction: { mode: 'nearest', intersect: true },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: 'rgba(15, 23, 42, 0.92)',
+          callbacks: {
+            label: (ctx) => {
+              const total = data.reduce((a, b) => a + b, 0) || 1;
+              const pct = Math.round((ctx.parsed / total) * 100);
+              return ' ' + ctx.label + ': ' + fmtMoney(ctx.parsed, 'USD') + ' (' + pct + '%)';
+            },
+          },
+        },
+      },
+    },
+  });
+  analyticsCharts.push(chart);
+  if (legendId) {
+    const leg = document.getElementById(legendId);
+    if (leg) {
+      const total = data.reduce((a, b) => a + b, 0) || 1;
+      leg.innerHTML = labels.map((label, i) => {
+        const pct = Math.round((data[i] / total) * 100);
+        return '<div class="legend-item">' +
+          '<span class="legend-dot" style="background:' + palette[i % palette.length] + '"></span>' +
+          '<div><strong>' + esc(label) + '</strong>' + fmtMoney(data[i], 'USD') + ' · ' + pct + '%</div></div>';
+      }).join('');
+    }
+  }
+}
+function mergePaymentSeries(subRows, sponsorRows, days) {
+  const sub = fillDateSeries(subRows, 'revenue', days);
+  const spo = fillDateSeries(sponsorRows, 'revenue', days);
+  const combined = sub.data.map((v, i) => v + (spo.data[i] || 0));
+  return { labels: sub.labels, data: combined };
+}
+function initStoreMap(stores) {
+  const mapEl = document.getElementById('store-map');
+  if (!mapEl || typeof L === 'undefined') return;
+  if (analyticsMap) { analyticsMap.remove(); analyticsMap = null; }
+  analyticsMap = L.map('store-map', { zoomControl: true, attributionControl: true }).setView([33.5, 36.3], 6);
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+    attribution: '&copy; OpenStreetMap &copy; CARTO',
+    subdomains: 'abcd',
+    maxZoom: 19,
+  }).addTo(analyticsMap);
+  const bounds = [];
+  (stores || []).forEach((s) => {
+    const lat = parseFloat(s.lat);
+    const lng = parseFloat(s.lng);
+    if (Number.isNaN(lat) || Number.isNaN(lng)) return;
+    const active = s.is_active !== false;
+    const marker = L.circleMarker([lat, lng], {
+      radius: active ? 8 : 5,
+      fillColor: active ? '#06b6d4' : '#64748b',
+      color: active ? '#22d3ee' : '#94a3b8',
+      weight: 2,
+      opacity: 1,
+      fillOpacity: 0.85,
+    });
+    marker.bindPopup(
+      '<div class="store-pin-popup">' +
+      '<strong>' + esc(s.name) + '</strong><br>' +
+      esc(s.city || '') + (s.country ? ', ' + esc(s.country) : '') + '<br>' +
+      'Products: ' + (s.product_count || 0) + ' · Online: ' + (s.online_product_count || 0) + '<br>' +
+      (active ? 'Active store' : 'Deactivated') +
+      '</div>'
+    );
+    marker.addTo(analyticsMap);
+    bounds.push([lat, lng]);
+  });
+  if (bounds.length === 1) analyticsMap.setView(bounds[0], 10);
+  else if (bounds.length > 1) analyticsMap.fitBounds(bounds, { padding: [40, 40], maxZoom: 12 });
+  setTimeout(() => { try { analyticsMap.invalidateSize(); } catch (_) {} }, 200);
+}
+function renderProgressList(containerId, items, valueKey, labelKey) {
+  const el = document.getElementById(containerId);
+  if (!el) return;
+  if (!items || items.length === 0) {
+    el.innerHTML = '<p style="color:var(--text-muted);font-size:12px">No data yet</p>';
+    return;
+  }
+  const max = Math.max(...items.map((i) => Number(i[valueKey]) || 0), 1);
+  el.innerHTML = items.map((item) => {
+    const val = Number(item[valueKey]) || 0;
+    const pct = Math.round((val / max) * 100);
+    return '<div class="progress-row">' +
+      '<div class="progress-meta"><span class="name">' + esc(item[labelKey] || '—') + '</span>' +
+      '<span class="val">' + fmtNum(val) + '</span></div>' +
+      '<div class="progress-bar"><div class="progress-fill" style="width:' + pct + '%"></div></div>' +
+      '</div>';
+  }).join('');
+}
+
+// ─── Analytics Monitor ───────────────────────────────────────────────────────
+const ANALYTICS_TABS = [
+  { id: 'overview', label: 'Overview' },
+  { id: 'payments', label: 'Subscriptions' },
+  { id: 'sponsorships', label: 'Sponsorships' },
+  { id: 'growth', label: 'Growth' },
+  { id: 'stores', label: 'Store Map' },
+  { id: 'engagement', label: 'Engagement' },
+];
+
+function setAnalyticsTab(tabId) {
+  analyticsActiveTab = tabId;
+  document.querySelectorAll('.analytics-tab').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.tab === tabId);
+  });
+  if (analyticsDataCache) renderAnalyticsTabPanel(analyticsDataCache);
+}
+
+function renderTxnList(elId, items, mapRow) {
+  const el = document.getElementById(elId);
+  if (!el) return;
+  if (!items || items.length === 0) {
+    el.innerHTML = '<p style="color:var(--text-muted);font-size:12px;padding:8px 0">No records yet</p>';
+    return;
+  }
+  el.innerHTML = items.map(mapRow).join('');
+}
+
+function renderAnalyticsTabPanel(d) {
+  const wrap = document.getElementById('analytics-tab-content');
+  if (!wrap) return;
+  destroyAnalyticsCharts();
+  destroyAnalyticsMap();
+
+  const s = d.summary;
+  const tab = analyticsActiveTab;
+
+  if (tab === 'overview') {
+    wrap.innerHTML = `
+      <div class="analytics-split">
+        <div class="panel">
+          <div class="panel-head"><div class="panel-title">Platform Revenue</div><span class="panel-sub">Verified USD · 30 days</span></div>
+          <div class="chart-wrap-lg"><canvas id="chart-revenue-combined"></canvas></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><div class="panel-title">Revenue Split</div><span class="panel-sub">All-time verified</span></div>
+          <div class="donut-layout">
+            <div class="chart-wrap"><canvas id="chart-payment-split"></canvas></div>
+            <div class="chart-legend-external" id="legend-payment-split"></div>
+          </div>
+        </div>
+      </div>`;
+    const combined = mergePaymentSeries(d.subscription_payments_by_day, d.sponsorship_payments_by_day, 30);
+    makeLineChart('chart-revenue-combined', combined.labels, combined.data, 'rgb(6, 182, 212)', { fill: true });
+    makeDoughnutChart(
+      'chart-payment-split',
+      ['Subscriptions', 'Sponsorships'],
+      [Number(s.verified_subscription_usd) || 0, Number(s.verified_sponsorship_usd) || 0],
+      'legend-payment-split'
+    );
+    return;
+  }
+
+  if (tab === 'payments') {
+    wrap.innerHTML = `
+      <div class="analytics-split">
+        <div class="panel">
+          <div class="panel-head"><div class="panel-title">Subscription Payments</div><span class="panel-sub">USD · 30 days</span></div>
+          <div class="chart-wrap"><canvas id="chart-sub-payments"></canvas></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><div class="panel-title">Recent Verified</div><span class="panel-sub">Subscriptions</span></div>
+          <div class="txn-list" id="recent-sub-payments"></div>
+        </div>
+      </div>
+      <div class="panel" style="margin-top:16px">
+        <div class="analytics-actions">
+          <button class="btn btn-primary btn-sm" onclick="navigateTo('payments')">Review pending subscriptions</button>
+        </div>
+      </div>`;
+    const subPayments = fillDateSeries(d.subscription_payments_by_day, 'revenue', 30);
+    makeBarChart('chart-sub-payments', subPayments.labels, subPayments.data, 'rgba(6, 182, 212, 0.85)');
+    renderTxnList('recent-sub-payments', d.recent_subscription_payments, (p) =>
+      '<div class="txn-item"><div><div class="txn-store">' + esc(p.store_name || 'Store') + ' · ' + esc(p.tier_name || 'Plan') + '</div>' +
+      '<div class="txn-meta">' + esc(p.owner_name || p.owner_email || '') + ' · ' + new Date(p.verified_at || p.created_at).toLocaleString() + '</div></div>' +
+      '<div class="txn-amount">' + fmtMoney(p.amount_usd, 'USD') + '</div></div>');
+    return;
+  }
+
+  if (tab === 'sponsorships') {
+    wrap.innerHTML = `
+      <div class="analytics-split">
+        <div class="panel">
+          <div class="panel-head"><div class="panel-title">Sponsorship Payments</div><span class="panel-sub">USD · 30 days</span></div>
+          <div class="chart-wrap"><canvas id="chart-sponsor-payments"></canvas></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><div class="panel-title">Recent Verified</div><span class="panel-sub">Sponsorships</span></div>
+          <div class="txn-list" id="recent-sponsor-payments"></div>
+        </div>
+      </div>
+      <div class="panel" style="margin-top:16px">
+        <div class="analytics-actions">
+          <button class="btn btn-ghost btn-sm" onclick="navigateTo('sponsored')">Review sponsorship payments</button>
+        </div>
+      </div>`;
+    const sponsorPayments = fillDateSeries(d.sponsorship_payments_by_day, 'revenue', 30);
+    makeBarChart('chart-sponsor-payments', sponsorPayments.labels, sponsorPayments.data, 'rgba(245, 158, 11, 0.85)');
+    renderTxnList('recent-sponsor-payments', d.recent_sponsorship_payments, (p) =>
+      '<div class="txn-item"><div><div class="txn-store">' + esc(p.product_name || 'Product') + ' · ' + esc(p.store_name || '') + '</div>' +
+      '<div class="txn-meta">' + esc(p.owner_name || p.owner_email || '') + ' · ' + new Date(p.verified_at || p.created_at).toLocaleString() + '</div></div>' +
+      '<div class="txn-amount">' + fmtMoney(p.amount_usd, 'USD') + '</div></div>');
+    return;
+  }
+
+  if (tab === 'growth') {
+    wrap.innerHTML = `
+      <div class="analytics-split">
+        <div class="panel">
+          <div class="panel-head"><div class="panel-title">New Signups</div><span class="panel-sub">30 days</span></div>
+          <div class="chart-wrap"><canvas id="chart-signups"></canvas></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><div class="panel-title">New Stores</div><span class="panel-sub">Registrations · 30 days</span></div>
+          <div class="chart-wrap"><canvas id="chart-stores"></canvas></div>
+        </div>
+      </div>`;
+    const signups = fillDateSeries(d.signups_by_day, 'count', 30);
+    const storeGrowth = fillDateSeries(d.stores_by_day, 'count', 30);
+    makeLineChart('chart-signups', signups.labels, signups.data, 'rgb(59, 130, 246)', { fill: true });
+    makeBarChart('chart-stores', storeGrowth.labels, storeGrowth.data, 'rgba(59, 130, 246, 0.75)');
+    return;
+  }
+
+  if (tab === 'stores') {
+    wrap.innerHTML = `
+      <div class="panel">
+        <div class="panel-head">
+          <div class="panel-title">Store Locations</div>
+          <span class="panel-sub" id="map-pin-count"></span>
+        </div>
+        <div id="store-map"></div>
+        <div class="map-legend">
+          <span><i class="legend-active"></i> Active store</span>
+          <span><i class="legend-inactive"></i> Deactivated</span>
+          <span id="map-no-gps"></span>
+        </div>
+      </div>`;
+    document.getElementById('map-pin-count').textContent =
+      s.stores_on_map + ' pinned' + (s.stores_without_location > 0 ? ' · ' + s.stores_without_location + ' without GPS' : '');
+    const noGps = document.getElementById('map-no-gps');
+    if (noGps) {
+      noGps.textContent = s.stores_without_location > 0
+        ? s.stores_without_location + ' stores need lat/lng'
+        : '';
+    }
+    setTimeout(() => initStoreMap(d.stores_map), 50);
+    return;
+  }
+
+  if (tab === 'engagement') {
+    wrap.innerHTML = `
+      <div class="analytics-split">
+        <div class="panel">
+          <div class="panel-head"><div class="panel-title">Store Visits</div><span class="panel-sub">30 days</span></div>
+          <div class="chart-wrap"><canvas id="chart-visits"></canvas></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><div class="panel-title">Product Views</div><span class="panel-sub">Marketplace · 30 days</span></div>
+          <div class="chart-wrap"><canvas id="chart-views"></canvas></div>
+        </div>
+      </div>`;
+    const visits = fillDateSeries(d.visits_by_day, 'count', 30);
+    const views = fillDateSeries(d.views_by_day, 'count', 30);
+    makeLineChart('chart-visits', visits.labels, visits.data, 'rgb(6, 182, 212)', { fill: true });
+    makeLineChart('chart-views', views.labels, views.data, 'rgb(100, 116, 139)', { fill: true });
+  }
+}
+
+async function renderAnalytics(c) {
+  if (analyticsPollTimer) { clearInterval(analyticsPollTimer); analyticsPollTimer = null; }
+  destroyAnalyticsAll();
+  analyticsActiveTab = 'overview';
+  analyticsDataCache = null;
+
+  c.innerHTML = `
+    <div class="analytics-shell">
+      <div class="analytics-header">
+        <div>
+          <h2>Analytics</h2>
+          <p>Platform payments, growth, and engagement — one view at a time</p>
+        </div>
+        <div class="analytics-toolbar">
+          <span class="analytics-refresh" id="analytics-updated">Loading...</span>
+          <button class="btn btn-ghost btn-sm" id="analytics-refresh-btn">Refresh</button>
+        </div>
+      </div>
+      <div class="kpi-grid" id="analytics-kpi">Loading metrics...</div>
+      <nav class="analytics-nav" id="analytics-nav">
+        ${ANALYTICS_TABS.map((t) =>
+          '<button type="button" class="analytics-tab' + (t.id === 'overview' ? ' active' : '') +
+          '" data-tab="' + t.id + '">' + t.label + '</button>'
+        ).join('')}
+      </nav>
+      <div class="analytics-panel-wrap" id="analytics-tab-content">
+        <p style="color:var(--text-muted);font-size:13px">Loading...</p>
+      </div>
+    </div>`;
+
+  document.getElementById('analytics-nav').addEventListener('click', (e) => {
+    const btn = e.target.closest('.analytics-tab');
+    if (btn && btn.dataset.tab) setAnalyticsTab(btn.dataset.tab);
+  });
+  document.getElementById('analytics-refresh-btn').addEventListener('click', () => loadAnalyticsData());
+
+  await loadAnalyticsData();
+  analyticsPollTimer = setInterval(() => {
+    if (currentPage === 'analytics') loadAnalyticsData(true);
+  }, 60000);
+}
+
+function renderAnalyticsKpis(s) {
+  const pending = (s.pending_subscription_payments || 0) + (s.pending_sponsorship_payments || 0);
+  document.getElementById('analytics-kpi').innerHTML = `
+    <div class="kpi-card" title="Total verified subscription and sponsorship payments (USD), all time">
+      <div class="kpi-icon">&#36;</div>
+      <div class="kpi-body">
+        <div class="kpi-value">${fmtMoney(s.verified_payments_usd, 'USD')}</div>
+        <div class="kpi-label">Verified payments</div>
+        <div class="kpi-sub">Today ${fmtMoney(s.payments_usd_today, 'USD')}</div>
+      </div>
+    </div>
+    <div class="kpi-card" title="Agent payments awaiting admin verification">
+      <div class="kpi-icon">&#9203;</div>
+      <div class="kpi-body">
+        <div class="kpi-value">${pending}</div>
+        <div class="kpi-label">Pending approval</div>
+        <div class="kpi-sub">${s.pending_subscription_payments} subs · ${s.pending_sponsorship_payments} sponsors</div>
+      </div>
+    </div>
+    <div class="kpi-card" title="Lifetime verified subscription revenue">
+      <div class="kpi-icon">&#9733;</div>
+      <div class="kpi-body">
+        <div class="kpi-value">${fmtMoney(s.verified_subscription_usd, 'USD')}</div>
+        <div class="kpi-label">Subscriptions</div>
+        <div class="kpi-sub">Verified lifetime</div>
+      </div>
+    </div>
+    <div class="kpi-card" title="Lifetime verified sponsorship revenue">
+      <div class="kpi-icon">&#9670;</div>
+      <div class="kpi-body">
+        <div class="kpi-value">${fmtMoney(s.verified_sponsorship_usd, 'USD')}</div>
+        <div class="kpi-label">Sponsorships</div>
+        <div class="kpi-sub">Verified lifetime</div>
+      </div>
+    </div>
+    <div class="kpi-card" title="Registered accounts; sub-label is new signups in the last 7 days">
+      <div class="kpi-icon">&#128101;</div>
+      <div class="kpi-body">
+        <div class="kpi-value">${fmtNum(s.total_users)}</div>
+        <div class="kpi-label">Users</div>
+        <div class="kpi-sub">+${s.new_users_7d} this week</div>
+      </div>
+    </div>
+    <div class="kpi-card" title="Stores with active status; sub-label is products listed online">
+      <div class="kpi-icon">&#127978;</div>
+      <div class="kpi-body">
+        <div class="kpi-value">${fmtNum(s.active_stores)}</div>
+        <div class="kpi-label">Active stores</div>
+        <div class="kpi-sub">${s.online_products} products online</div>
+      </div>
+    </div>`;
+}
+
+async function loadAnalyticsData(silent) {
+  const updatedEl = document.getElementById('analytics-updated');
+  if (!silent && updatedEl) updatedEl.textContent = 'Updating...';
+  try {
+    const d = await API.get('/api/analytics/overview');
+    analyticsDataCache = d;
+    renderAnalyticsKpis(d.summary);
+    if (!silent) {
+      renderAnalyticsTabPanel(d);
+    } else if (analyticsActiveTab === 'stores') {
+      const pinEl = document.getElementById('map-pin-count');
+      const s = d.summary;
+      if (pinEl) {
+        pinEl.textContent = s.stores_on_map + ' pinned' +
+          (s.stores_without_location > 0 ? ' · ' + s.stores_without_location + ' without GPS' : '');
+      }
+    }
+    if (updatedEl) updatedEl.textContent = 'Updated ' + new Date().toLocaleTimeString();
+  } catch (e) {
+    if (!silent) {
+      const kpi = document.getElementById('analytics-kpi');
+      if (kpi) kpi.innerHTML = '<p class="error-msg">' + esc(e.message) + '</p>';
+      const wrap = document.getElementById('analytics-tab-content');
+      if (wrap) wrap.innerHTML = '<p class="error-msg">' + esc(e.message) + '</p>';
+    }
+    if (updatedEl) updatedEl.textContent = 'Update failed';
+  }
+}
 
 // ─── Dashboard ───────────────────────────────────────────────────────────────
 async function renderDashboard(c) {
@@ -441,6 +1214,11 @@ async function renderPayments(c) {
     el.innerHTML = `<table><thead><tr><th>Store</th><th>Owner</th><th>Tier</th><th>Amount</th><th>Track</th><th>Ref</th><th>Date</th><th>Action</th></tr></thead><tbody>
       ${items.map(p => `<tr id="py-${p.id}"><td>${esc(p.store_name)}</td><td>${esc(p.owner_name)}</td><td><span class="badge badge-neutral">${esc(p.tier_name)}</span></td><td>$${p.amount_usd}</td><td>${p.payment_track}</td><td><code>${p.reference_code||'-'}</code></td><td>${new Date(p.created_at).toLocaleDateString()}</td><td><button class="btn btn-success btn-sm" onclick="verifyPayment(${p.id})">Mark Paid</button></td></tr>`).join('')}
     </tbody></table>`;
+    if (paymentHighlightId && paymentHighlightType === 'subscription') {
+      highlightPaymentRow('py-' + paymentHighlightId);
+      paymentHighlightId = null;
+      paymentHighlightType = null;
+    }
   } catch (e) { document.getElementById('pyl').innerHTML = '<p class="error-msg">'+e.message+'</p>'; }
 }
 async function verifyPayment(id) { if(!confirm('Confirm payment & activate subscription?'))return; try { await API.post('/api/payments/'+id+'/verify'); const e=document.getElementById('py-'+id); if(e)e.remove(); } catch(e){alert(e.message);} }
@@ -513,6 +1291,11 @@ async function loadSponsorPending() {
         <td><button class="btn btn-success btn-sm" onclick="verifySponsorPayment(${p.id})">Mark Paid</button></td>
       </tr>`).join('')}
     </tbody></table>`;
+    if (paymentHighlightId && paymentHighlightType === 'sponsorship') {
+      highlightPaymentRow('sppy-' + paymentHighlightId);
+      paymentHighlightId = null;
+      paymentHighlightType = null;
+    }
   } catch (e) {
     document.getElementById('sp-pending').innerHTML = '<p class="error-msg">' + e.message + '</p>';
   }
@@ -681,12 +1464,19 @@ function formatDetails(r,d) { if(!d) return ''; if(r==='bulk_upload') return (d.
 
 // ─── Support Tickets ─────────────────────────────────────────────────────────
 let supportStatusFilter = 'open';
+let supportCategoryFilter = 'all';
 async function renderSupport(c) {
   if (supportPollTimer) { clearInterval(supportPollTimer); supportPollTimer = null; }
   c.innerHTML = `
     <div class="page-header flex justify-between items-center">
       <div><h2>Support Tickets</h2><p>User help requests — reply here to assist customers</p></div>
       <div class="inline-form">
+        <div class="form-group"><label>Category</label>
+          <select id="support-category-filter" style="width:180px">
+            <option value="all">All categories</option>
+            ${Object.entries(SUPPORT_CATEGORIES).map(([k,v]) => '<option value="'+k+'">'+v+'</option>').join('')}
+          </select>
+        </div>
         <div class="form-group"><label>Status</label>
           <select id="support-status-filter" style="width:160px">
             <option value="all">All</option>
@@ -695,6 +1485,7 @@ async function renderSupport(c) {
             <option value="closed">Closed</option>
           </select>
         </div>
+        <button class="btn btn-success btn-sm" id="support-approve-all-btn">Approve all image requests</button>
         <button class="btn btn-ghost" id="support-refresh-btn">Refresh</button>
       </div>
     </div>
@@ -705,24 +1496,34 @@ async function renderSupport(c) {
       </div>
     </div>`;
   document.getElementById('support-status-filter').value = supportStatusFilter;
+  document.getElementById('support-category-filter').value = supportCategoryFilter;
   document.getElementById('support-status-filter').addEventListener('change', (e) => {
     supportStatusFilter = e.target.value;
+    loadSupportTickets();
+  });
+  document.getElementById('support-category-filter').addEventListener('change', (e) => {
+    supportCategoryFilter = e.target.value;
     loadSupportTickets();
   });
   document.getElementById('support-refresh-btn').addEventListener('click', () => {
     loadSupportTickets();
     if (activeSupportTicketId) loadSupportThread(activeSupportTicketId, true);
   });
+  document.getElementById('support-approve-all-btn').addEventListener('click', () => allowAllSupportImages());
   await loadSupportTickets();
 }
 
 async function loadSupportTickets() {
   const el = document.getElementById('support-list');
   if (!el) return;
-  let url = '/api/support/tickets';
+  const qs = [];
   if (supportStatusFilter && supportStatusFilter !== 'all') {
-    url += '?status=' + encodeURIComponent(supportStatusFilter);
+    qs.push('status=' + encodeURIComponent(supportStatusFilter));
   }
+  if (supportCategoryFilter && supportCategoryFilter !== 'all') {
+    qs.push('category=' + encodeURIComponent(supportCategoryFilter));
+  }
+  const url = '/api/support/tickets' + (qs.length ? '?' + qs.join('&') : '');
   try {
     const items = await API.get(url);
     if (items.length === 0) {
@@ -733,7 +1534,7 @@ async function loadSupportTickets() {
       <div class="support-item ${activeSupportTicketId === t.id ? 'active' : ''}" onclick="openSupportTicket(${t.id})">
         <div class="title">${esc(t.subject)} ${t.unread_count > 0 ? '<span class="badge badge-warning">'+t.unread_count+'</span>' : ''}</div>
         <div class="meta">${esc(t.user_name)} · ${esc(t.user_email)}</div>
-        <div class="meta">${esc(t.category)} · <span class="badge ${supportStatusBadge(t.status)}">${t.status}</span></div>
+        <div class="meta"><span class="badge ${supportCategoryBadge(t.category)}">${esc(supportCategoryLabel(t.category))}</span> · <span class="badge ${supportStatusBadge(t.status)}">${t.status}</span></div>
         <div class="meta" style="margin-top:4px">${t.last_message ? esc(t.last_message).substring(0,80) : ''}</div>
       </div>`).join('');
   } catch (e) {
@@ -767,27 +1568,50 @@ async function loadSupportThread(id, silent) {
     el.innerHTML = '<div class="empty-state"><p>Loading conversation...</p></div>';
   }
   try {
-    const data = await API.get('/api/support/tickets/'+id+'/messages');
+    const [data, related] = await Promise.all([
+      API.get('/api/support/tickets/'+id+'/messages'),
+      API.get('/api/support/tickets/'+id+'/related-payment').catch(() => ({ payment: null })),
+    ]);
     const t = data.ticket;
     const msgs = data.messages || [];
+    const payment = related.payment || null;
+    const hasUserImage = msgs.some(m => m.message_type === 'image' && m.sender_role === 'user');
+    const showPaymentAction = hasUserImage && payment && payment.status === 'pending';
+    const categoryOptions = Object.entries(SUPPORT_CATEGORIES).map(([k, v]) =>
+      `<option value="${k}" ${t.category === k ? 'selected' : ''}>${esc(v)}</option>`
+    ).join('');
     el.innerHTML = `
       <div class="support-thread-header">
         <div class="flex justify-between items-center">
           <div>
             <div class="card-title">${esc(t.subject)}</div>
-            <div class="card-meta">${esc(t.user_name)} (${esc(t.user_email)}) · ${esc(t.category)} · <span class="badge ${supportStatusBadge(t.status)}">${t.status}</span></div>
+            <div class="card-meta">${esc(t.user_name)} (${esc(t.user_email)}) · <span class="badge ${supportCategoryBadge(t.category)}">${esc(supportCategoryLabel(t.category))}</span> · <span class="badge ${supportStatusBadge(t.status)}">${t.status}</span></div>
+            <div class="card-meta" style="margin-top:6px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+              <label style="font-size:12px;color:var(--text-muted)">Category</label>
+              <select id="support-ticket-category" style="max-width:200px" onchange="setSupportCategory(${id}, this.value)">${categoryOptions}</select>
+              <span style="font-size:12px;color:var(--text-muted)">Images allowed: ${t.image_quota || 0} · Sent: ${t.images_sent || 0}</span>
+            </div>
           </div>
-          <div class="flex gap-2">
+          <div class="flex gap-2" style="flex-wrap:wrap">
+            ${t.status !== 'closed' ? `<button class="btn btn-success btn-sm" onclick="allowSupportImages(${id}, 1)">Allow 1 image</button>` : ''}
+            ${t.status !== 'closed' ? `<button class="btn btn-ghost btn-sm" onclick="allowSupportImages(${id}, 3)">Allow 3</button>` : ''}
             ${t.status !== 'closed' ? `<button class="btn btn-warning btn-sm" onclick="setSupportStatus(${id}, 'in_progress')">In Progress</button>` : ''}
             ${t.status !== 'closed' ? `<button class="btn btn-ghost btn-sm" onclick="setSupportStatus(${id}, 'closed')">Close</button>` : `<button class="btn btn-success btn-sm" onclick="setSupportStatus(${id}, 'open')">Reopen</button>`}
+            <button class="btn btn-danger btn-sm" onclick="deleteSupportTicket(${id})">Delete</button>
           </div>
         </div>
       </div>
+      ${showPaymentAction ? `
+        <div class="support-payment-banner">
+          <p><strong>Payment proof received.</strong> Reference <code>${esc(payment.reference_code || related.reference_code || '')}</code> · $${payment.amount_usd} · ${payment.type === 'sponsorship' ? 'Sponsorship' : 'Subscription'}${payment.tier_name ? ' · ' + esc(payment.tier_name) : ''}${payment.product_name ? ' · ' + esc(payment.product_name) : ''}</p>
+          <button class="btn btn-success btn-sm" onclick="goToPaymentApproval(${payment.id}, '${payment.type}')">Verify payment</button>
+        </div>` : ''}
       <div class="support-messages" id="support-messages">
         ${msgs.map(m => `
-          <div class="support-bubble ${m.sender_role === 'admin' ? 'admin' : 'user'}">
+          <div class="support-bubble ${m.sender_role === 'admin' ? 'admin' : 'user'} ${m.message_type === 'image_request' ? 'image-request' : ''}">
             <div class="who">${esc(m.sender_name || m.sender_role)} · ${new Date(m.created_at).toLocaleString()}</div>
-            ${esc(m.body)}
+            ${renderSupportMessageBody(m)}
+            ${m.message_type === 'image_request' && t.status !== 'closed' && m.request_status !== 'approved' ? `<div style="margin-top:8px"><button class="btn btn-success btn-sm" onclick="allowSupportImages(${id}, 1, this)">Approve 1 image</button></div>` : ''}
           </div>`).join('')}
       </div>
       ${t.status === 'closed'
@@ -824,12 +1648,302 @@ async function setSupportStatus(id, status) {
   } catch (e) { alert(e.message); }
 }
 
+async function allowSupportImages(id, count, btn) {
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Approved';
+  }
+  try {
+    await API.post('/api/support/tickets/'+id+'/allow-images', { count });
+    await loadSupportThread(id, true);
+    await loadSupportTickets();
+  } catch (e) {
+    if (btn) { btn.disabled = false; btn.textContent = 'Approve 1 image'; }
+    alert(e.message);
+  }
+}
+
+async function setSupportCategory(id, category) {
+  try {
+    await API.patch('/api/support/tickets/'+id, { category });
+    await loadSupportThread(id, true);
+    await loadSupportTickets();
+  } catch (e) { alert(e.message); }
+}
+
+async function allowAllSupportImages() {
+  if (!confirm('Approve 1 image upload for every user with a pending image request?')) return;
+  try {
+    const result = await API.post('/api/support/allow-all-images', { count: 1 });
+    alert('Approved ' + (result.users_updated || 0) + ' user(s) across ' + (result.tickets_updated || 0) + ' ticket(s).');
+    if (activeSupportTicketId) await loadSupportThread(activeSupportTicketId, true);
+    await loadSupportTickets();
+  } catch (e) { alert(e.message); }
+}
+
+async function deleteSupportTicket(id) {
+  if (!confirm('Delete this support ticket and all its messages? This cannot be undone.')) return;
+  try {
+    await API.del('/api/support/tickets/' + id);
+    if (activeSupportTicketId === id) {
+      activeSupportTicketId = null;
+      const el = document.getElementById('support-thread');
+      if (el) el.innerHTML = '<div class="empty-state" style="padding:80px 20px"><p>Select a ticket to view the conversation</p></div>';
+    }
+    await loadSupportTickets();
+  } catch (e) { alert(e.message); }
+}
+
+// ─── Store Chats ─────────────────────────────────────────────────────────────
+async function renderChats(c) {
+  c.innerHTML = `
+    <div class="page-header flex justify-between items-center">
+      <div><h2>Store Chats</h2><p>Customer ↔ store conversations — delete old chats to free space</p></div>
+      <button class="btn btn-ghost" id="chats-refresh-btn">Refresh</button>
+    </div>
+    <div class="card">
+      <div id="chats-table-wrap">Loading...</div>
+    </div>`;
+  document.getElementById('chats-refresh-btn').addEventListener('click', loadChats);
+  await loadChats();
+}
+
+async function loadChats() {
+  const el = document.getElementById('chats-table-wrap');
+  if (!el) return;
+  try {
+    const items = await API.get('/api/chat/conversations');
+    if (!items.length) {
+      el.innerHTML = '<div class="empty-state"><p>No store chats yet</p></div>';
+      return;
+    }
+    el.innerHTML = '<table><thead><tr><th>Store</th><th>Customer</th><th>Messages</th><th>Last activity</th><th></th></tr></thead><tbody>' +
+      items.map((row) => `
+        <tr>
+          <td>${esc(row.store_name)}</td>
+          <td>${esc(row.customer_name || '')}<br><span class="card-meta">${esc(row.customer_email || '')}</span></td>
+          <td>${row.message_count || 0}</td>
+          <td>${row.last_message_at ? new Date(row.last_message_at).toLocaleString() : '—'}</td>
+          <td><button class="btn btn-danger btn-sm" onclick="deleteChatConversation(${row.id})">Delete</button></td>
+        </tr>`).join('') +
+      '</tbody></table>';
+  } catch (e) {
+    el.innerHTML = '<p class="error-msg">' + e.message + '</p>';
+  }
+}
+
+async function deleteChatConversation(id) {
+  if (!confirm('Delete this chat and all its messages? This cannot be undone.')) return;
+  try {
+    await API.del('/api/chat/conversations/' + id);
+    await loadChats();
+  } catch (e) { alert(e.message); }
+}
+
+function goToPaymentApproval(paymentId, type) {
+  paymentHighlightId = paymentId;
+  paymentHighlightType = type;
+  navigateTo(type === 'sponsorship' ? 'sponsored' : 'payments');
+}
+
+function highlightPaymentRow(rowId) {
+  const row = document.getElementById(rowId);
+  if (!row) return;
+  row.style.background = 'rgba(16, 185, 129, 0.18)';
+  row.style.outline = '2px solid rgba(16, 185, 129, 0.45)';
+  row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  setTimeout(() => {
+    row.style.background = '';
+    row.style.outline = '';
+  }, 6000);
+}
+
+// ─── Users ───────────────────────────────────────────────────────────────────
+let usersTypeFilter = 'all';
+async function renderUsers(c) {
+  c.innerHTML = `
+    <div class="page-header flex justify-between items-center">
+      <div><h2>Users</h2><p>Consumers, store owners, and workers</p></div>
+      <div class="inline-form">
+        <div class="form-group"><label>Type</label>
+          <select id="users-type-filter" style="width:180px">
+            <option value="all">All</option>
+            <option value="consumer">Consumers</option>
+            <option value="store_owner">Store Owners</option>
+            <option value="worker">Workers</option>
+            <option value="admin">Admins</option>
+          </select>
+        </div>
+        <div class="form-group"><label>Search</label>
+          <input type="text" id="users-search" placeholder="Name, email, phone" style="width:200px">
+        </div>
+        <button class="btn btn-ghost" id="users-refresh-btn">Refresh</button>
+      </div>
+    </div>
+    <div class="card"><div id="users-table">Loading...</div></div>`;
+  document.getElementById('users-type-filter').value = usersTypeFilter;
+  document.getElementById('users-type-filter').addEventListener('change', (e) => {
+    usersTypeFilter = e.target.value;
+    loadUsers();
+  });
+  document.getElementById('users-refresh-btn').addEventListener('click', () => loadUsers());
+  document.getElementById('users-search').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') loadUsers();
+  });
+  await loadUsers();
+}
+
+function userTypeBadge(type) {
+  const map = {
+    consumer: 'badge-neutral',
+    store_owner: 'badge-success',
+    worker: 'badge-warning',
+    admin: 'badge-danger',
+  };
+  return map[type] || 'badge-neutral';
+}
+
+function formatUserStores(u) {
+  if (u.user_type === 'store_owner' && u.owned_store_name) {
+    return esc(u.owned_store_name) + ' (#' + u.owned_store_id + ')';
+  }
+  if (u.user_type === 'worker' && u.worker_stores && u.worker_stores.length) {
+    return u.worker_stores.map(w => esc(w.store_name) + ' (#' + w.store_id + ')').join(', ');
+  }
+  return '—';
+}
+
+async function loadUsers() {
+  const el = document.getElementById('users-table');
+  if (!el) return;
+  const search = document.getElementById('users-search')?.value?.trim() || '';
+  let url = '/api/users?type=' + encodeURIComponent(usersTypeFilter);
+  if (search) url += '&search=' + encodeURIComponent(search);
+  try {
+    const items = await API.get(url);
+    if (!items.length) {
+      el.innerHTML = '<div class="empty-state"><p>No users found</p></div>';
+      return;
+    }
+    el.innerHTML = `<table><thead><tr>
+      <th>ID</th><th>Name</th><th>Email</th><th>Phone</th><th>Type</th><th>Store(s)</th><th>Joined</th>
+    </tr></thead><tbody>
+      ${items.map(u => `<tr>
+        <td>${u.id}</td>
+        <td>${esc(u.full_name)}</td>
+        <td>${esc(u.email)}</td>
+        <td>${esc(u.phone || '—')}</td>
+        <td><span class="badge ${userTypeBadge(u.user_type)}">${esc(u.user_type)}</span></td>
+        <td>${formatUserStores(u)}</td>
+        <td>${u.created_at ? new Date(u.created_at).toLocaleDateString() : '—'}</td>
+      </tr>`).join('')}
+    </tbody></table>`;
+  } catch (e) {
+    el.innerHTML = '<p class="error-msg">' + e.message + '</p>';
+  }
+}
+
+// ─── Reviews ─────────────────────────────────────────────────────────────────
+let reviewsStatusFilter = 'active';
+let reviewsTypeFilter = 'all';
+async function renderReviews(c) {
+  c.innerHTML = `
+    <div class="page-header flex justify-between items-center">
+      <div><h2>Reviews</h2><p>Only admins can remove reviews. Store owners must use support tickets.</p></div>
+      <div class="inline-form">
+        <div class="form-group"><label>Type</label>
+          <select id="reviews-type-filter" style="width:130px">
+            <option value="all">All</option>
+            <option value="store">Store</option>
+            <option value="product">Product</option>
+          </select>
+        </div>
+        <div class="form-group"><label>Status</label>
+          <select id="reviews-status-filter" style="width:140px">
+            <option value="active">Active</option>
+            <option value="removed">Removed</option>
+            <option value="all">All</option>
+          </select>
+        </div>
+        <button class="btn btn-ghost" id="reviews-refresh-btn">Refresh</button>
+      </div>
+    </div>
+    <div class="card"><div id="reviews-table">Loading...</div></div>`;
+  document.getElementById('reviews-type-filter').value = reviewsTypeFilter;
+  document.getElementById('reviews-status-filter').value = reviewsStatusFilter;
+  document.getElementById('reviews-type-filter').addEventListener('change', (e) => {
+    reviewsTypeFilter = e.target.value;
+    loadReviews();
+  });
+  document.getElementById('reviews-status-filter').addEventListener('change', (e) => {
+    reviewsStatusFilter = e.target.value;
+    loadReviews();
+  });
+  document.getElementById('reviews-refresh-btn').addEventListener('click', () => loadReviews());
+  await loadReviews();
+}
+
+function starsHtml(rating) {
+  const r = Math.max(1, Math.min(5, Number(rating) || 0));
+  return '★'.repeat(r) + '☆'.repeat(5 - r);
+}
+
+async function loadReviews() {
+  const el = document.getElementById('reviews-table');
+  if (!el) return;
+  try {
+    const items = await API.get('/api/reviews?status=' + encodeURIComponent(reviewsStatusFilter) + '&type=' + encodeURIComponent(reviewsTypeFilter));
+    if (!items.length) {
+      el.innerHTML = '<div class="empty-state"><p>No reviews</p></div>';
+      return;
+    }
+    el.innerHTML = `<table><thead><tr>
+      <th>Type</th><th>Target</th><th>User</th><th>Rating</th><th>Comment</th><th>Date</th><th>Status</th><th>Action</th>
+    </tr></thead><tbody>
+      ${items.map(r => `<tr>
+        <td><span class="badge ${r.review_type === 'product' ? 'badge-warning' : 'badge-success'}">${esc(r.review_type)}</span></td>
+        <td>${r.review_type === 'product'
+          ? esc(r.product_name || r.target_name) + ' · ' + esc(r.store_name || '')
+          : esc(r.store_name || r.target_name)}</td>
+        <td>${esc(r.user_name)}<br><span class="card-meta">${esc(r.user_email)}</span></td>
+        <td>${starsHtml(r.rating)}</td>
+        <td style="max-width:280px">${esc((r.comment || '—').substring(0, 200))}</td>
+        <td>${r.created_at ? new Date(r.created_at).toLocaleString() : '—'}</td>
+        <td><span class="badge ${r.status === 'active' ? 'badge-success' : 'badge-neutral'}">${esc(r.status)}</span></td>
+        <td>${r.status === 'active'
+          ? `<button class="btn btn-danger btn-sm" onclick="removeReview(${r.id}, '${r.review_type}')">Remove</button>`
+          : (r.removal_reason ? esc(r.removal_reason).substring(0, 60) : '—')}</td>
+      </tr>`).join('')}
+    </tbody></table>`;
+  } catch (e) {
+    el.innerHTML = '<p class="error-msg">' + e.message + '</p>';
+  }
+}
+
+async function removeReview(id, type) {
+  const reason = prompt('Enter removal reason (min 10 chars — emailed to the user):');
+  if (!reason) return;
+  if (reason.trim().length < 10) {
+    alert('Reason must be at least 10 characters');
+    return;
+  }
+  if (!confirm('Remove this ' + (type || 'store') + ' review and email the user?')) return;
+  try {
+    await API.post('/api/reviews/' + id + '/remove', { reason: reason.trim(), type: type || 'store' });
+    await loadReviews();
+    alert('Review removed and email sent');
+  } catch (e) {
+    alert(e.message);
+  }
+}
+
 // ─── Init ────────────────────────────────────────────────────────────────────
 (async () => {
   try {
     await API.get('/api/auth/me');
     hideLogin();
-    navigateTo('dashboard');
+    await loadMediaConfig();
+    navigateTo('analytics');
   } catch (err) {
     console.log('Auth check:', err.message);
     showLogin();

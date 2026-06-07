@@ -44,6 +44,42 @@ class _ChatConversationsScreenState extends State<ChatConversationsScreen> {
     }
   }
 
+  Future<void> _confirmDeleteConversation(Map<String, dynamic> conversation) async {
+    final id = (conversation['id'] as num?)?.toInt();
+    if (id == null) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(t('delete') ?? 'Delete'),
+        content: Text(
+          t('delete_chat_confirm') ??
+              'Delete this conversation and all messages?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(t('cancel') ?? 'Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(t('delete') ?? 'Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    try {
+      await ChatService.deleteConversation(id);
+      if (!mounted) return;
+      await _load();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.toString())),
+      );
+    }
+  }
+
   void _openChat(Map<String, dynamic> conversation) {
     Navigator.push(
       context,
@@ -132,6 +168,7 @@ class _ChatConversationsScreenState extends State<ChatConversationsScreen> {
                               c['customer_label'] == null;
 
                           return ListTile(
+                            onLongPress: () => _confirmDeleteConversation(c),
                             leading: CircleAvatar(
                               backgroundColor:
                                   theme.colorScheme.primaryContainer,
@@ -164,8 +201,11 @@ class _ChatConversationsScreenState extends State<ChatConversationsScreen> {
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                             ),
-                            trailing: unread > 0
-                                ? CircleAvatar(
+                            trailing: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                if (unread > 0)
+                                  CircleAvatar(
                                     radius: 12,
                                     backgroundColor: theme.colorScheme.primary,
                                     child: Text(
@@ -177,7 +217,15 @@ class _ChatConversationsScreenState extends State<ChatConversationsScreen> {
                                       ),
                                     ),
                                   )
-                                : const Icon(Icons.chevron_right, size: 18),
+                                else
+                                  const Icon(Icons.chevron_right, size: 18),
+                                IconButton(
+                                  icon: const Icon(Icons.delete_outline, size: 20),
+                                  tooltip: t('delete') ?? 'Delete',
+                                  onPressed: () => _confirmDeleteConversation(c),
+                                ),
+                              ],
+                            ),
                             onTap: () => _openChat(c),
                           );
                         },

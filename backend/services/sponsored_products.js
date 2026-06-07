@@ -19,7 +19,53 @@ function haversineKm(lat1, lng1, lat2, lng2) {
 }
 
 function normalizeStr(s) {
-  return (s || '').trim().toLowerCase();
+  return (s || '').trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+function stringsMatch(a, b) {
+  const x = normalizeStr(a);
+  const y = normalizeStr(b);
+  if (!x || !y) return false;
+  if (x === y) return true;
+  if (x.length >= 3 && y.length >= 3 && (x.includes(y) || y.includes(x))) return true;
+  return false;
+}
+
+function countryCodesMatch(viewerCode, campaignCode) {
+  const v = normalizeStr(viewerCode);
+  const c = normalizeStr(campaignCode);
+  if (!v || !c) return false;
+  if (v === c) return true;
+  const aliases = {
+    sy: 'syr',
+    syr: 'sy',
+    lb: 'lbn',
+    lbn: 'lb',
+    jo: 'jor',
+    jor: 'jo',
+    iq: 'irq',
+    irq: 'iq',
+    tr: 'tur',
+    tur: 'tr',
+    sa: 'sau',
+    sau: 'sa',
+    ae: 'are',
+    are: 'ae',
+  };
+  return aliases[v] === c || aliases[c] === v;
+}
+
+function viewerHasGeo(viewer) {
+  if (!viewer) return false;
+  return !!(
+    viewer.lat ||
+    viewer.lng ||
+    viewer.village ||
+    viewer.city ||
+    viewer.country ||
+    viewer.country_code ||
+    viewer.city_id
+  );
 }
 
 function campaignMatchesViewer(campaign, viewer) {
@@ -27,48 +73,60 @@ function campaignMatchesViewer(campaign, viewer) {
   if (scope === 'world') return true;
 
   if (scope === 'country') {
-    if (viewer.country_code && campaign.target_country_code) {
-      return normalizeStr(viewer.country_code) === normalizeStr(campaign.target_country_code);
+    if (
+      viewer.country_code &&
+      campaign.target_country_code &&
+      countryCodesMatch(viewer.country_code, campaign.target_country_code)
+    ) {
+      return true;
     }
-    return (
-      viewer.country &&
-      campaign.target_country &&
-      normalizeStr(viewer.country) === normalizeStr(campaign.target_country)
-    );
+    if (stringsMatch(viewer.country, campaign.target_country)) return true;
+    if (stringsMatch(viewer.country, campaign.store_country)) return true;
+    return false;
   }
 
   if (scope === 'city') {
-    if (viewer.city_id && campaign.target_city_id) {
-      return normalizeStr(viewer.city_id) === normalizeStr(campaign.target_city_id);
+    if (
+      viewer.city_id &&
+      campaign.target_city_id &&
+      normalizeStr(viewer.city_id) === normalizeStr(campaign.target_city_id)
+    ) {
+      return true;
     }
-    return (
-      viewer.city &&
-      campaign.target_city &&
-      normalizeStr(viewer.city) === normalizeStr(campaign.target_city)
-    );
+    if (stringsMatch(viewer.city, campaign.target_city)) return true;
+    if (stringsMatch(viewer.city, campaign.store_city)) return true;
+    return false;
   }
 
   if (scope === 'village') {
-    return (
-      viewer.village &&
-      campaign.target_village &&
-      normalizeStr(viewer.village) === normalizeStr(campaign.target_village)
-    );
+    return stringsMatch(viewer.village, campaign.target_village);
   }
 
   if (scope === 'radius') {
+    const cLat = parseFloat(campaign.center_lat ?? campaign.store_lat);
+    const cLng = parseFloat(campaign.center_lng ?? campaign.store_lng);
+    if (!Number.isFinite(cLat) || !Number.isFinite(cLng)) return false;
+
     const lat = parseFloat(viewer.lat);
     const lng = parseFloat(viewer.lng);
-    const cLat = parseFloat(campaign.center_lat);
-    const cLng = parseFloat(campaign.center_lng);
-    if (!Number.isFinite(lat) || !Number.isFinite(lng) || !Number.isFinite(cLat) || !Number.isFinite(cLng)) {
-      return false;
+    if (Number.isFinite(lat) && Number.isFinite(lng)) {
+      const radius = parseFloat(campaign.radius_km) || MIN_RADIUS_KM;
+      return haversineKm(lat, lng, cLat, cLng) <= radius;
     }
-    const radius = parseFloat(campaign.radius_km) || MIN_RADIUS_KM;
-    return haversineKm(lat, lng, cLat, cLng) <= radius;
+
+    // Without GPS, radius campaigns are visible when the viewer's city
+    // matches the store/campaign city (same metro area).
+    return (
+      stringsMatch(viewer.city, campaign.target_city) ||
+      stringsMatch(viewer.city, campaign.store_city)
+    );
   }
 
   return false;
+}
+
+function filterCampaignsForViewer(campaigns, viewer) {
+  return campaigns.filter((row) => campaignMatchesViewer(row, viewer));
 }
 
 async function getPricing(scopeType) {
@@ -161,7 +219,9 @@ module.exports = {
   MAX_DURATION_DAYS,
   MIN_RADIUS_KM,
   MAX_RADIUS_KM,
+  viewerHasGeo,
   campaignMatchesViewer,
+  filterCampaignsForViewer,
   getPricing,
   getAllPricing,
   calculatePrice,

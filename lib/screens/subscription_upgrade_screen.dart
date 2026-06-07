@@ -5,6 +5,7 @@ import '../lang/translations.dart';
 import '../services/subscription_service.dart';
 import '../utils/payment_price_helper.dart';
 import '../widgets/payment/geo_payment_price.dart';
+import '../utils/payment_support_chat.dart';
 
 class SubscriptionUpgradeScreen extends ConsumerStatefulWidget {
   final Map<String, dynamic>? initialStatus;
@@ -61,18 +62,7 @@ class _SubscriptionUpgradeScreenState extends ConsumerState<SubscriptionUpgradeS
       );
       if (mounted) {
         setState(() => _lastPayment = result);
-        if (track == 'syria_agent') {
-          _showSyriaPaymentDialog(result);
-        } else {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(
-                result['message']?.toString() ??
-                    (t('stripe_coming_soon') ?? 'Stripe integration coming soon'),
-              ),
-            ),
-          );
-        }
+        _showSyriaPaymentDialog(result);
       }
     } catch (e) {
       if (mounted) {
@@ -164,7 +154,21 @@ class _SubscriptionUpgradeScreenState extends ConsumerState<SubscriptionUpgradeS
             },
             child: Text(t('copy_code') ?? 'Copy Code'),
           ),
-          FilledButton(
+          FilledButton.icon(
+            onPressed: () async {
+              final nav = Navigator.of(context);
+              nav.pop();
+              await openPaymentConfirmationChat(
+                context,
+                referenceCode: ref,
+                paymentType: t('subscription') ?? 'Subscription',
+                amountText: usd != null ? '\$${usd.toStringAsFixed(2)}' : null,
+              );
+            },
+            icon: const Icon(Icons.chat_bubble_outline, size: 18),
+            label: Text(t('start_payment_chat') ?? 'Start live chat'),
+          ),
+          TextButton(
             onPressed: () => Navigator.pop(context),
             child: Text(t('done') ?? 'Done'),
           ),
@@ -277,26 +281,15 @@ class _SubscriptionUpgradeScreenState extends ConsumerState<SubscriptionUpgradeS
                                   style: TextStyle(color: theme.colorScheme.onSurfaceVariant),
                                 ),
                                 const SizedBox(height: 12),
-                                Row(
-                                  children: [
-                                    Expanded(
-                                      child: OutlinedButton(
-                                        onPressed: _requesting
-                                            ? null
-                                            : () => _requestTier(tMap, 'syria_agent'),
-                                        child: Text(t('pay_via_agent') ?? 'Pay via Agent'),
-                                      ),
-                                    ),
-                                    const SizedBox(width: 8),
-                                    Expanded(
-                                      child: FilledButton(
-                                        onPressed: _requesting
-                                            ? null
-                                            : () => _requestTier(tMap, 'stripe'),
-                                        child: Text(t('stripe') ?? 'Stripe'),
-                                      ),
-                                    ),
-                                  ],
+                                SizedBox(
+                                  width: double.infinity,
+                                  child: FilledButton.icon(
+                                    onPressed: _requesting
+                                        ? null
+                                        : () => _requestTier(tMap, 'syria_agent'),
+                                    icon: const Icon(Icons.payments_outlined, size: 18),
+                                    label: Text(t('pay_via_agent') ?? 'Pay via Agent'),
+                                  ),
                                 ),
                               ],
                             ),

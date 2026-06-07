@@ -40,6 +40,10 @@ class Store {
   final bool? firstProductApproved;
   @JsonKey(name: 'created_at')
   final String? createdAt;
+  @JsonKey(fromJson: parseJsonDouble)
+  final double? rating;
+  @JsonKey(name: 'review_count', fromJson: parseJsonInt)
+  final int? reviewCount;
 
   const Store({
     this.id,
@@ -63,6 +67,8 @@ class Store {
     this.manualApprovalMode,
     this.firstProductApproved,
     this.createdAt,
+    this.rating,
+    this.reviewCount,
   });
 
   factory Store.fromJson(Map<String, dynamic> json) => _$StoreFromJson(json);

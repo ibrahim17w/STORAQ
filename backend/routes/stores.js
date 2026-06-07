@@ -231,7 +231,9 @@ router.get('/stores/sponsored', async (req, res) => {
 router.get('/stores/:id', async (req, res) => {
   try {
     const result = await pool.query(`
-      SELECT s.*, c.display_names as city_display_names
+      SELECT s.*, c.display_names as city_display_names,
+             (SELECT COUNT(*)::int FROM store_reviews r
+              WHERE r.store_id = s.id AND r.status = 'active') AS review_count
       FROM stores s
       LEFT JOIN canonical_cities c ON s.city_id = c.canonical_id
       WHERE s.id=$1

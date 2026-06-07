@@ -1,4 +1,5 @@
 const path = require('path');
+const fs = require('fs');
 require('dotenv').config({ path: path.join(__dirname, '.env') });
 
 const express = require('express');
@@ -6,6 +7,7 @@ const cookieParser = require('cookie-parser');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { Pool } = require('pg');
+const nodemailer = require('nodemailer');
 
 // ─── Database ───────────────────────────────────────────────────────────────
 const pool = new Pool({
@@ -130,6 +132,65 @@ async function runMigrations() {
     `);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_support_tickets_status ON support_tickets(status, last_message_at DESC);`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_support_messages_ticket ON support_ticket_messages(ticket_id, created_at);`);
+    await client.query(`
+      ALTER TABLE support_tickets
+        ADD COLUMN IF NOT EXISTS image_quota INTEGER NOT NULL DEFAULT 0,
+        ADD COLUMN IF NOT EXISTS images_sent INTEGER NOT NULL DEFAULT 0;
+    `);
+    await client.query(`
+      ALTER TABLE support_ticket_messages
+        ADD COLUMN IF NOT EXISTS message_type VARCHAR(20) NOT NULL DEFAULT 'text',
+        ADD COLUMN IF NOT EXISTS attachment_url VARCHAR(500),
+        ADD COLUMN IF NOT EXISTS request_status VARCHAR(20);
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS store_reviews (
+        id SERIAL PRIMARY KEY,
+        store_id INTEGER NOT NULL,
+        user_id INTEGER NOT NULL,
+        rating INTEGER NOT NULL CHECK (rating >= 1 AND rating <= 5),
+        comment TEXT,
+        status VARCHAR(20) DEFAULT 'active',
+        removed_at TIMESTAMP,
+        removed_by_admin_id INTEGER,
+        removal_reason TEXT,
+        created_at TIMESTAMP DEFAULT NOW(),
+        updated_at TIMESTAMP DEFAULT NOW(),
+        UNIQUE(store_id, user_id)
+      );
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_store_reviews_store ON store_reviews(store_id, status, created_at DESC);`);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS product_reviews (
+        id SERIAL PRIMARY KEY,
+        product_id INTEGER NOT NULL,
+        user_id INTEGER NOT NULL,
+        rating INTEGER NOT NULL CHECK (rating >= 1 AND rating <= 5),
+        comment TEXT,
+        status VARCHAR(20) DEFAULT 'active',
+        removed_at TIMESTAMP,
+        removed_by_admin_id INTEGER,
+        removal_reason TEXT,
+        created_at TIMESTAMP DEFAULT NOW(),
+        updated_at TIMESTAMP DEFAULT NOW(),
+        UNIQUE(product_id, user_id)
+      );
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_product_reviews_product ON product_reviews(product_id, status, created_at DESC);`);
+    await client.query(`
+      DO $$ BEGIN
+        IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'products') THEN
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='products' AND column_name='rating') THEN
+            ALTER TABLE products ADD COLUMN rating DECIMAL(2,1) DEFAULT 5.0;
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='products' AND column_name='review_count') THEN
+            ALTER TABLE products ADD COLUMN review_count INTEGER DEFAULT 0;
+          END IF;
+        END IF;
+      END $$;
+    `);
 
     await client.query(`
       CREATE TABLE IF NOT EXISTS flagged_stores (
@@ -216,6 +277,52 @@ function isAdmin(req, res, next) {
 // Forensic audit logger for sensitive admin actions. Fire-and-forget: a
 // logging failure must never fail the underlying request, so we swallow
 // errors. Never put raw passwords, JWT contents, or PII into `detail`.
+let emailTransporter = null;
+if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
+  emailTransporter = nodemailer.createTransport({
+    host: process.env.SMTP_HOST,
+    port: parseInt(process.env.SMTP_PORT || '587', 10),
+    secure: process.env.SMTP_SECURE === 'true',
+    auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
+  });
+}
+
+async function sendAdminEmail({ to, subject, html }) {
+  if (!emailTransporter) {
+    throw new Error('SMTP not configured — set SMTP_HOST, SMTP_USER, SMTP_PASS in admin .env');
+  }
+  const from = process.env.FROM_EMAIL || process.env.SMTP_USER;
+  return emailTransporter.sendMail({ from, to, subject, html });
+}
+
+async function recalcStoreRatingAdmin(storeId, client = pool) {
+  await client.query(
+    `UPDATE stores
+     SET rating = COALESCE((
+       SELECT ROUND(AVG(rating)::numeric, 1)
+       FROM store_reviews
+       WHERE store_id = $1 AND status = 'active'
+     ), 5.0)
+     WHERE id = $1`,
+    [storeId]
+  );
+}
+
+async function recalcProductRatingAdmin(productId, client = pool) {
+  const stats = await client.query(
+    `SELECT COUNT(*)::int AS total,
+            COALESCE(ROUND(AVG(rating)::numeric, 1), 5.0) AS avg_rating
+     FROM product_reviews
+     WHERE product_id = $1 AND status = 'active'`,
+    [productId]
+  );
+  const row = stats.rows[0] || { total: 0, avg_rating: 5.0 };
+  await client.query(
+    `UPDATE products SET rating = $2, review_count = $3 WHERE id = $1`,
+    [productId, row.avg_rating, row.total]
+  );
+}
+
 async function auditAdmin(req, action, target, detail) {
   try {
     await pool.query(
@@ -283,10 +390,12 @@ app.use((req, res, next) => {
     'Content-Security-Policy',
     [
       "default-src 'self'",
-      "script-src 'self' 'unsafe-inline'",
-      "style-src 'self' 'unsafe-inline'",
-      "img-src 'self' data: blob: https:",
-      "font-src 'self' data:",
+      // Analytics page loads Chart.js + Leaflet from jsDelivr CDN.
+      "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net",
+      "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://fonts.googleapis.com",
+      // Product images + OpenStreetMap raster tiles for the store map.
+      "img-src 'self' data: blob: https: https://*.tile.openstreetmap.org https://tile.openstreetmap.org",
+      "font-src 'self' data: https://fonts.gstatic.com",
       "connect-src 'self'",
       "object-src 'none'",
       "frame-ancestors 'none'",
@@ -314,6 +423,22 @@ app.use(express.static(path.join(__dirname, 'public'), {
   dotfiles: 'deny',
   index: ['index.html'],
 }));
+
+const uploadsDir =
+  process.env.UPLOADS_DIR || path.join(__dirname, '..', 'backend', 'uploads');
+const mediaBaseUrl = (process.env.BACKEND_URL || process.env.MEDIA_BASE_URL || 'http://localhost:3000')
+  .replace(/\/$/, '');
+if (fs.existsSync(uploadsDir)) {
+  app.use('/uploads', express.static(uploadsDir, { dotfiles: 'deny', maxAge: '1h' }));
+  console.log('[admin] Serving uploads from', uploadsDir);
+} else {
+  console.warn('[admin] Uploads directory not found:', uploadsDir);
+  console.warn('[admin] Support images will use BACKEND_URL:', mediaBaseUrl);
+}
+
+app.get('/api/config', (req, res) => {
+  res.json({ mediaBaseUrl });
+});
 
 // ── Login rate limit (in-memory, per IP + per emailHash) ──
 // Without this, /api/auth/login is open to unlimited credential-stuffing.
@@ -486,6 +611,229 @@ app.get('/api/stats', isAdmin, async (req, res) => {
   } catch (err) {
     console.error('Stats error:', err.message);
     res.status(500).json({ error: 'Failed to fetch stats' });
+  }
+});
+
+// ─── Analytics (platform monitoring) ─────────────────────────────────────────
+// Aggregated read-only metrics for the admin Analytics tab: map pins, sales
+// trends, engagement, and recent transactions. Every sub-query is defensive
+// (empty array / zero on missing tables) so a fresh DB still renders.
+app.get('/api/analytics/overview', isAdmin, async (req, res) => {
+  const safeQuery = async (sql, params) => {
+    try {
+      const r = await pool.query(sql, params);
+      return r.rows;
+    } catch (err) {
+      console.error('[analytics] sub-query failed:', err.message);
+      return [];
+    }
+  };
+
+  try {
+    const [
+      summaryRow,
+      storesMap,
+      signupsByDay,
+      visitsByDay,
+      viewsByDay,
+      subscriptionRevenue,
+      sponsorshipRevenue,
+      pendingSubscriptionPayments,
+      pendingSponsorshipPayments,
+      subscriptionPaymentsByDay,
+      sponsorshipPaymentsByDay,
+      recentSubscriptionPayments,
+      recentSponsorshipPayments,
+      storesByDay,
+    ] = await Promise.all([
+      pool.query(`
+        SELECT
+          (SELECT COUNT(*)::int FROM users) AS total_users,
+          (SELECT COUNT(*)::int FROM users WHERE created_at >= NOW() - INTERVAL '7 days') AS new_users_7d,
+          (SELECT COUNT(*)::int FROM stores) AS total_stores,
+          (SELECT COUNT(*)::int FROM stores WHERE COALESCE(is_active, TRUE) = TRUE) AS active_stores,
+          (SELECT COUNT(*)::int FROM products WHERE is_online = TRUE) AS online_products,
+          (SELECT COUNT(*)::int FROM products) AS total_products,
+          (SELECT COUNT(*)::int FROM support_tickets WHERE status IN ('open', 'in_progress')) AS open_support_tickets,
+          (SELECT COUNT(*)::int FROM subscription_payments WHERE status = 'pending') AS pending_subscription_payments,
+          (SELECT COUNT(*)::int FROM sponsored_product_payments WHERE status = 'pending') AS pending_sponsorship_payments,
+          (SELECT COALESCE(SUM(amount_usd), 0)::float FROM subscription_payments WHERE status = 'verified') AS verified_subscription_usd,
+          (SELECT COALESCE(SUM(amount_usd), 0)::float FROM sponsored_product_payments WHERE status = 'verified') AS verified_sponsorship_usd,
+          (SELECT COALESCE(SUM(amount_usd), 0)::float FROM subscription_payments
+             WHERE status = 'verified' AND verified_at >= CURRENT_DATE) AS subscription_usd_today,
+          (SELECT COALESCE(SUM(amount_usd), 0)::float FROM sponsored_product_payments
+             WHERE status = 'verified' AND verified_at >= CURRENT_DATE) AS sponsorship_usd_today
+      `).then((r) => r.rows[0]),
+
+      safeQuery(`
+        SELECT s.id, s.name, s.city, s.country, s.country_code,
+               s.lat, s.lng,
+               COALESCE(s.is_active, TRUE) AS is_active,
+               s.created_at,
+               (SELECT COUNT(*)::int FROM products p WHERE p.store_id = s.id) AS product_count,
+               (SELECT COUNT(*)::int FROM products p2 WHERE p2.store_id = s.id AND p2.is_online = TRUE) AS online_product_count
+        FROM stores s
+        ORDER BY s.created_at DESC
+        LIMIT 500
+      `),
+
+      safeQuery(`
+        SELECT DATE(created_at) AS date, COUNT(*)::int AS count
+        FROM users
+        WHERE created_at >= NOW() - INTERVAL '30 days'
+        GROUP BY DATE(created_at)
+        ORDER BY date ASC
+      `),
+
+      safeQuery(`
+        SELECT DATE(visited_at) AS date, COUNT(*)::int AS count
+        FROM store_visits
+        WHERE visited_at >= NOW() - INTERVAL '30 days'
+        GROUP BY DATE(visited_at)
+        ORDER BY date ASC
+      `),
+
+      safeQuery(`
+        SELECT DATE(viewed_at) AS date, COUNT(*)::int AS count
+        FROM product_views
+        WHERE viewed_at >= NOW() - INTERVAL '30 days'
+        GROUP BY DATE(viewed_at)
+        ORDER BY date ASC
+      `),
+
+      safeQuery(`
+        SELECT COALESCE(SUM(amount_usd), 0)::float AS total_usd
+        FROM subscription_payments
+        WHERE status = 'verified'
+      `).then((rows) => rows[0]?.total_usd ?? 0),
+
+      safeQuery(`
+        SELECT COALESCE(SUM(amount_usd), 0)::float AS total_usd
+        FROM sponsored_product_payments
+        WHERE status = 'verified'
+      `).then((rows) => rows[0]?.total_usd ?? 0),
+
+      safeQuery(`
+        SELECT COUNT(*)::int AS count FROM subscription_payments WHERE status = 'pending'
+      `).then((rows) => rows[0]?.count ?? 0),
+
+      safeQuery(`
+        SELECT COUNT(*)::int AS count FROM sponsored_product_payments WHERE status = 'pending'
+      `).then((rows) => rows[0]?.count ?? 0),
+
+      safeQuery(`
+        SELECT DATE(verified_at) AS date,
+               COALESCE(SUM(amount_usd), 0)::float AS revenue,
+               COUNT(*)::int AS count
+        FROM subscription_payments
+        WHERE status = 'verified'
+          AND verified_at >= NOW() - INTERVAL '30 days'
+        GROUP BY DATE(verified_at)
+        ORDER BY date ASC
+      `),
+
+      safeQuery(`
+        SELECT DATE(verified_at) AS date,
+               COALESCE(SUM(amount_usd), 0)::float AS revenue,
+               COUNT(*)::int AS count
+        FROM sponsored_product_payments
+        WHERE status = 'verified'
+          AND verified_at >= NOW() - INTERVAL '30 days'
+        GROUP BY DATE(verified_at)
+        ORDER BY date ASC
+      `),
+
+      safeQuery(`
+        SELECT sp.id, sp.amount_usd, sp.payment_track, sp.reference_code,
+               sp.verified_at, sp.created_at,
+               s.name AS store_name, u.full_name AS owner_name, u.email AS owner_email,
+               t.name AS tier_name
+        FROM subscription_payments sp
+        JOIN stores s ON s.id = sp.store_id
+        JOIN users u ON u.id = s.owner_id
+        LEFT JOIN subscription_tiers t ON t.id = sp.tier_id
+        WHERE sp.status = 'verified'
+        ORDER BY sp.verified_at DESC NULLS LAST, sp.created_at DESC
+        LIMIT 15
+      `),
+
+      safeQuery(`
+        SELECT sp.id, sp.amount_usd, sp.payment_track, sp.reference_code,
+               sp.verified_at, sp.created_at,
+               p.name AS product_name, s.name AS store_name,
+               u.full_name AS owner_name, u.email AS owner_email
+        FROM sponsored_product_payments sp
+        JOIN products p ON p.id = sp.product_id
+        JOIN stores s ON s.id = sp.store_id
+        JOIN users u ON u.id = s.owner_id
+        WHERE sp.status = 'verified'
+        ORDER BY sp.verified_at DESC NULLS LAST, sp.created_at DESC
+        LIMIT 15
+      `),
+
+      safeQuery(`
+        SELECT DATE(created_at) AS date, COUNT(*)::int AS count
+        FROM stores
+        WHERE created_at >= NOW() - INTERVAL '30 days'
+        GROUP BY DATE(created_at)
+        ORDER BY date ASC
+      `),
+    ]);
+
+    // Engagement counts — separate queries so missing tables don't break summary.
+    const visits7d = await safeQuery(
+      `SELECT COUNT(*)::int AS c FROM store_visits WHERE visited_at >= NOW() - INTERVAL '7 days'`
+    );
+    const views7d = await safeQuery(
+      `SELECT COUNT(*)::int AS c FROM product_views WHERE viewed_at >= NOW() - INTERVAL '7 days'`
+    );
+    const searches7d = await safeQuery(
+      `SELECT COUNT(*)::int AS c FROM search_queries WHERE searched_at >= NOW() - INTERVAL '7 days'`
+    );
+
+    const mapStores = storesMap.filter(
+      (s) => s.lat != null && s.lng != null && !Number.isNaN(parseFloat(s.lat)) && !Number.isNaN(parseFloat(s.lng))
+    );
+
+    res.json({
+      summary: {
+        total_users: summaryRow.total_users || 0,
+        new_users_7d: summaryRow.new_users_7d || 0,
+        total_stores: summaryRow.total_stores || 0,
+        active_stores: summaryRow.active_stores || 0,
+        online_products: summaryRow.online_products || 0,
+        total_products: summaryRow.total_products || 0,
+        open_support_tickets: summaryRow.open_support_tickets || 0,
+        store_visits_7d: visits7d[0]?.c ?? 0,
+        product_views_7d: views7d[0]?.c ?? 0,
+        searches_7d: searches7d[0]?.c ?? 0,
+        verified_subscription_usd: parseFloat(summaryRow.verified_subscription_usd) || parseFloat(subscriptionRevenue) || 0,
+        verified_sponsorship_usd: parseFloat(summaryRow.verified_sponsorship_usd) || parseFloat(sponsorshipRevenue) || 0,
+        verified_payments_usd:
+          (parseFloat(summaryRow.verified_subscription_usd) || parseFloat(subscriptionRevenue) || 0) +
+          (parseFloat(summaryRow.verified_sponsorship_usd) || parseFloat(sponsorshipRevenue) || 0),
+        payments_usd_today:
+          (parseFloat(summaryRow.subscription_usd_today) || 0) +
+          (parseFloat(summaryRow.sponsorship_usd_today) || 0),
+        pending_subscription_payments: summaryRow.pending_subscription_payments ?? pendingSubscriptionPayments ?? 0,
+        pending_sponsorship_payments: summaryRow.pending_sponsorship_payments ?? pendingSponsorshipPayments ?? 0,
+        stores_on_map: mapStores.length,
+        stores_without_location: (storesMap.length - mapStores.length),
+      },
+      stores_map: mapStores,
+      stores_all: storesMap,
+      signups_by_day: signupsByDay,
+      visits_by_day: visitsByDay,
+      views_by_day: viewsByDay,
+      stores_by_day: storesByDay,
+      subscription_payments_by_day: subscriptionPaymentsByDay,
+      sponsorship_payments_by_day: sponsorshipPaymentsByDay,
+      recent_subscription_payments: recentSubscriptionPayments,
+      recent_sponsorship_payments: recentSponsorshipPayments,
+    });
+  } catch (err) {
+    console.error('Analytics overview error:', err.message);
+    res.status(500).json({ error: 'Failed to load analytics' });
   }
 });
 
@@ -954,9 +1302,21 @@ app.delete('/api/stores/:storeId/products/:productId', isAdmin, async (req, res)
 });
 
 // ─── Support Tickets ─────────────────────────────────────────────────────────
+function extractPaymentReference(subject, messages) {
+  const chunks = [subject || ''];
+  if (Array.isArray(messages)) {
+    for (const m of messages) {
+      if (m?.body) chunks.push(String(m.body));
+    }
+  }
+  const match = chunks.join(' ').match(/(MB|SP)-\d+-[A-Z0-9]+/i);
+  return match ? match[0].toUpperCase() : null;
+}
+
 app.get('/api/support/tickets', isAdmin, async (req, res) => {
   try {
     const status = req.query.status;
+    const category = req.query.category;
     let query = `
       SELECT t.*,
              u.full_name AS user_name,
@@ -977,9 +1337,17 @@ app.get('/api/support/tickets', isAdmin, async (req, res) => {
       JOIN users u ON u.id = t.user_id
     `;
     const params = [];
+    const clauses = [];
     if (status && status !== 'all') {
       params.push(status);
-      query += ` WHERE t.status = $${params.length}`;
+      clauses.push(`t.status = $${params.length}`);
+    }
+    if (category && category !== 'all') {
+      params.push(category);
+      clauses.push(`t.category = $${params.length}`);
+    }
+    if (clauses.length) {
+      query += ` WHERE ${clauses.join(' AND ')}`;
     }
     query += ' ORDER BY t.last_message_at DESC LIMIT 200';
     const result = await pool.query(query, params);
@@ -1075,29 +1443,309 @@ app.post('/api/support/tickets/:id/messages', isAdmin, async (req, res) => {
   }
 });
 
+async function grantUserImageQuota(userId, count, adminUserId) {
+  const body =
+    count === 1
+      ? 'Support approved 1 image upload. You can attach an image now in any of your open tickets.'
+      : `Support approved ${count} image uploads. You can attach images now in any of your open tickets.`;
+
+  const tickets = await pool.query(
+    `SELECT id FROM support_tickets
+     WHERE user_id = $1 AND status != 'closed'`,
+    [userId]
+  );
+
+  if (tickets.rows.length === 0) {
+    return null;
+  }
+
+  await pool.query(
+    `UPDATE support_tickets
+     SET image_quota = image_quota + $2,
+         updated_at = NOW()
+     WHERE user_id = $1 AND status != 'closed'`,
+    [userId, count]
+  );
+
+  await pool.query(
+    `UPDATE support_ticket_messages m
+     SET request_status = 'approved'
+     FROM support_tickets t
+     WHERE m.ticket_id = t.id
+       AND t.user_id = $1
+       AND m.message_type = 'image_request'
+       AND (m.request_status IS NULL OR m.request_status = 'pending')`,
+    [userId]
+  );
+
+  for (const row of tickets.rows) {
+    await pool.query(
+      `INSERT INTO support_ticket_messages (ticket_id, sender_id, sender_role, body, message_type)
+       VALUES ($1, $2, 'admin', $3, 'system')`,
+      [row.id, adminUserId, body]
+    );
+    await pool.query(
+      `UPDATE support_tickets
+       SET last_message_at = NOW(), updated_at = NOW()
+       WHERE id = $1`,
+      [row.id]
+    );
+  }
+
+  return tickets.rows.length;
+}
+
+app.post('/api/support/tickets/:id/allow-images', isAdmin, async (req, res) => {
+  try {
+    const ticketId = parseInt(req.params.id);
+    const count = Math.min(Math.max(parseInt(req.body.count, 10) || 1, 1), 10);
+
+    const ticket = await pool.query(
+      'SELECT id, user_id, status FROM support_tickets WHERE id = $1',
+      [ticketId]
+    );
+    if (ticket.rows.length === 0) {
+      return res.status(404).json({ error: 'Ticket not found' });
+    }
+    if (ticket.rows[0].status === 'closed') {
+      return res.status(400).json({ error: 'Ticket is closed' });
+    }
+
+    const affected = await grantUserImageQuota(ticket.rows[0].user_id, count, req.admin.userId);
+    if (!affected) {
+      return res.status(400).json({ error: 'User has no open tickets to grant image access' });
+    }
+
+    const updated = await pool.query(
+      'SELECT * FROM support_tickets WHERE id = $1',
+      [ticketId]
+    );
+    res.json({
+      ...updated.rows[0],
+      tickets_updated: affected,
+    });
+  } catch (err) {
+    console.error('Admin allow images error:', err.message);
+    res.status(500).json({ error: 'Failed to allow image uploads' });
+  }
+});
+
+app.post('/api/support/allow-all-images', isAdmin, async (req, res) => {
+  try {
+    const count = Math.min(Math.max(parseInt(req.body.count, 10) || 1, 1), 10);
+    const pending = await pool.query(
+      `SELECT DISTINCT t.user_id
+       FROM support_ticket_messages m
+       JOIN support_tickets t ON t.id = m.ticket_id
+       WHERE m.message_type = 'image_request'
+         AND (m.request_status IS NULL OR m.request_status = 'pending')
+         AND t.status != 'closed'`
+    );
+
+    let usersUpdated = 0;
+    let ticketsUpdated = 0;
+    for (const row of pending.rows) {
+      const affected = await grantUserImageQuota(row.user_id, count, req.admin.userId);
+      if (affected) {
+        usersUpdated += 1;
+        ticketsUpdated += affected;
+      }
+    }
+
+    res.json({
+      users_updated: usersUpdated,
+      tickets_updated: ticketsUpdated,
+      count_per_user: count,
+    });
+  } catch (err) {
+    console.error('Admin allow all images error:', err.message);
+    res.status(500).json({ error: 'Failed to approve pending image requests' });
+  }
+});
+
+app.delete('/api/support/tickets/:id', isAdmin, async (req, res) => {
+  try {
+    const ticketId = parseInt(req.params.id);
+    const result = await pool.query(
+      'DELETE FROM support_tickets WHERE id = $1 RETURNING id',
+      [ticketId]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Ticket not found' });
+    }
+    auditAdmin(req, 'support.delete', { type: 'support_ticket', id: ticketId });
+    res.json({ message: 'Support ticket deleted', id: ticketId });
+  } catch (err) {
+    console.error('Admin delete support ticket error:', err.message);
+    res.status(500).json({ error: 'Failed to delete support ticket' });
+  }
+});
+
+app.get('/api/support/tickets/:id/related-payment', isAdmin, async (req, res) => {
+  try {
+    const ticketId = parseInt(req.params.id);
+    const ticket = await pool.query(
+      `SELECT t.*, u.full_name AS user_name, u.email AS user_email
+       FROM support_tickets t
+       JOIN users u ON u.id = t.user_id
+       WHERE t.id = $1`,
+      [ticketId]
+    );
+    if (ticket.rows.length === 0) {
+      return res.status(404).json({ error: 'Ticket not found' });
+    }
+
+    const messages = await pool.query(
+      `SELECT body FROM support_ticket_messages WHERE ticket_id = $1 ORDER BY created_at ASC`,
+      [ticketId]
+    );
+
+    const ref = extractPaymentReference(
+      ticket.rows[0].subject,
+      messages.rows
+    );
+    if (!ref) {
+      return res.json({ payment: null });
+    }
+
+    if (ref.startsWith('SP-')) {
+      const sponsor = await pool.query(
+        `SELECT sp.id, sp.reference_code, sp.amount_usd, sp.status, sp.created_at,
+                p.name AS product_name, s.name AS store_name, u.full_name AS owner_name
+         FROM sponsored_product_payments sp
+         JOIN products p ON p.id = sp.product_id
+         JOIN stores s ON s.id = sp.store_id
+         JOIN users u ON u.id = s.owner_id
+         WHERE sp.reference_code = $1
+         ORDER BY sp.created_at DESC
+         LIMIT 1`,
+        [ref]
+      );
+      if (sponsor.rows.length === 0) {
+        return res.json({ payment: null, reference_code: ref });
+      }
+      return res.json({
+        payment: { ...sponsor.rows[0], type: 'sponsorship' },
+        reference_code: ref,
+      });
+    }
+
+    const sub = await pool.query(
+      `SELECT sp.id, sp.reference_code, sp.amount_usd, sp.status, sp.created_at,
+              st.name AS tier_name, s.name AS store_name, u.full_name AS owner_name
+       FROM subscription_payments sp
+       JOIN subscription_tiers st ON st.id = sp.tier_id
+       JOIN stores s ON s.id = sp.store_id
+       JOIN users u ON u.id = s.owner_id
+       WHERE sp.reference_code = $1
+       ORDER BY sp.created_at DESC
+       LIMIT 1`,
+      [ref]
+    );
+    if (sub.rows.length === 0) {
+      return res.json({ payment: null, reference_code: ref });
+    }
+    res.json({
+      payment: { ...sub.rows[0], type: 'subscription' },
+      reference_code: ref,
+    });
+  } catch (err) {
+    console.error('Admin related payment error:', err.message);
+    res.status(500).json({ error: 'Failed to load related payment' });
+  }
+});
+
 app.patch('/api/support/tickets/:id', isAdmin, async (req, res) => {
   try {
     const ticketId = parseInt(req.params.id);
-    const { status } = req.body;
-    const allowed = new Set(['open', 'in_progress', 'closed']);
-    if (!allowed.has(status)) {
+    const { status, category } = req.body;
+    const validCategories = new Set([
+      'general', 'account', 'billing', 'technical', 'report', 'review_removal',
+    ]);
+    const validStatuses = new Set(['open', 'in_progress', 'closed']);
+
+    if (!status && !category) {
+      return res.status(400).json({ error: 'Nothing to update' });
+    }
+    if (status && !validStatuses.has(status)) {
       return res.status(400).json({ error: 'Invalid status' });
     }
+    if (category && !validCategories.has(category)) {
+      return res.status(400).json({ error: 'Invalid category' });
+    }
+
+    const fields = [];
+    const params = [ticketId];
+    if (status) {
+      params.push(status);
+      fields.push(`status = $${params.length}`);
+    }
+    if (category) {
+      params.push(category);
+      fields.push(`category = $${params.length}`);
+    }
+    fields.push('updated_at = NOW()');
 
     const result = await pool.query(
-      `UPDATE support_tickets
-       SET status = $2, updated_at = NOW()
-       WHERE id = $1
-       RETURNING *`,
-      [ticketId, status]
+      `UPDATE support_tickets SET ${fields.join(', ')} WHERE id = $1 RETURNING *`,
+      params
     );
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Ticket not found' });
     }
     res.json(result.rows[0]);
   } catch (err) {
-    console.error('Admin support status error:', err.message);
+    console.error('Admin support update error:', err.message);
     res.status(500).json({ error: 'Failed to update ticket' });
+  }
+});
+
+// ─── Store Chats ────────────────────────────────────────────────────────────
+app.get('/api/chat/conversations', isAdmin, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT c.id, c.store_id, c.customer_id, c.last_message_at, c.created_at,
+              s.name AS store_name,
+              u.full_name AS customer_name,
+              u.email AS customer_email,
+              (
+                SELECT body FROM chat_messages m
+                WHERE m.conversation_id = c.id
+                ORDER BY m.created_at DESC
+                LIMIT 1
+              ) AS last_message,
+              (
+                SELECT COUNT(*)::int FROM chat_messages m
+                WHERE m.conversation_id = c.id
+              ) AS message_count
+       FROM chat_conversations c
+       JOIN stores s ON s.id = c.store_id
+       JOIN users u ON u.id = c.customer_id
+       ORDER BY c.last_message_at DESC NULLS LAST
+       LIMIT 300`
+    );
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Admin chat list error:', err.message);
+    res.status(500).json({ error: 'Failed to load chat conversations' });
+  }
+});
+
+app.delete('/api/chat/conversations/:id', isAdmin, async (req, res) => {
+  try {
+    const conversationId = parseInt(req.params.id);
+    const result = await pool.query(
+      'DELETE FROM chat_conversations WHERE id = $1 RETURNING id',
+      [conversationId]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Conversation not found' });
+    }
+    auditAdmin(req, 'chat.delete', { type: 'chat_conversation', id: conversationId });
+    res.json({ message: 'Chat conversation deleted', id: conversationId });
+  } catch (err) {
+    console.error('Admin delete chat error:', err.message);
+    res.status(500).json({ error: 'Failed to delete chat conversation' });
   }
 });
 
@@ -1263,6 +1911,264 @@ app.post('/api/sponsorship/campaigns/:id/cancel', isAdmin, async (req, res) => {
     res.json(result.rows[0]);
   } catch (err) {
     res.status(500).json({ error: 'Failed to cancel campaign' });
+  }
+});
+
+// ─── Users ───────────────────────────────────────────────────────────────────
+app.get('/api/users', isAdmin, async (req, res) => {
+  try {
+    const type = (req.query.type || 'all').toString();
+    const search = (req.query.search || '').toString().trim();
+    const params = [];
+    const conditions = [];
+
+    if (type === 'store_owner') {
+      conditions.push(`u.role = 'store_owner'`);
+    } else if (type === 'worker') {
+      conditions.push(`EXISTS (
+        SELECT 1 FROM store_staff ss
+        WHERE ss.user_id = u.id AND ss.status = 'accepted'
+      )`);
+    } else if (type === 'consumer') {
+      conditions.push(`u.role = 'customer'`);
+      conditions.push(`NOT EXISTS (
+        SELECT 1 FROM store_staff ss
+        WHERE ss.user_id = u.id AND ss.status = 'accepted'
+      )`);
+    } else if (type === 'admin') {
+      conditions.push(`(u.is_admin = TRUE OR u.role = 'admin')`);
+    }
+
+    if (search) {
+      params.push(`%${search}%`);
+      const idx = params.length;
+      conditions.push(`(
+        u.full_name ILIKE $${idx} OR u.email ILIKE $${idx} OR COALESCE(u.phone, '') ILIKE $${idx}
+      )`);
+    }
+
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+
+    const result = await pool.query(
+      `SELECT
+         u.id, u.full_name, u.email, u.phone, u.role, u.is_admin, u.created_at,
+         CASE
+           WHEN u.is_admin = TRUE OR u.role = 'admin' THEN 'admin'
+           WHEN u.role = 'store_owner' THEN 'store_owner'
+           WHEN EXISTS (
+             SELECT 1 FROM store_staff ss
+             WHERE ss.user_id = u.id AND ss.status = 'accepted'
+           ) THEN 'worker'
+           ELSE 'consumer'
+         END AS user_type,
+         owned.id AS owned_store_id,
+         owned.name AS owned_store_name,
+         (
+           SELECT COALESCE(json_agg(json_build_object(
+             'store_id', st.id,
+             'store_name', st.name,
+             'can_manage_inventory', ss.can_manage_inventory
+           ) ORDER BY st.name), '[]'::json)
+           FROM store_staff ss
+           JOIN stores st ON st.id = ss.store_id
+           WHERE ss.user_id = u.id AND ss.status = 'accepted'
+         ) AS worker_stores
+       FROM users u
+       LEFT JOIN stores owned ON owned.owner_id = u.id AND u.role = 'store_owner'
+       ${where}
+       ORDER BY u.created_at DESC
+       LIMIT 500`,
+      params
+    );
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Admin users error:', err.message);
+    res.status(500).json({ error: 'Failed to load users' });
+  }
+});
+
+// ─── Reviews (admin-only removal; store owners use support tickets) ────────────
+app.get('/api/reviews', isAdmin, async (req, res) => {
+  try {
+    const status = (req.query.status || 'active').toString();
+    const type = (req.query.type || 'all').toString();
+    const allowedStatus = new Set(['active', 'removed', 'all']);
+    const allowedType = new Set(['all', 'store', 'product']);
+    if (!allowedStatus.has(status)) {
+      return res.status(400).json({ error: 'Invalid status filter' });
+    }
+    if (!allowedType.has(type)) {
+      return res.status(400).json({ error: 'Invalid type filter' });
+    }
+
+    const params = [];
+    let statusParam = null;
+    if (status !== 'all') {
+      params.push(status);
+      statusParam = `$${params.length}`;
+    }
+    const statusFilter = (alias) =>
+      statusParam ? ` AND ${alias}.status = ${statusParam}` : '';
+
+    const parts = [];
+    if (type === 'all' || type === 'store') {
+      parts.push(`
+        SELECT r.id, 'store' AS review_type, r.store_id AS target_id, NULL::int AS product_id,
+               r.store_id, r.user_id, r.rating, r.comment, r.status,
+               r.created_at, r.removed_at, r.removal_reason,
+               u.full_name AS user_name, u.email AS user_email,
+               s.name AS target_name, s.name AS store_name, NULL::text AS product_name
+        FROM store_reviews r
+        JOIN users u ON u.id = r.user_id
+        JOIN stores s ON s.id = r.store_id
+        WHERE 1=1${statusFilter('r')}
+      `);
+    }
+    if (type === 'all' || type === 'product') {
+      parts.push(`
+        SELECT r.id, 'product' AS review_type, r.product_id AS target_id, r.product_id,
+               p.store_id, r.user_id, r.rating, r.comment, r.status,
+               r.created_at, r.removed_at, r.removal_reason,
+               u.full_name AS user_name, u.email AS user_email,
+               p.name AS target_name, s.name AS store_name, p.name AS product_name
+        FROM product_reviews r
+        JOIN users u ON u.id = r.user_id
+        JOIN products p ON p.id = r.product_id
+        JOIN stores s ON s.id = p.store_id
+        WHERE 1=1${statusFilter('r')}
+      `);
+    }
+
+    const result = await pool.query(
+      `SELECT * FROM (${parts.join(' UNION ALL ')}) combined
+       ORDER BY created_at DESC
+       LIMIT 200`,
+      params
+    );
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Admin reviews error:', err.message);
+    res.status(500).json({ error: 'Failed to load reviews' });
+  }
+});
+
+app.post('/api/reviews/:id/remove', isAdmin, async (req, res) => {
+  const client = await pool.connect();
+  let inTx = false;
+  try {
+    const reviewId = parseInt(req.params.id, 10);
+    const reviewType = (req.body?.type || 'store').toString();
+    const reason = (req.body?.reason || '').toString().trim();
+    if (!Number.isFinite(reviewId)) {
+      return res.status(400).json({ error: 'Invalid review id' });
+    }
+    if (!['store', 'product'].includes(reviewType)) {
+      return res.status(400).json({ error: 'Invalid review type' });
+    }
+    if (reason.length < 10) {
+      return res.status(400).json({ error: 'Removal reason must be at least 10 characters' });
+    }
+
+    await client.query('BEGIN');
+    inTx = true;
+
+    let review;
+    if (reviewType === 'product') {
+      const reviewResult = await client.query(
+        `SELECT r.*, u.email AS user_email, u.full_name AS user_name,
+                p.name AS product_name, s.name AS store_name
+         FROM product_reviews r
+         JOIN users u ON u.id = r.user_id
+         JOIN products p ON p.id = r.product_id
+         JOIN stores s ON s.id = p.store_id
+         WHERE r.id = $1 AND r.status = 'active'
+         FOR UPDATE`,
+        [reviewId]
+      );
+      if (reviewResult.rows.length === 0) {
+        await client.query('ROLLBACK');
+        inTx = false;
+        return res.status(404).json({ error: 'Review not found or already removed' });
+      }
+      review = reviewResult.rows[0];
+      await client.query(
+        `UPDATE product_reviews
+         SET status = 'removed', removed_at = NOW(), updated_at = NOW(),
+             removed_by_admin_id = $2, removal_reason = $3
+         WHERE id = $1`,
+        [reviewId, req.admin.userId, reason]
+      );
+      await recalcProductRatingAdmin(review.product_id, client);
+    } else {
+      const reviewResult = await client.query(
+        `SELECT r.*, u.email AS user_email, u.full_name AS user_name, s.name AS store_name
+         FROM store_reviews r
+         JOIN users u ON u.id = r.user_id
+         JOIN stores s ON s.id = r.store_id
+         WHERE r.id = $1 AND r.status = 'active'
+         FOR UPDATE`,
+        [reviewId]
+      );
+      if (reviewResult.rows.length === 0) {
+        await client.query('ROLLBACK');
+        inTx = false;
+        return res.status(404).json({ error: 'Review not found or already removed' });
+      }
+      review = reviewResult.rows[0];
+      await client.query(
+        `UPDATE store_reviews
+         SET status = 'removed', removed_at = NOW(), updated_at = NOW(),
+             removed_by_admin_id = $2, removal_reason = $3
+         WHERE id = $1`,
+        [reviewId, req.admin.userId, reason]
+      );
+      await recalcStoreRatingAdmin(review.store_id, client);
+    }
+
+    const stars = '★'.repeat(review.rating) + '☆'.repeat(5 - review.rating);
+    const targetLabel = reviewType === 'product'
+      ? `product <strong>${review.product_name}</strong> at ${review.store_name}`
+      : `store <strong>${review.store_name}</strong>`;
+    const commentBlock = review.comment
+      ? `<p style="background:#f5f5f5;padding:12px;border-radius:8px;font-style:italic;">"${review.comment.replace(/</g, '&lt;')}"</p>`
+      : '';
+    await sendAdminEmail({
+      to: review.user_email,
+      subject: 'Your STORAQ review was removed',
+      html: `
+        <div style="font-family:Arial,sans-serif;max-width:560px;margin:0 auto;padding:24px;">
+          <h2 style="color:#333;">Review removed</h2>
+          <p>Hello ${review.user_name || 'there'},</p>
+          <p>Your review for ${targetLabel} (${stars}) was removed by a STORAQ administrator.</p>
+          ${commentBlock}
+          <p><strong>Reason:</strong></p>
+          <p style="background:#fff3f3;padding:12px;border-left:4px solid #e74c3c;border-radius:4px;">${reason.replace(/</g, '&lt;')}</p>
+          <p style="color:#666;font-size:13px;">If you believe this was a mistake, contact support from the app.</p>
+          <p>— STORAQ Team</p>
+        </div>`,
+    });
+
+    await client.query('COMMIT');
+    inTx = false;
+
+    auditAdmin(req, 'review.remove', { type: `${reviewType}_review`, id: reviewId }, {
+      target_id: reviewType === 'product' ? review.product_id : review.store_id,
+      user_id: review.user_id,
+      reason_length: reason.length,
+    });
+
+    res.json({ ok: true });
+  } catch (err) {
+    if (inTx) {
+      try { await client.query('ROLLBACK'); } catch (_) {}
+    }
+    console.error('Admin remove review error:', err.message);
+    const msg = err.message?.includes('SMTP')
+      ? err.message
+      : 'Failed to remove review';
+    res.status(500).json({ error: msg });
+  } finally {
+    client.release();
   }
 });
 

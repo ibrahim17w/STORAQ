@@ -38,6 +38,9 @@ import '../providers/filter_provider.dart';
 import '../providers/viewer_location_provider.dart';
 import '../services/viewer_location_service.dart';
 
+/// Bumped when the user returns to the Home tab so sponsored content refreshes.
+final homeSponsoredRefreshTick = ValueNotifier<int>(0);
+
 class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
 
@@ -45,7 +48,8 @@ class HomeScreen extends ConsumerStatefulWidget {
   ConsumerState<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends ConsumerState<HomeScreen> {
+class _HomeScreenState extends ConsumerState<HomeScreen>
+    with WidgetsBindingObserver {
   List<Store> _stores = [];
   List<Store> _sponsoredStores = [];
   List<Product> _sponsoredProducts = [];
@@ -164,6 +168,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    homeSponsoredRefreshTick.addListener(_onSponsoredRefreshRequested);
     FavoritesService.favoriteIdsNotifier.addListener(_onFavoritesChanged);
     FavoritesService.favoriteStoreIdsNotifier.addListener(
       _onStoreFavoritesChanged,
@@ -172,6 +178,19 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       if (!mounted) return;
       _bootstrapHomeData();
     });
+  }
+
+  void _onSponsoredRefreshRequested() {
+    if (!mounted) return;
+    unawaited(_loadSponsoredProducts(skipCache: true));
+    unawaited(_loadSponsored());
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _onSponsoredRefreshRequested();
+    }
   }
 
   void _bootstrapHomeData() {
@@ -206,6 +225,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    homeSponsoredRefreshTick.removeListener(_onSponsoredRefreshRequested);
     FavoritesService.favoriteIdsNotifier.removeListener(_onFavoritesChanged);
     FavoritesService.favoriteStoreIdsNotifier.removeListener(
       _onStoreFavoritesChanged,
@@ -383,6 +404,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         setState(() => _userCountry = bestCountry);
       }
     }
+    unawaited(_loadSponsoredProducts(skipCache: true));
   }
 
   Future<void> _reverseGeocodeUserLocation(double lat, double lng) async {
@@ -783,6 +805,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         if (_userPosition != null && _stores.isNotEmpty) {
           _inferUserLocationFromStores();
         }
+        unawaited(_loadSponsoredProducts(skipCache: true));
       }
     } catch (_) {
       if (mounted && _stores.isEmpty) {
@@ -792,16 +815,61 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   }
 
 
-  Future<void> _loadSponsoredProducts() async {
+  Map<String, String?> _sponsoredViewerParams() {
+    final viewerLocation = ref.read(viewerLocationProvider);
+    return {
+      'lat': _userPosition?.latitude.toString(),
+      'lng': _userPosition?.longitude.toString(),
+      'village': _userVillage,
+      'city': _userCity,
+      'country': _userCountry ?? viewerLocation.countryName,
+      'countryCode': _userCountryCode ?? viewerLocation.countryCode,
+      'cityId': _userCityId,
+    };
+  }
+
+  String _sponsoredCacheKey() {
+    final p = _sponsoredViewerParams();
+    return [
+      p['lat'],
+      p['lng'],
+      p['cityId'] ?? p['city'],
+      p['countryCode'] ?? p['country'],
+      p['village'],
+    ].where((e) => e != null && e!.isNotEmpty).join('|');
+  }
+
+  Future<void> _loadSponsoredProducts({bool skipCache = false}) async {
+    final cacheKey = 'cached_sponsored_products_${_sponsoredCacheKey()}';
+
+    if (!skipCache) {
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        final cached = prefs.getString(cacheKey);
+        if (cached != null && cached.isNotEmpty) {
+          final decoded = (jsonDecode(cached) as List<dynamic>)
+              .map((e) => Product.fromJson(e as Map<String, dynamic>))
+              .toList();
+          if (mounted) {
+            setState(() {
+              _sponsoredProducts = decoded;
+              _sponsoredProductsLoading = false;
+            });
+          }
+        }
+      } catch (_) {}
+    }
+
     try {
+      final params = _sponsoredViewerParams();
       final products = await MarketplaceService.fetchSponsoredProducts(
-        lat: _userPosition?.latitude,
-        lng: _userPosition?.longitude,
-        village: _userVillage,
-        city: _userCity,
-        country: _userCountry,
-        countryCode: _userCountryCode,
-        cityId: _userCityId,
+        lat: params['lat'] != null ? double.tryParse(params['lat']!) : null,
+        lng: params['lng'] != null ? double.tryParse(params['lng']!) : null,
+        village: params['village'],
+        city: params['city'],
+        country: params['country'],
+        countryCode: params['countryCode'],
+        cityId: params['cityId'],
       );
       if (mounted) {
         setState(() {
@@ -809,6 +877,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           _sponsoredProductsLoading = false;
         });
       }
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(
+        cacheKey,
+        jsonEncode(products.map((p) => p.toJson()).toList()),
+      );
     } catch (_) {
       if (mounted && _sponsoredProducts.isEmpty) {
         setState(() => _sponsoredProductsLoading = false);
@@ -860,7 +933,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       ref.read(productsProvider.notifier).loadAll(),
       _loadStores(),
       _loadSponsored(),
-      _loadSponsoredProducts(),
+      _loadSponsoredProducts(skipCache: true),
     ]);
   }
 
@@ -1022,7 +1095,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
     final filteredProducts = _sortItems(_applyAllFilters(productsState.feed));
     final filteredTrending = _sortItems(_applyAllFilters(productsState.trending));
-    final filteredSponsored = _filterByLocation(_sponsoredStores);
+    // Paid placements should stay visible regardless of the user's location filter.
+    final filteredSponsored = _sponsoredStores;
     final filteredStores = _filterByLocation(_stores);
 
     // Compute recommendations from provider data
@@ -1060,8 +1134,17 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     final country = _userCountry;
     final countryCode = _userCountryCode;
 
-    final bool hasActiveFilters =
-        filterState.hasActiveFilters || dist != null;
+    // Default geo (city + 5km) is the baseline — don't surface it as an
+    // "active filter" chip on first launch.
+    final bool hasActiveFilters = filterState.hasActiveFilters ||
+        (dist != null && dist != 5.0);
+
+    ref.listen<ViewerLocationState>(viewerLocationProvider, (prev, next) {
+      if (prev?.countryCode != next.countryCode ||
+          prev?.countryName != next.countryName) {
+        unawaited(_loadSponsoredProducts(skipCache: true));
+      }
+    });
 
     return Scaffold(
       backgroundColor: theme.brightness == Brightness.dark
@@ -1102,6 +1185,105 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                   ),
                 ),
               ),
+              if (_sponsoredProductsLoading)
+                SliverToBoxAdapter(
+                  child: SizedBox(
+                    height: 252,
+                    child: ListView.builder(
+                      scrollDirection: Axis.horizontal,
+                      padding: const EdgeInsetsDirectional.only(start: 20),
+                      itemCount: 3,
+                      itemBuilder: (context, _) => Container(
+                        width: 160,
+                        margin: const EdgeInsetsDirectional.only(end: 12),
+                        decoration: BoxDecoration(
+                          color: theme.colorScheme.surfaceContainerHighest,
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              if (!_sponsoredProductsLoading && _sponsoredProducts.isNotEmpty) ...[
+                SectionHeader(
+                  title: t('sponsored_products') ?? 'Sponsored Products',
+                  onSeeAll: () => _openSeeAll(
+                    title: t('sponsored_products') ?? 'Sponsored Products',
+                    items: _sponsoredProducts,
+                    isStore: false,
+                  ),
+                ),
+                SliverToBoxAdapter(
+                  child: SizedBox(
+                    height: 252,
+                    child: ListView.builder(
+                      scrollDirection: Axis.horizontal,
+                      padding: const EdgeInsetsDirectional.only(start: 20),
+                      itemCount: _sponsoredProducts.length,
+                      itemBuilder: (context, i) {
+                        final product = _sponsoredProducts[i];
+                        final pid = _productId(product);
+                        return ProductCard(
+                          product: product.toJson(),
+                          compact: true,
+                          onTap: () => _onProductTap(product),
+                          showFavorite: pid != null,
+                          isFavorite: pid != null && _favoriteIds.contains(pid),
+                          onFavoriteToggle: pid != null
+                              ? () => _toggleFavorite(pid, product)
+                              : null,
+                          currencySettings: _currencySettings,
+                          isSponsored: true,
+                          sponsoredLabel: t('sponsored') ?? 'SPONSORED',
+                        );
+                      },
+                    ),
+                  ),
+                ),
+              ],
+              if (!_sponsoredLoading && filteredSponsored.isNotEmpty) ...[
+                SectionHeader(
+                  title: t('top_shops') ?? 'Top Shops',
+                  onSeeAll: () => _openSeeAll(
+                    title: t('top_shops') ?? 'Top Shops',
+                    items: filteredSponsored,
+                    isStore: true,
+                  ),
+                ),
+                SliverToBoxAdapter(
+                  child: SizedBox(
+                    height: 148,
+                    child: ListView.builder(
+                      scrollDirection: Axis.horizontal,
+                      padding: const EdgeInsetsDirectional.only(start: 20),
+                      itemCount: filteredSponsored.length,
+                      itemBuilder: (context, i) {
+                        final store = filteredSponsored[i] as Store;
+                        final sid = _storeId(store);
+                        final storeMap = store.toJson();
+                        return StoreCard(
+                          store: storeMap,
+                          onTap: () => Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) =>
+                                  StoreProductsScreen(storeId: store.id),
+                            ),
+                          ),
+                          isSponsored: true,
+                          sponsoredLabel: t('top') ?? 'TOP',
+                          showFavorite: sid != null,
+                          isFavorite:
+                              sid != null && _favoriteStoreIds.contains(sid),
+                          onFavoriteToggle: sid != null
+                              ? () => _toggleFavoriteStore(sid, store)
+                              : null,
+                        );
+                      },
+                    ),
+                  ),
+                ),
+              ],
               SliverToBoxAdapter(
                 child: Padding(
                   padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
@@ -1221,43 +1403,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                     ),
                   ),
                 ),
-              if (!_sponsoredProductsLoading && _sponsoredProducts.isNotEmpty) ...[
-                SectionHeader(
-                  title: t('sponsored_products') ?? 'Sponsored Products',
-                  onSeeAll: () => _openSeeAll(
-                    title: t('sponsored_products') ?? 'Sponsored Products',
-                    items: _sponsoredProducts,
-                    isStore: false,
-                  ),
-                ),
-                SliverToBoxAdapter(
-                  child: SizedBox(
-                    height: 252,
-                    child: ListView.builder(
-                      scrollDirection: Axis.horizontal,
-                      padding: const EdgeInsetsDirectional.only(start: 20),
-                      itemCount: _sponsoredProducts.length,
-                      itemBuilder: (context, i) {
-                        final product = _sponsoredProducts[i];
-                        final pid = _productId(product);
-                        return ProductCard(
-                          product: product.toJson(),
-                          compact: true,
-                          onTap: () => _onProductTap(product),
-                          showFavorite: pid != null,
-                          isFavorite: pid != null && _favoriteIds.contains(pid),
-                          onFavoriteToggle: pid != null
-                              ? () => _toggleFavorite(pid, product)
-                              : null,
-                          currencySettings: _currencySettings,
-                          isSponsored: true,
-                          sponsoredLabel: t('sponsored') ?? 'SPONSORED',
-                        );
-                      },
-                    ),
-                  ),
-                ),
-              ],
               if (!productsLoading &&
                   filteredRecommended.isNotEmpty) ...[
                 SectionHeader(
@@ -1288,49 +1433,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                               ? () => _toggleFavorite(pid, product)
                               : null,
                           currencySettings: _currencySettings,
-                        );
-                      },
-                    ),
-                  ),
-                ),
-              ],
-              if (!_sponsoredLoading && filteredSponsored.isNotEmpty) ...[
-                SectionHeader(
-                  title: t('top_shops') ?? 'Top Shops',
-                  onSeeAll: () => _openSeeAll(
-                    title: t('top_shops') ?? 'Top Shops',
-                    items: filteredSponsored,
-                    isStore: true,
-                  ),
-                ),
-                SliverToBoxAdapter(
-                  child: SizedBox(
-                    height: 148,
-                    child: ListView.builder(
-                      scrollDirection: Axis.horizontal,
-                      padding: const EdgeInsetsDirectional.only(start: 20),
-                      itemCount: filteredSponsored.length,
-                      itemBuilder: (context, i) {
-                        final store = filteredSponsored[i] as Store;
-                        final sid = _storeId(store);
-                        final storeMap = store.toJson();
-                        return StoreCard(
-                          store: storeMap,
-                          onTap: () => Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) =>
-                                  StoreProductsScreen(storeId: store.id),
-                            ),
-                          ),
-                          isSponsored: true,
-                          sponsoredLabel: t('top') ?? 'TOP',
-                          showFavorite: sid != null,
-                          isFavorite:
-                              sid != null && _favoriteStoreIds.contains(sid),
-                          onFavoriteToggle: sid != null
-                              ? () => _toggleFavoriteStore(sid, store)
-                              : null,
                         );
                       },
                     ),

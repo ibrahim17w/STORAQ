@@ -14,6 +14,8 @@ import '../services/store_service.dart';
 import '../services/product_service.dart';
 import '../providers/viewer_currency_provider.dart';
 import '../models/models.dart';
+import '../widgets/reviews_section.dart';
+import '../services/review_service.dart';
 
 class StoreProductsScreen extends ConsumerStatefulWidget {
   final int storeId;
@@ -163,6 +165,19 @@ class _StoreProductsScreenState extends ConsumerState<StoreProductsScreen> {
                     color: theme.colorScheme.onSurfaceVariant,
                   ),
                 ),
+                if (store.rating != null || (store.reviewCount ?? 0) > 0)
+                  Row(
+                    children: [
+                      Icon(Icons.star, size: 14, color: Colors.amber.shade700),
+                      const SizedBox(width: 4),
+                      Text(
+                        '${(store.rating ?? 5.0).toStringAsFixed(1)} (${store.reviewCount ?? 0})',
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ),
               ],
             ),
           ),
@@ -196,17 +211,47 @@ class _StoreProductsScreenState extends ConsumerState<StoreProductsScreen> {
           : error.isNotEmpty
               ? Center(child: Text('${t('error')}: $error'))
               : products.isEmpty
-                  ? Center(child: Text(t('no_products_yet')))
+                  ? RefreshIndicator(
+                      onRefresh: loadData,
+                      child: ListView(
+                        padding: const EdgeInsets.fromLTRB(12, 0, 12, 16),
+                        children: [
+                          _buildStoreHeader(Theme.of(context)),
+                          Center(
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 24),
+                              child: Text(t('no_products_yet')),
+                            ),
+                          ),
+                          ReviewsSection(
+                            type: ReviewTargetType.store,
+                            targetId: widget.storeId,
+                            targetName: _displayName,
+                            initialRating: _storeData?.rating,
+                            initialReviewCount: _storeData?.reviewCount,
+                          ),
+                        ],
+                      ),
+                    )
                   : RefreshIndicator(
                       onRefresh: loadData,
                       child: ListView.separated(
                         padding: const EdgeInsets.fromLTRB(12, 0, 12, 16),
-                        itemCount: products.length + 1,
+                        itemCount: products.length + 2,
                         separatorBuilder: (_, i) =>
                             SizedBox(height: i == 0 ? 8 : 10),
                         itemBuilder: (context, index) {
                           if (index == 0) {
                             return _buildStoreHeader(Theme.of(context));
+                          }
+                          if (index == products.length + 1) {
+                            return ReviewsSection(
+                              type: ReviewTargetType.store,
+                              targetId: widget.storeId,
+                              targetName: _displayName,
+                              initialRating: _storeData?.rating,
+                              initialReviewCount: _storeData?.reviewCount,
+                            );
                           }
                           final product = products[index - 1];
                           final map = _productMap(product);

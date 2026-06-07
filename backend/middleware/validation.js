@@ -227,6 +227,12 @@ const schemas = {
   updateStaffPermissions: z.object({
     can_manage_inventory: z.boolean(),
   }),
+  storeReview: z.object({
+    rating: numField().refine(n => Number.isInteger(n) && n >= 1 && n <= 5, {
+      message: 'rating must be between 1 and 5',
+    }),
+    comment: z.string().max(1000).nullish().transform(v => v || undefined),
+  }),
 };
 
 function validate(schema) {

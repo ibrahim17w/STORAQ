@@ -18,8 +18,8 @@ class FilterState {
   final String? selectedCountry;
 
   const FilterState({
-    this.locationMode = LocationFilterMode.none,
-    this.maxDistance,
+    this.locationMode = LocationFilterMode.city,
+    this.maxDistance = 5.0,
     this.minPrice,
     this.maxPrice,
     this.categoryId,
@@ -31,7 +31,10 @@ class FilterState {
   });
 
   bool get hasActiveFilters =>
-      locationMode != LocationFilterMode.none ||
+      // Treat the default geo (city + 5km) as the baseline, not an "active filter".
+      (locationMode != LocationFilterMode.none &&
+              locationMode != LocationFilterMode.city) ||
+      (maxDistance != null && maxDistance != 5.0) ||
       minPrice != null ||
       maxPrice != null ||
       categoryId != null ||
@@ -74,12 +77,16 @@ class FilterNotifier extends StateNotifier<FilterState> {
     try {
       final prefs = await PrefsService.instance;
       final sortIndex = prefs.getInt('filter_sort') ?? 0;
-      final modeIndex = prefs.getInt('filter_location_mode') ?? 0;
+      // Default to city scope (= LocationFilterMode.city.index) when nothing
+      // saved yet; user wanted geo active by default with a 5km fallback.
+      final modeIndex =
+          prefs.getInt('filter_location_mode') ?? LocationFilterMode.city.index;
+      final savedDistance = prefs.getDouble('filter_max_distance');
       state = FilterState(
         sortBy: SortBy.values[sortIndex.clamp(0, SortBy.values.length - 1)],
         locationMode: LocationFilterMode
             .values[modeIndex.clamp(0, LocationFilterMode.values.length - 1)],
-        maxDistance: prefs.getDouble('filter_max_distance'),
+        maxDistance: savedDistance ?? 5.0,
         minPrice: prefs.getDouble('filter_min_price'),
         maxPrice: prefs.getDouble('filter_max_price'),
         categoryId: prefs.getInt('filter_category'),

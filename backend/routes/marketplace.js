@@ -352,8 +352,10 @@ router.get('/marketplace/products/:id', async (req, res) => {
 
     const result = await pool.query(
       `SELECT p.*,
+              COALESCE(p.rating, 5.0) AS rating,
+              COALESCE(p.review_count, 0) AS review_count,
               s.id as shop_id, s.name as shop_name, s.city, s.country, s.lat, s.lng,
-              s.image_url as store_image_url
+              s.image_url as store_image_url, s.rating AS store_rating
        FROM products p
        JOIN stores s ON p.store_id = s.id
        WHERE p.id = $1 AND p.is_online = TRUE

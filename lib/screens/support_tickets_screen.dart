@@ -32,9 +32,9 @@ class _SupportTicketsScreenState extends State<SupportTicketsScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _loading = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.toString())),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(e.toString())));
     }
   }
 
@@ -66,26 +66,32 @@ class _SupportTicketsScreenState extends State<SupportTicketsScreen> {
                     decoration: InputDecoration(
                       labelText: t('category') ?? 'Category',
                     ),
-                    items: const [
-                      DropdownMenuItem(
+                    items: [
+                      const DropdownMenuItem(
                         value: 'general',
                         child: Text('General'),
                       ),
-                      DropdownMenuItem(
+                      const DropdownMenuItem(
                         value: 'account',
                         child: Text('Account'),
                       ),
-                      DropdownMenuItem(
+                      const DropdownMenuItem(
                         value: 'billing',
                         child: Text('Billing'),
                       ),
-                      DropdownMenuItem(
+                      const DropdownMenuItem(
                         value: 'technical',
                         child: Text('Technical'),
                       ),
-                      DropdownMenuItem(
+                      const DropdownMenuItem(
                         value: 'report',
                         child: Text('Report'),
+                      ),
+                      DropdownMenuItem(
+                        value: 'review_removal',
+                        child: Text(
+                          t('review_removal_category') ?? 'Review removal',
+                        ),
                       ),
                     ],
                     onChanged: (v) {
@@ -149,6 +155,42 @@ class _SupportTicketsScreenState extends State<SupportTicketsScreen> {
       subjectCtrl.dispose();
       bodyCtrl.dispose();
       if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(e.toString())));
+    }
+  }
+
+  Future<void> _confirmDeleteTicket(Map<String, dynamic> ticket) async {
+    final id = (ticket['id'] as num?)?.toInt();
+    if (id == null) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(t('delete') ?? 'Delete'),
+        content: Text(
+          t('delete_support_ticket_confirm') ??
+              'Delete this support ticket and all messages?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(t('cancel') ?? 'Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(t('delete') ?? 'Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    try {
+      await SupportService.deleteTicket(id);
+      if (!mounted) return;
+      await _load();
+    } catch (e) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(e.toString())),
       );
@@ -174,10 +216,7 @@ class _SupportTicketsScreenState extends State<SupportTicketsScreen> {
       appBar: AppBar(
         title: Text(t('help_support') ?? 'Help & Support'),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: _load,
-          ),
+          IconButton(icon: const Icon(Icons.refresh), onPressed: _load),
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(
@@ -188,97 +227,105 @@ class _SupportTicketsScreenState extends State<SupportTicketsScreen> {
       body: _loading
           ? const Center(child: CircularProgressIndicator(strokeWidth: 2))
           : _tickets.isEmpty
-              ? Center(
-                  child: Padding(
-                    padding: const EdgeInsets.all(24),
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(
-                          Icons.support_agent_outlined,
-                          size: 56,
-                          color: theme.colorScheme.outline,
-                        ),
-                        const SizedBox(height: 12),
-                        Text(
-                          t('no_support_tickets') ??
-                              'No support tickets yet',
-                          style: TextStyle(color: theme.colorScheme.outline),
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          t('support_ticket_hint') ??
-                              'Open a ticket and our team will reply from the admin dashboard.',
-                          textAlign: TextAlign.center,
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: theme.colorScheme.onSurfaceVariant,
-                          ),
-                        ),
-                      ],
+          ? Center(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(
+                      Icons.support_agent_outlined,
+                      size: 56,
+                      color: theme.colorScheme.outline,
                     ),
-                  ),
-                )
-              : RefreshIndicator(
-                  onRefresh: _load,
-                  child: ListView.separated(
-                    padding: const EdgeInsets.fromLTRB(12, 12, 12, 88),
-                    itemCount: _tickets.length,
-                    separatorBuilder: (_, __) => const SizedBox(height: 8),
-                    itemBuilder: (_, i) {
-                      final ticket = _tickets[i];
-                      final unread =
-                          (ticket['unread_count'] as num?)?.toInt() ?? 0;
-                      return Card(
-                        child: ListTile(
-                          leading: CircleAvatar(
-                            backgroundColor:
-                                theme.colorScheme.primaryContainer,
-                            child: Icon(
-                              Icons.confirmation_number_outlined,
-                              color: theme.colorScheme.primary,
-                            ),
-                          ),
-                          title: Text(
-                            ticket['subject']?.toString() ?? '',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          subtitle: Text(
-                            ticket['last_message']?.toString() ?? '',
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          trailing: unread > 0
-                              ? CircleAvatar(
-                                  radius: 12,
-                                  backgroundColor: theme.colorScheme.primary,
-                                  child: Text(
-                                    '$unread',
-                                    style: TextStyle(
-                                      color: theme.colorScheme.onPrimary,
-                                      fontSize: 11,
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
-                                )
-                              : Text(
-                                  _statusLabel(ticket['status']?.toString()),
-                                  style: theme.textTheme.labelSmall,
-                                ),
-                          onTap: () {
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) =>
-                                    SupportTicketScreen(ticket: ticket),
-                              ),
-                            ).then((_) => _load());
-                          },
-                        ),
-                      );
-                    },
-                  ),
+                    const SizedBox(height: 12),
+                    Text(
+                      t('no_support_tickets') ?? 'No support tickets yet',
+                      style: TextStyle(color: theme.colorScheme.outline),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      t('support_ticket_hint') ??
+                          'Open a ticket and our team will reply from the admin dashboard.',
+                      textAlign: TextAlign.center,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
                 ),
+              ),
+            )
+          : RefreshIndicator(
+              onRefresh: _load,
+              child: ListView.separated(
+                padding: const EdgeInsets.fromLTRB(12, 12, 12, 88),
+                itemCount: _tickets.length,
+                separatorBuilder: (_, __) => const SizedBox(height: 8),
+                itemBuilder: (_, i) {
+                  final ticket = _tickets[i];
+                  final unread = (ticket['unread_count'] as num?)?.toInt() ?? 0;
+                  return Card(
+                    child: ListTile(
+                      onLongPress: () => _confirmDeleteTicket(ticket),
+                      leading: CircleAvatar(
+                        backgroundColor: theme.colorScheme.primaryContainer,
+                        child: Icon(
+                          Icons.confirmation_number_outlined,
+                          color: theme.colorScheme.primary,
+                        ),
+                      ),
+                      title: Text(
+                        ticket['subject']?.toString() ?? '',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      subtitle: Text(
+                        ticket['last_message']?.toString() ?? '',
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (unread > 0)
+                            CircleAvatar(
+                              radius: 12,
+                              backgroundColor: theme.colorScheme.primary,
+                              child: Text(
+                                '$unread',
+                                style: TextStyle(
+                                  color: theme.colorScheme.onPrimary,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            )
+                          else
+                            Text(
+                              _statusLabel(ticket['status']?.toString()),
+                              style: theme.textTheme.labelSmall,
+                            ),
+                          IconButton(
+                            icon: const Icon(Icons.delete_outline, size: 20),
+                            tooltip: t('delete') ?? 'Delete',
+                            onPressed: () => _confirmDeleteTicket(ticket),
+                          ),
+                        ],
+                      ),
+                      onTap: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => SupportTicketScreen(ticket: ticket),
+                          ),
+                        ).then((_) => _load());
+                      },
+                    ),
+                  );
+                },
+              ),
+            ),
     );
   }
 }

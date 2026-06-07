@@ -31,6 +31,8 @@ class Product {
   final int? viewCount;
   @JsonKey(fromJson: parseJsonDouble)
   final double? rating;
+  @JsonKey(name: 'review_count', fromJson: parseJsonInt)
+  final int? reviewCount;
   @JsonKey(name: 'shop_name')
   final String? shopName;
   @JsonKey(name: 'store_id', readValue: readStoreId, fromJson: parseJsonInt)
@@ -91,6 +93,7 @@ class Product {
     this.wentOnlineAt,
     this.viewCount,
     this.rating,
+    this.reviewCount,
     this.shopName,
     this.storeId,
     this.lat,

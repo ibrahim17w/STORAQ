@@ -7,7 +7,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 import '../services/api_service.dart';
 import '../lang/translations.dart';
-import '../widgets/cached_tile_provider.dart';
+import '../config/map_tiles_config.dart';
 import 'store_products_screen.dart';
 import '../services/store_service.dart';
 import '../models/models.dart';
@@ -292,13 +292,7 @@ class _MapScreenState extends ConsumerState<MapScreen> {
             ),
           ),
           children: [
-            TileLayer(
-              urlTemplate:
-                  'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png',
-              subdomains: const ['a', 'b', 'c', 'd'],
-              maxZoom: 20,
-              tileProvider: CachedNetworkTileProvider(),
-            ),
+            MapTilesConfig.standardTileLayer(),
 
             if (_userLocation != null &&
                 _userAccuracy != null &&

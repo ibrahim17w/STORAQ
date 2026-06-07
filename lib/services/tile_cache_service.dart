@@ -29,6 +29,36 @@ class TileCacheService {
     return p.join(_cacheDir!, '$hash.png');
   }
 
+  static String _coordFilePath(int z, int x, int y) =>
+      p.join(_cacheDir!, 'coord_${z}_${x}_$y.png');
+
+  static Future<Uint8List?> getTileByCoord(int z, int x, int y) async {
+    await init();
+    final file = File(_coordFilePath(z, x, y));
+    try {
+      if (await file.exists()) {
+        return await file.readAsBytes();
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  static Future<void> saveTileByCoord(
+    int z,
+    int x,
+    int y,
+    Uint8List data,
+  ) async {
+    await init();
+    final path = _coordFilePath(z, x, y);
+    try {
+      final tempPath = '$path.tmp';
+      final tempFile = File(tempPath);
+      await tempFile.writeAsBytes(data, flush: true);
+      await tempFile.rename(path);
+    } catch (_) {}
+  }
+
   static Future<Uint8List?> getTile(String url) async {
     await init();
     final path = _getFilePath(url);

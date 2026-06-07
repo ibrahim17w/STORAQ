@@ -7,6 +7,7 @@ import '../services/categories_service.dart';
 import '../services/offline_service.dart';
 import '../lang/translations.dart';
 import '../utils/category_helper.dart';
+import '../models/category.dart';
 
 class CategoryPicker extends StatefulWidget {
   final List<int> selectedIds;
@@ -67,17 +68,28 @@ class _CategoryPickerState extends State<CategoryPicker> {
     }
   }
 
+  Map<String, dynamic>? _toCategoryMap(dynamic cat) {
+    if (cat is Category) return cat.toJson();
+    if (cat is Map<String, dynamic>) return cat;
+    if (cat is Map) {
+      try {
+        return Map<String, dynamic>.from(cat);
+      } catch (_) {}
+    }
+    return null;
+  }
+
   void _setCategories(List<dynamic> raw) {
     // DEDUPLICATE: keep only first occurrence of each unique ID
     final seen = <int>{};
     final deduped = <Map<String, dynamic>>[];
     for (final cat in raw) {
-      if (cat is Map<String, dynamic>) {
-        final id = cat['id'] as int? ?? 0;
-        if (id > 0 && !seen.contains(id)) {
-          seen.add(id);
-          deduped.add(cat);
-        }
+      final map = _toCategoryMap(cat);
+      if (map == null) continue;
+      final id = map['id'] as int? ?? int.tryParse('${map['id']}') ?? 0;
+      if (id > 0 && !seen.contains(id)) {
+        seen.add(id);
+        deduped.add(map);
       }
     }
     if (mounted) {

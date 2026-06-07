@@ -59,4 +59,12 @@ class ChatService {
     if (response.statusCode == 201) return data;
     throw Exception(data['error']?.toString() ?? 'Failed to send message');
   }
+
+  static Future<void> deleteConversation(int conversationId) async {
+    final response =
+        await ApiService.authDelete('/chat/conversations/$conversationId');
+    if (response.statusCode == 200) return;
+    final data = jsonDecode(response.body) as Map<String, dynamic>;
+    throw Exception(data['error']?.toString() ?? 'Failed to delete conversation');
+  }
 }

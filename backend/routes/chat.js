@@ -316,4 +316,35 @@ router.post('/chat/conversations/:id/messages', authenticateToken, requireRealUs
   }
 });
 
+router.delete('/chat/conversations/:id', authenticateToken, requireRealUser, attachStoreContext, async (req, res) => {
+  try {
+    const conversationId = parseInt(req.params.id);
+    const userId = req.user.userId;
+    const storeContext = req.storeContext;
+
+    const convo = await pool.query(
+      'SELECT * FROM chat_conversations WHERE id = $1',
+      [conversationId]
+    );
+    if (convo.rows.length === 0) {
+      return res.status(404).json({ error: 'Conversation not found' });
+    }
+
+    const row = convo.rows[0];
+    const isCustomer = row.customer_id === userId;
+    const isStoreStaff =
+      storeContext?.store_id && storeContext.store_id === row.store_id;
+
+    if (!isCustomer && !isStoreStaff) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    await pool.query('DELETE FROM chat_conversations WHERE id = $1', [conversationId]);
+    res.json({ message: 'Conversation deleted', id: conversationId });
+  } catch (err) {
+    console.error('Delete conversation error:', err);
+    res.status(500).json({ error: 'Failed to delete conversation' });
+  }
+});
+
 module.exports = router;

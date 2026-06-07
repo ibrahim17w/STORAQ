@@ -4,6 +4,7 @@ const router = express.Router();
 const { pool } = require('../config/database');
 const { authenticateToken, requireRealUser } = require('../middleware/auth');
 const { sanitizeString } = require('../middleware/helpers');
+const { upload } = require('../config/upload');
 
 const VALID_CATEGORIES = new Set([
   'general',
@@ -11,6 +12,7 @@ const VALID_CATEGORIES = new Set([
   'billing',
   'technical',
   'report',
+  'review_removal',
 ]);
 
 router.get('/support/tickets', authenticateToken, requireRealUser, async (req, res) => {
@@ -70,8 +72,8 @@ router.post('/support/tickets', authenticateToken, requireRealUser, async (req, 
     );
 
     const message = await client.query(
-      `INSERT INTO support_ticket_messages (ticket_id, sender_id, sender_role, body)
-       VALUES ($1, $2, 'user', $3)
+      `INSERT INTO support_ticket_messages (ticket_id, sender_id, sender_role, body, message_type)
+       VALUES ($1, $2, 'user', $3, 'text')
        RETURNING *`,
       [ticket.rows[0].id, userId, body.trim()]
     );
@@ -154,8 +156,8 @@ router.post('/support/tickets/:id/messages', authenticateToken, requireRealUser,
     }
 
     const inserted = await pool.query(
-      `INSERT INTO support_ticket_messages (ticket_id, sender_id, sender_role, body)
-       VALUES ($1, $2, 'user', $3)
+      `INSERT INTO support_ticket_messages (ticket_id, sender_id, sender_role, body, message_type)
+       VALUES ($1, $2, 'user', $3, 'text')
        RETURNING *`,
       [ticketId, userId, body.trim()]
     );
@@ -179,6 +181,164 @@ router.post('/support/tickets/:id/messages', authenticateToken, requireRealUser,
   } catch (err) {
     console.error('Support reply error:', err);
     res.status(500).json({ error: 'Failed to send message' });
+  }
+});
+
+router.post(
+  '/support/tickets/:id/request-image',
+  authenticateToken,
+  requireRealUser,
+  async (req, res) => {
+    try {
+      const ticketId = parseInt(req.params.id);
+      const userId = req.user.userId;
+
+      const ticket = await pool.query(
+        'SELECT * FROM support_tickets WHERE id = $1 AND user_id = $2',
+        [ticketId, userId]
+      );
+      if (ticket.rows.length === 0) {
+        return res.status(404).json({ error: 'Ticket not found' });
+      }
+      if (ticket.rows[0].status === 'closed') {
+        return res.status(400).json({ error: 'This ticket is closed.' });
+      }
+
+      const pending = await pool.query(
+        `SELECT id FROM support_ticket_messages
+         WHERE ticket_id = $1
+           AND sender_id = $2
+           AND message_type = 'image_request'
+           AND created_at > NOW() - INTERVAL '24 hours'
+         LIMIT 1`,
+        [ticketId, userId]
+      );
+      if (pending.rows.length > 0) {
+        return res.status(400).json({
+          error: 'You already have a pending image request. Please wait for admin approval.',
+        });
+      }
+
+      const body =
+        'User requested permission to send an image in this conversation.';
+
+      const inserted = await pool.query(
+        `INSERT INTO support_ticket_messages (
+           ticket_id, sender_id, sender_role, body, message_type, request_status
+         )
+         VALUES ($1, $2, 'user', $3, 'image_request', 'pending')
+         RETURNING *`,
+        [ticketId, userId, body]
+      );
+
+      await pool.query(
+        `UPDATE support_tickets
+         SET last_message_at = NOW(), updated_at = NOW(), status = 'open'
+         WHERE id = $1`,
+        [ticketId]
+      );
+
+      const sender = await pool.query(
+        'SELECT full_name FROM users WHERE id = $1',
+        [userId]
+      );
+
+      res.status(201).json({
+        ...inserted.rows[0],
+        sender_name: sender.rows[0]?.full_name,
+      });
+    } catch (err) {
+      console.error('Support image request error:', err);
+      res.status(500).json({ error: 'Failed to request image upload' });
+    }
+  }
+);
+
+router.post(
+  '/support/tickets/:id/messages/image',
+  authenticateToken,
+  requireRealUser,
+  upload.single('image'),
+  async (req, res) => {
+    try {
+      const ticketId = parseInt(req.params.id);
+      const userId = req.user.userId;
+
+      if (!req.file) {
+        return res.status(400).json({ error: 'Image file is required' });
+      }
+
+      const ticket = await pool.query(
+        'SELECT * FROM support_tickets WHERE id = $1 AND user_id = $2',
+        [ticketId, userId]
+      );
+      if (ticket.rows.length === 0) {
+        return res.status(404).json({ error: 'Ticket not found' });
+      }
+      if (ticket.rows[0].status === 'closed') {
+        return res.status(400).json({ error: 'This ticket is closed.' });
+      }
+      if ((ticket.rows[0].image_quota || 0) < 1) {
+        return res.status(403).json({
+          error: 'Image upload not allowed. Request permission from support first.',
+        });
+      }
+
+      const attachmentUrl = `/uploads/${req.file.filename}`;
+      const caption = sanitizeString(req.body.caption, 500) || '';
+
+      const inserted = await pool.query(
+        `INSERT INTO support_ticket_messages (
+           ticket_id, sender_id, sender_role, body, message_type, attachment_url
+         )
+         VALUES ($1, $2, 'user', $3, 'image', $4)
+         RETURNING *`,
+        [ticketId, userId, caption, attachmentUrl]
+      );
+
+      await pool.query(
+        `UPDATE support_tickets
+         SET image_quota = GREATEST(image_quota - 1, 0),
+             images_sent = images_sent + 1,
+             last_message_at = NOW(),
+             updated_at = NOW(),
+             status = 'open'
+         WHERE id = $1`,
+        [ticketId]
+      );
+
+      const sender = await pool.query(
+        'SELECT full_name FROM users WHERE id = $1',
+        [userId]
+      );
+
+      res.status(201).json({
+        ...inserted.rows[0],
+        sender_name: sender.rows[0]?.full_name,
+      });
+    } catch (err) {
+      console.error('Support image upload error:', err);
+      res.status(500).json({ error: err.message || 'Failed to upload image' });
+    }
+  }
+);
+
+router.delete('/support/tickets/:id', authenticateToken, requireRealUser, async (req, res) => {
+  try {
+    const ticketId = parseInt(req.params.id);
+    const userId = req.user.userId;
+
+    const result = await pool.query(
+      'DELETE FROM support_tickets WHERE id = $1 AND user_id = $2 RETURNING id',
+      [ticketId, userId]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Ticket not found' });
+    }
+    res.json({ message: 'Support ticket deleted', id: ticketId });
+  } catch (err) {
+    console.error('Support ticket delete error:', err);
+    res.status(500).json({ error: 'Failed to delete support ticket' });
   }
 });
 

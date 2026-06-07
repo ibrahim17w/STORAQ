@@ -6,6 +6,8 @@ import '../services/sponsored_products_service.dart';
 import '../widgets/payment/geo_payment_price.dart';
 import '../services/currency_service.dart';
 import '../providers/viewer_location_provider.dart';
+import '../utils/json_parsers.dart';
+import '../utils/payment_support_chat.dart';
 
 class SponsorProductScreen extends ConsumerStatefulWidget {
   final Map<String, dynamic> product;
@@ -153,7 +155,21 @@ class _SponsorProductScreenState extends ConsumerState<SponsorProductScreen> {
             },
             child: Text(t('copy_code') ?? 'Copy Code'),
           ),
-          FilledButton(
+          FilledButton.icon(
+            onPressed: () async {
+              final nav = Navigator.of(context);
+              nav.pop();
+              await openPaymentConfirmationChat(
+                context,
+                referenceCode: ref,
+                paymentType: t('sponsor_product') ?? 'Product Sponsorship',
+                amountText: usd != null ? '\$${usd.toStringAsFixed(2)}' : null,
+              );
+            },
+            icon: const Icon(Icons.chat_bubble_outline, size: 18),
+            label: Text(t('start_payment_chat') ?? 'Start live chat'),
+          ),
+          TextButton(
             onPressed: () => Navigator.pop(context),
             child: Text(t('done') ?? 'Done'),
           ),
@@ -264,7 +280,7 @@ class _SponsorProductScreenState extends ConsumerState<SponsorProductScreen> {
                               final currency =
                                   ref.watch(viewerLocationProvider).paymentCurrency;
                               final dailyUsd =
-                                  (p['price_usd_per_day'] as num?)?.toDouble();
+                                  parseJsonDouble(p['price_usd_per_day']);
                               final dailyPrices =
                                   p['payment_prices_daily'] as Map<String, dynamic>?;
                               final parts = <String>[_scopeDescription(scope)];

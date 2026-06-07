@@ -172,7 +172,27 @@ class _OnlineProductsScreenState extends ConsumerState<OnlineProductsScreen> {
                                   final p = _products[index] as Map<String, dynamic>;
                                   final id = p['id'] as int;
                                   final isOnline = p['is_online'] == true;
+                                  final isSponsored = p['is_sponsored'] == true;
+                                  final scope = p['sponsorship_scope']?.toString();
                                   final busy = _pending.contains(id);
+                                  String _scopeLabel() {
+                                    if (!isSponsored) return '';
+                                    switch (scope) {
+                                      case 'world':
+                                        return t('worldwide') ?? 'Worldwide';
+                                      case 'country':
+                                        return p['sponsorship_target_country']?.toString() ?? (t('country') ?? 'Country');
+                                      case 'city':
+                                        return p['sponsorship_target_city']?.toString() ?? (t('city') ?? 'City');
+                                      case 'village':
+                                        return p['sponsorship_target_village']?.toString() ?? (t('village') ?? 'Village');
+                                      case 'radius':
+                                        final km = p['sponsorship_radius_km'];
+                                        return km != null ? '${km}km' : (t('radius') ?? 'Radius');
+                                      default:
+                                        return scope ?? '';
+                                    }
+                                  }
                                   return ListTile(
                                     leading: ClipRRect(
                                       borderRadius: BorderRadius.circular(8),
@@ -187,22 +207,59 @@ class _OnlineProductsScreenState extends ConsumerState<OnlineProductsScreen> {
                                             : Container(color: theme.colorScheme.surfaceContainerHighest),
                                       ),
                                     ),
-                                    title: Text(p['name']?.toString() ?? ''),
-                                    subtitle: Text(
-                                      isOnline
-                                          ? (t('listed_on_marketplace') ?? 'Listed on marketplace')
-                                          : (t('store_only') ?? 'Store only'),
-                                      style: TextStyle(
-                                        fontSize: 12,
-                                        color: isOnline ? Colors.green.shade700 : Colors.grey.shade600,
-                                      ),
+                                    title: Row(
+                                      children: [
+                                        Flexible(child: Text(p['name']?.toString() ?? '', overflow: TextOverflow.ellipsis)),
+                                        if (isSponsored) ...[
+                                          const SizedBox(width: 6),
+                                          Container(
+                                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                            decoration: BoxDecoration(
+                                              color: Colors.amber.shade700,
+                                              borderRadius: BorderRadius.circular(4),
+                                            ),
+                                            child: Text(
+                                              t('sponsored') ?? 'SPONSORED',
+                                              style: const TextStyle(
+                                                fontSize: 9,
+                                                fontWeight: FontWeight.w800,
+                                                color: Colors.white,
+                                                letterSpacing: 0.4,
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ],
+                                    ),
+                                    subtitle: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          isOnline
+                                              ? (t('listed_on_marketplace') ?? 'Listed on marketplace')
+                                              : (t('store_only') ?? 'Store only'),
+                                          style: TextStyle(
+                                            fontSize: 12,
+                                            color: isOnline ? Colors.green.shade700 : Colors.grey.shade600,
+                                          ),
+                                        ),
+                                        if (isSponsored)
+                                          Text(
+                                            '${t('sponsored_scope') ?? 'Sponsored'}: ${_scopeLabel()}',
+                                            style: TextStyle(
+                                              fontSize: 11,
+                                              color: Colors.amber.shade800,
+                                              fontWeight: FontWeight.w600,
+                                            ),
+                                          ),
+                                      ],
                                     ),
                                     trailing: busy
                                         ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2))
                                         : Row(
                                             mainAxisSize: MainAxisSize.min,
                                             children: [
-                                              if (isOnline)
+                                              if (isOnline && !isSponsored)
                                                 IconButton(
                                                   tooltip: t('sponsor_product') ?? 'Sponsor Product',
                                                   icon: const Icon(Icons.campaign_outlined),
@@ -211,8 +268,10 @@ class _OnlineProductsScreenState extends ConsumerState<OnlineProductsScreen> {
                                                     MaterialPageRoute(
                                                       builder: (_) => SponsorProductScreen(product: p),
                                                     ),
-                                                  ),
+                                                  ).then((_) => _load()),
                                                 ),
+                                              if (isOnline && isSponsored)
+                                                Icon(Icons.check_circle, color: Colors.amber.shade700, size: 22),
                                               Switch(
                                                 value: isOnline,
                                                 onChanged: (v) => _toggleOnline(p, v),

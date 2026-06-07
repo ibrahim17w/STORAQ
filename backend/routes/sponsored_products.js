@@ -20,7 +20,7 @@ const {
   MAX_DURATION_DAYS,
   MIN_RADIUS_KM,
   MAX_RADIUS_KM,
-  campaignMatchesViewer,
+  filterCampaignsForViewer,
   getAllPricing,
   calculatePrice,
   generateSponsorReferenceCode,
@@ -132,7 +132,7 @@ router.get('/products/sponsored', async (req, res) => {
        LIMIT 100`
     );
 
-    const matched = campaigns.rows.filter((row) => campaignMatchesViewer(row, viewer));
+    const matched = filterCampaignsForViewer(campaigns.rows, viewer);
     const seen = new Set();
     const products = [];
     for (const row of matched) {

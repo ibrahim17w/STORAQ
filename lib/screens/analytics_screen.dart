@@ -12,26 +12,22 @@ class AnalyticsScreen extends ConsumerStatefulWidget {
   ConsumerState<AnalyticsScreen> createState() => _AnalyticsScreenState();
 }
 
-class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen>
-    with SingleTickerProviderStateMixin {
+class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen> {
   Map<String, dynamic>? _data;
   bool _loading = true;
   String? _error;
   DateTime? _lastUpdated;
   int _selectedDays = 7;
-  late TabController _tabController;
+  int _section = 0;
+  int? _touchedPieIndex;
+  int? _touchedTopProductIndex;
+
+  static const _sectionCount = 6;
 
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 3, vsync: this);
     _loadData();
-  }
-
-  @override
-  void dispose() {
-    _tabController.dispose();
-    super.dispose();
   }
 
   Future<void> _loadData() async {
@@ -113,114 +109,124 @@ class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen>
                 )
               : Column(
                   children: [
-                    Material(
-                      color: theme.colorScheme.surface,
-                      elevation: 1,
-                      child: TabBar(
-                        controller: _tabController,
-                        isScrollable: !isWide,
-                        labelColor: primary,
-                        unselectedLabelColor: theme.colorScheme.onSurfaceVariant,
-                        indicatorColor: primary,
-                        tabs: [
-                          Tab(
-                            text: t('overview') ?? 'Overview',
-                            icon: const Icon(Icons.dashboard_outlined),
-                          ),
-                          Tab(
-                            text: t('sales') ?? 'Sales',
-                            icon: const Icon(Icons.show_chart_outlined),
-                          ),
-                          Tab(
-                            text: t('finance') ?? 'Finance',
-                            icon: const Icon(Icons.account_balance_outlined),
-                          ),
-                        ],
-                      ),
-                    ),
                     Padding(
                       padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
                       child: _buildPeriodSelector(theme, primary),
                     ),
-                    Expanded(
-                      child: TabBarView(
-                        controller: _tabController,
-                        children: [
-                          _buildOverviewTab(theme, primary, isWide),
-                          _buildSalesTab(theme, primary, isWide),
-                          _buildFinanceTab(theme, primary, isWide),
-                        ],
-                      ),
-                    ),
+                    const SizedBox(height: 8),
+                    _buildSectionNav(theme, primary),
+                    Expanded(child: _buildSectionContent(theme, primary, isWide)),
                   ],
                 ),
     );
   }
 
-  Widget _buildOverviewTab(ThemeData theme, Color primary, bool isWide) {
-    final data = _data!;
-    return RefreshIndicator(
-      onRefresh: _loadData,
-      child: ListView(
-        physics: const AlwaysScrollableScrollPhysics(),
-        padding: EdgeInsets.all(isWide ? 24 : 16),
-        children: [
-          _buildTopCards(data, theme, primary, isWide),
-          const SizedBox(height: 16),
-          _buildVisitsCard(data, theme, primary),
-          const SizedBox(height: 24),
-        ],
+  List<String> _sectionLabels() => [
+        t('overview'),
+        t('revenue'),
+        t('orders'),
+        t('sales_by_category'),
+        t('top_products_by_revenue'),
+        t('finance'),
+      ];
+
+  Widget _buildSectionNav(ThemeData theme, Color primary) {
+    final labels = _sectionLabels();
+    final surface = _cardSurface(theme);
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: surface,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: _cardBorder(theme)),
+        ),
+        child: SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          padding: const EdgeInsets.all(4),
+          child: Row(
+            children: List.generate(_sectionCount, (i) {
+              final selected = _section == i;
+              return Padding(
+                padding: const EdgeInsets.only(right: 4),
+                child: Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    onTap: () => setState(() => _section = i),
+                    borderRadius: BorderRadius.circular(8),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 150),
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: selected ? primary.withOpacity(0.12) : Colors.transparent,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                          color: selected ? primary.withOpacity(0.35) : Colors.transparent,
+                        ),
+                      ),
+                      child: Text(
+                        labels[i],
+                        style: theme.textTheme.labelLarge?.copyWith(
+                          color: selected ? primary : theme.colorScheme.onSurfaceVariant,
+                          fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              );
+            }),
+          ),
+        ),
       ),
     );
   }
 
-  Widget _buildSalesTab(ThemeData theme, Color primary, bool isWide) {
+  Widget _buildSectionContent(ThemeData theme, Color primary, bool isWide) {
     final data = _data!;
+    final padding = EdgeInsets.all(isWide ? 24 : 16);
+
     return RefreshIndicator(
       onRefresh: _loadData,
       child: ListView(
         physics: const AlwaysScrollableScrollPhysics(),
-        padding: EdgeInsets.all(isWide ? 24 : 16),
+        padding: padding,
         children: [
-          if (isWide)
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(child: _buildRevenueChart(data, theme, primary)),
-                const SizedBox(width: 16),
-                Expanded(child: _buildOrdersChart(data, theme, primary)),
-              ],
-            )
-          else ...[
-            _buildRevenueChart(data, theme, primary),
+          if (_section == 0) ...[
+            _buildTopCards(data, theme, primary, isWide),
             const SizedBox(height: 16),
-            _buildOrdersChart(data, theme, primary),
+            _buildVisitsCard(data, theme, primary),
+          ] else if (_section == 1)
+            _buildRevenueChart(data, theme, primary)
+          else if (_section == 2)
+            _buildOrdersChart(data, theme, primary)
+          else if (_section == 3)
+            _buildCategorySalesChart(data, theme, primary)
+          else if (_section == 4)
+            _buildTopProductsChart(data, theme, primary)
+          else if (_section == 5) ...[
+            _buildRevenueVsExpensesChart(data, theme, primary),
+            const SizedBox(height: 16),
+            _buildExpensesChart(data, theme, primary),
           ],
-          const SizedBox(height: 16),
-          _buildCategorySalesChart(data, theme, primary),
-          const SizedBox(height: 16),
-          _buildTopProductsChart(data, theme, primary),
           const SizedBox(height: 24),
         ],
       ),
     );
   }
 
-  Widget _buildFinanceTab(ThemeData theme, Color primary, bool isWide) {
-    final data = _data!;
-    return RefreshIndicator(
-      onRefresh: _loadData,
-      child: ListView(
-        physics: const AlwaysScrollableScrollPhysics(),
-        padding: EdgeInsets.all(isWide ? 24 : 16),
-        children: [
-          _buildRevenueVsExpensesChart(data, theme, primary),
-          const SizedBox(height: 16),
-          _buildExpensesChart(data, theme, primary),
-          const SizedBox(height: 24),
-        ],
-      ),
-    );
+  Color _cardSurface(ThemeData theme) {
+    return theme.brightness == Brightness.dark
+        ? const Color(0xFF1E1E1E)
+        : const Color(0xFFF5F5F7);
+  }
+
+  Color _cardBorder(ThemeData theme) {
+    return theme.dividerColor.withOpacity(theme.brightness == Brightness.dark ? 0.6 : 0.35);
+  }
+
+  Color _gridLine(ThemeData theme) {
+    return theme.colorScheme.onSurface.withOpacity(0.08);
   }
 
   // ==================== TOP CARDS ====================
@@ -234,9 +240,9 @@ class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen>
       crossAxisCount: isWide ? 3 : 2,
       shrinkWrap: true,
       physics: const NeverScrollableScrollPhysics(),
-      mainAxisSpacing: 12,
-      crossAxisSpacing: 12,
-      childAspectRatio: isWide ? 1.8 : 1.6,
+      mainAxisSpacing: 16,
+      crossAxisSpacing: 16,
+      childAspectRatio: isWide ? 2.4 : 2.1,
       children: [
         _statCard(
           icon: Icons.attach_money,
@@ -244,6 +250,7 @@ class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen>
           value: _formatCurrency(data['today_revenue'] ?? 0),
           color: primary,
           theme: theme,
+          tooltip: t('today_revenue_hint') ?? 'Total sales revenue recorded today',
         ),
         _statCard(
           icon: Icons.shopping_bag_outlined,
@@ -251,6 +258,7 @@ class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen>
           value: '${data['today_orders'] ?? 0}',
           color: Colors.orange.shade600,
           theme: theme,
+          tooltip: t('today_orders_hint') ?? 'Number of orders placed today',
         ),
         _statCard(
           icon: Icons.warning_amber_rounded,
@@ -258,6 +266,7 @@ class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen>
           value: '${data['low_stock_count'] ?? 0}',
           color: Colors.red.shade600,
           theme: theme,
+          tooltip: t('low_stock_hint') ?? 'Products at or below low-stock threshold',
         ),
         _statCard(
           icon: Icons.account_balance_wallet_outlined,
@@ -265,6 +274,7 @@ class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen>
           value: _formatCurrency(data['outstanding_credits'] ?? 0),
           color: Colors.purple.shade600,
           theme: theme,
+          tooltip: t('outstanding_credits_hint') ?? 'Unpaid customer credit balances',
         ),
         _statCard(
           icon: Icons.storefront_outlined,
@@ -272,6 +282,7 @@ class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen>
           value: '${data['store_visits_today'] ?? 0}',
           color: Colors.teal.shade600,
           theme: theme,
+          tooltip: t('store_visits_hint') ?? 'Times shoppers opened your store today',
         ),
         _statCard(
           icon: Icons.visibility_outlined,
@@ -279,6 +290,7 @@ class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen>
           value: '${data['product_views_today'] ?? 0}',
           color: Colors.indigo.shade600,
           theme: theme,
+          tooltip: t('product_views_hint') ?? 'Product detail page views today',
         ),
       ],
     );
@@ -286,9 +298,12 @@ class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen>
 
   Widget _buildVisitsCard(Map<String, dynamic> data, ThemeData theme, Color primary) {
     return Card(
-      elevation: 1,
-      shadowColor: Colors.black12,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      elevation: 0,
+      color: _cardSurface(theme),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: _cardBorder(theme)),
+      ),
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
@@ -332,20 +347,35 @@ class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen>
     return Row(
       children: [
         Container(
-          padding: const EdgeInsets.all(8),
+          width: 40,
+          height: 40,
           decoration: BoxDecoration(
-            color: color.withOpacity(0.1),
-            borderRadius: BorderRadius.circular(8),
+            color: color.withOpacity(0.12),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: color.withOpacity(0.2)),
           ),
           child: Icon(icon, size: 20, color: color),
         ),
-        const SizedBox(width: 10),
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(value, style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold)),
-            Text(label, style: theme.textTheme.bodySmall?.copyWith(color: Colors.grey)),
-          ],
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                value,
+                style: theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: -0.02,
+                ),
+              ),
+              Text(
+                label,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ],
+          ),
         ),
       ],
     );
@@ -357,44 +387,66 @@ class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen>
     required String value,
     required Color color,
     required ThemeData theme,
+    String? tooltip,
   }) {
-    return Card(
+    final card = Card(
       elevation: 0,
-      color: color.withOpacity(0.08),
+      color: _cardSurface(theme),
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(14),
-        side: BorderSide(color: color.withOpacity(0.15)),
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: _cardBorder(theme)),
       ),
       child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
+        padding: const EdgeInsets.all(16),
+        child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
             Container(
-              padding: const EdgeInsets.all(6),
+              width: 40,
+              height: 40,
               decoration: BoxDecoration(
-                color: color.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(8),
+                color: color.withOpacity(0.12),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: color.withOpacity(0.2)),
               ),
               child: Icon(icon, size: 20, color: color),
             ),
-            const Spacer(),
-            Text(
-              value,
-              style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-            Text(
-              label,
-              style: theme.textTheme.bodySmall?.copyWith(color: Colors.grey.shade600),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    value,
+                    style: theme.textTheme.titleLarge?.copyWith(
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: -0.02,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    label,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                      fontWeight: FontWeight.w500,
+                    ),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+              ),
             ),
           ],
         ),
       ),
+    );
+    if (tooltip == null || tooltip.isEmpty) return card;
+    return Tooltip(
+      message: tooltip,
+      waitDuration: const Duration(milliseconds: 350),
+      child: card,
     );
   }
 
@@ -422,18 +474,21 @@ class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen>
           _loadData();
         }
       },
-      borderRadius: BorderRadius.circular(20),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+      borderRadius: BorderRadius.circular(8),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
         decoration: BoxDecoration(
-          color: selected ? primary : Colors.transparent,
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: selected ? primary : Colors.grey.shade300),
+          color: selected ? primary.withOpacity(0.12) : Colors.transparent,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: selected ? primary.withOpacity(0.35) : _cardBorder(theme),
+          ),
         ),
         child: Text(
           label,
-          style: theme.textTheme.bodySmall?.copyWith(
-            color: selected ? Colors.white : Colors.grey.shade700,
+          style: theme.textTheme.labelMedium?.copyWith(
+            color: selected ? primary : theme.colorScheme.onSurfaceVariant,
             fontWeight: FontWeight.w600,
           ),
         ),
@@ -462,7 +517,7 @@ class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen>
               show: true,
               drawVerticalLine: false,
               horizontalInterval: _getInterval(spots.map((s) => s.y).toList()),
-              getDrawingHorizontalLine: (v) => FlLine(color: Colors.grey.shade200, strokeWidth: 1),
+              getDrawingHorizontalLine: (v) => FlLine(color: _gridLine(theme), strokeWidth: 1),
             ),
             titlesData: FlTitlesData(
               leftTitles: AxisTitles(
@@ -471,7 +526,7 @@ class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen>
                   reservedSize: 50,
                   getTitlesWidget: (v, meta) => Text(
                     _shortNum(v),
-                    style: const TextStyle(fontSize: 10, color: Colors.grey),
+                    style: TextStyle(fontSize: 10, color: theme.colorScheme.onSurfaceVariant),
                   ),
                 ),
               ),
@@ -485,7 +540,7 @@ class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen>
                     final day = series[idx]['day']?.toString() ?? '';
                     return Text(
                       day.length >= 10 ? day.substring(5, 10) : day,
-                      style: const TextStyle(fontSize: 9, color: Colors.grey),
+                      style: TextStyle(fontSize: 9, color: theme.colorScheme.onSurfaceVariant),
                     );
                   },
                 ),
@@ -494,16 +549,30 @@ class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen>
               rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
             ),
             borderData: FlBorderData(show: false),
+            lineTouchData: LineTouchData(
+              touchTooltipData: LineTouchTooltipData(
+                getTooltipItems: (spots) => spots.map((s) {
+                  final idx = s.x.toInt();
+                  final day = idx >= 0 && idx < series.length
+                      ? (series[idx]['day']?.toString() ?? '')
+                      : '';
+                  return LineTooltipItem(
+                    '$day\n${_formatCurrency(s.y)}',
+                    const TextStyle(color: Colors.white, fontSize: 11),
+                  );
+                }).toList(),
+              ),
+            ),
             lineBarsData: [
               LineChartBarData(
                 spots: spots,
                 isCurved: true,
                 color: primary,
-                barWidth: 2.5,
+                barWidth: 2,
                 dotData: const FlDotData(show: false),
                 belowBarData: BarAreaData(
                   show: true,
-                  color: primary.withOpacity(0.1),
+                  color: primary.withOpacity(0.08),
                 ),
               ),
             ],
@@ -534,7 +603,7 @@ class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen>
               show: true,
               drawVerticalLine: false,
               horizontalInterval: _getInterval(spots.map((s) => s.y).toList()),
-              getDrawingHorizontalLine: (v) => FlLine(color: Colors.grey.shade200, strokeWidth: 1),
+              getDrawingHorizontalLine: (v) => FlLine(color: _gridLine(theme), strokeWidth: 1),
             ),
             titlesData: FlTitlesData(
               leftTitles: AxisTitles(
@@ -543,7 +612,7 @@ class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen>
                   reservedSize: 40,
                   getTitlesWidget: (v, meta) => Text(
                     v.toInt().toString(),
-                    style: const TextStyle(fontSize: 10, color: Colors.grey),
+                    style: TextStyle(fontSize: 10, color: theme.colorScheme.onSurfaceVariant),
                   ),
                 ),
               ),
@@ -557,7 +626,7 @@ class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen>
                     final day = series[idx]['day']?.toString() ?? '';
                     return Text(
                       day.length >= 10 ? day.substring(5, 10) : day,
-                      style: const TextStyle(fontSize: 9, color: Colors.grey),
+                      style: TextStyle(fontSize: 9, color: theme.colorScheme.onSurfaceVariant),
                     );
                   },
                 ),
@@ -566,16 +635,30 @@ class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen>
               rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
             ),
             borderData: FlBorderData(show: false),
+            lineTouchData: LineTouchData(
+              touchTooltipData: LineTouchTooltipData(
+                getTooltipItems: (spots) => spots.map((s) {
+                  final idx = s.x.toInt();
+                  final day = idx >= 0 && idx < series.length
+                      ? (series[idx]['day']?.toString() ?? '')
+                      : '';
+                  return LineTooltipItem(
+                    '$day\n${s.y.toInt()} ${t('orders')}',
+                    const TextStyle(color: Colors.white, fontSize: 11),
+                  );
+                }).toList(),
+              ),
+            ),
             lineBarsData: [
               LineChartBarData(
                 spots: spots,
                 isCurved: true,
-                color: Colors.orange.shade600,
-                barWidth: 2.5,
+                color: theme.colorScheme.tertiary,
+                barWidth: 2,
                 dotData: const FlDotData(show: false),
                 belowBarData: BarAreaData(
                   show: true,
-                  color: Colors.orange.shade600.withOpacity(0.1),
+                  color: theme.colorScheme.tertiary.withOpacity(0.08),
                 ),
               ),
             ],
@@ -595,18 +678,7 @@ class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen>
       (sum, e) => sum + (double.tryParse(e['total'].toString()) ?? 0),
     );
 
-    final colors = [
-      primary,
-      Colors.orange.shade500,
-      Colors.green.shade500,
-      Colors.purple.shade500,
-      Colors.teal.shade500,
-      Colors.red.shade400,
-      Colors.amber.shade600,
-      Colors.indigo.shade400,
-      Colors.pink.shade400,
-      Colors.cyan.shade500,
-    ];
+    final colors = _chartPalette(theme, primary);
 
     return _chartCard(
       title: t('sales_by_category'),
@@ -620,18 +692,37 @@ class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen>
               child: PieChart(
                 PieChartData(
                   sectionsSpace: 2,
-                  centerSpaceRadius: 36,
+                  centerSpaceRadius: 44,
+                  pieTouchData: PieTouchData(
+                    touchCallback: (event, response) {
+                      setState(() {
+                        if (!event.isInterestedForInteractions ||
+                            response == null ||
+                            response.touchedSection == null) {
+                          _touchedPieIndex = null;
+                          return;
+                        }
+                        _touchedPieIndex =
+                            response.touchedSection!.touchedSectionIndex;
+                      });
+                    },
+                  ),
                   sections: categories.asMap().entries.map((entry) {
                     final i = entry.key;
                     final cat = entry.value;
                     final val = double.tryParse(cat['total'].toString()) ?? 0;
-                    final pct = total > 0 ? (val / total * 100) : 0;
+                    final pct = total > 0 ? (val / total * 100).round() : 0;
+                    final touched = _touchedPieIndex == i;
                     return PieChartSectionData(
                       color: colors[i % colors.length],
                       value: val,
-                      title: '${pct.toStringAsFixed(0)}%',
-                      titleStyle: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.white),
-                      radius: 50,
+                      title: touched ? '$pct%' : '',
+                      titleStyle: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                        color: theme.colorScheme.onSurface,
+                      ),
+                      radius: touched ? 58 : 52,
                     );
                   }).toList(),
                 ),
@@ -646,25 +737,38 @@ class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen>
                 children: categories.asMap().entries.take(6).map((entry) {
                   final i = entry.key;
                   final cat = entry.value;
+                  final val = double.tryParse(cat['total'].toString()) ?? 0;
+                  final pct = total > 0 ? (val / total * 100).round() : 0;
                   return Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 3),
+                    padding: const EdgeInsets.symmetric(vertical: 6),
                     child: Row(
                       children: [
                         Container(
-                          width: 10,
-                          height: 10,
+                          width: 8,
+                          height: 8,
                           decoration: BoxDecoration(
                             color: colors[i % colors.length],
-                            borderRadius: BorderRadius.circular(2),
+                            shape: BoxShape.circle,
                           ),
                         ),
-                        const SizedBox(width: 6),
+                        const SizedBox(width: 10),
                         Expanded(
-                          child: Text(
-                            cat['category']?.toString() ?? '',
-                            style: const TextStyle(fontSize: 11),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                cat['category']?.toString() ?? '',
+                                style: theme.textTheme.bodySmall?.copyWith(fontWeight: FontWeight.w600),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              Text(
+                                '${_formatCurrency(val)} · $pct%',
+                                style: theme.textTheme.labelSmall?.copyWith(
+                                  color: theme.colorScheme.onSurfaceVariant,
+                                ),
+                              ),
+                            ],
                           ),
                         ),
                       ],
@@ -701,9 +805,21 @@ class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen>
           final revenue = double.tryParse(product['revenue'].toString()) ?? 0;
           final fraction = maxRevenue > 0 ? revenue / maxRevenue : 0.0;
 
+          final index = entry.key;
           return Padding(
             padding: const EdgeInsets.symmetric(vertical: 4),
-            child: Row(
+            child: Tooltip(
+              message: '$name — ${_formatCurrency(revenue)}',
+              waitDuration: const Duration(milliseconds: 300),
+              child: InkWell(
+                onTap: () => setState(() {
+                  _touchedTopProductIndex =
+                      _touchedTopProductIndex == index ? null : index;
+                }),
+                borderRadius: BorderRadius.circular(6),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 2),
+                  child: Row(
               children: [
                 SizedBox(
                   width: 80,
@@ -732,7 +848,9 @@ class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen>
                             height: 20,
                             width: constraints.maxWidth * fraction,
                             decoration: BoxDecoration(
-                              color: primary.withOpacity(0.8),
+                              color: primary.withOpacity(
+                                _touchedTopProductIndex == index ? 1.0 : 0.8,
+                              ),
                               borderRadius: BorderRadius.circular(4),
                             ),
                           ),
@@ -751,6 +869,9 @@ class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen>
                   ),
                 ),
               ],
+            ),
+                ),
+              ),
             ),
           );
         }).toList(),
@@ -822,7 +943,7 @@ class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen>
             gridData: FlGridData(
               show: true,
               drawVerticalLine: false,
-              getDrawingHorizontalLine: (v) => FlLine(color: Colors.grey.shade200, strokeWidth: 1),
+              getDrawingHorizontalLine: (v) => FlLine(color: _gridLine(theme), strokeWidth: 1),
             ),
             barGroups: expenses.asMap().entries.map((entry) {
               final i = entry.key;
@@ -833,7 +954,7 @@ class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen>
                 barRods: [
                   BarChartRodData(
                     toY: val,
-                    color: Colors.red.shade400,
+                    color: theme.colorScheme.error.withOpacity(0.75),
                     width: 18,
                     borderRadius: const BorderRadius.only(
                       topLeft: Radius.circular(4),
@@ -881,7 +1002,7 @@ class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen>
         barRods: [
           BarChartRodData(
             toY: expenseMap[m] ?? 0,
-            color: Colors.red.shade300.withOpacity(0.6),
+            color: theme.colorScheme.error.withOpacity(0.45),
             width: 16,
             borderRadius: const BorderRadius.only(
               topLeft: Radius.circular(3),
@@ -909,7 +1030,17 @@ class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen>
               BarChartData(
                 alignment: BarChartAlignment.spaceEvenly,
                 maxY: maxY,
-                barTouchData: BarTouchData(enabled: false),
+                barTouchData: BarTouchData(
+                  touchTooltipData: BarTouchTooltipData(
+                    getTooltipItem: (group, groupIdx, rod, rodIdx) {
+                      final m = sortedMonths[group.x.toInt()];
+                      return BarTooltipItem(
+                        '$m\n${t('expenses')}: ${_formatCurrency(rod.toY)}',
+                        const TextStyle(color: Colors.white, fontSize: 11),
+                      );
+                    },
+                  ),
+                ),
                 titlesData: FlTitlesData(
                   leftTitles: AxisTitles(
                     sideTitles: SideTitles(
@@ -942,7 +1073,7 @@ class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen>
                 gridData: FlGridData(
                   show: true,
                   drawVerticalLine: false,
-                  getDrawingHorizontalLine: (v) => FlLine(color: Colors.grey.shade200, strokeWidth: 1),
+                  getDrawingHorizontalLine: (v) => FlLine(color: _gridLine(theme), strokeWidth: 1),
                 ),
                 barGroups: expenseBars,
               ),
@@ -951,7 +1082,17 @@ class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen>
               LineChartData(
                 maxY: maxY,
                 minY: 0,
-                lineTouchData: const LineTouchData(enabled: false),
+                lineTouchData: LineTouchData(
+                  touchTooltipData: LineTouchTooltipData(
+                    getTooltipItems: (spots) => spots.map((s) {
+                      final m = sortedMonths[s.x.toInt()];
+                      return LineTooltipItem(
+                        '$m\n${t('revenue')}: ${_formatCurrency(s.y)}',
+                        const TextStyle(color: Colors.white, fontSize: 11),
+                      );
+                    }).toList(),
+                  ),
+                ),
                 titlesData: const FlTitlesData(show: false),
                 borderData: FlBorderData(show: false),
                 gridData: const FlGridData(show: false),
@@ -960,7 +1101,7 @@ class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen>
                     spots: revenueSpots,
                     isCurved: true,
                     color: primary,
-                    barWidth: 2.5,
+                    barWidth: 2,
                     dotData: FlDotData(
                       show: true,
                       getDotPainter: (spot, pct, bar, idx) => FlDotCirclePainter(
@@ -982,7 +1123,14 @@ class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen>
           const SizedBox(width: 4),
           Text(t('revenue'), style: const TextStyle(fontSize: 10, color: Colors.grey)),
           const SizedBox(width: 12),
-          Container(width: 12, height: 8, decoration: BoxDecoration(color: Colors.red.shade300, borderRadius: BorderRadius.circular(2))),
+          Container(
+            width: 12,
+            height: 8,
+            decoration: BoxDecoration(
+              color: theme.colorScheme.error.withOpacity(0.45),
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
           const SizedBox(width: 4),
           Text(t('expenses'), style: const TextStyle(fontSize: 10, color: Colors.grey)),
         ],
@@ -991,17 +1139,37 @@ class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen>
   }
 
   // ==================== HELPERS ====================
+  List<Color> _chartPalette(ThemeData theme, Color primary) {
+    return [
+      primary,
+      theme.colorScheme.tertiary,
+      theme.colorScheme.secondary,
+      theme.colorScheme.onSurfaceVariant,
+      const Color(0xFF64748B),
+      const Color(0xFF94A3B8),
+    ];
+  }
+
   Widget _chartCard({required String title, required ThemeData theme, required Widget child, Widget? legend}) {
     return Card(
       elevation: 0,
-      color: theme.colorScheme.surfaceContainerHighest.withOpacity(0.35),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      color: _cardSurface(theme),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: _cardBorder(theme)),
+      ),
       child: Padding(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(20),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(title, style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w600)),
+            Text(
+              title,
+              style: theme.textTheme.titleSmall?.copyWith(
+                fontWeight: FontWeight.w600,
+                letterSpacing: -0.01,
+              ),
+            ),
             if (legend != null) ...[const SizedBox(height: 8), legend],
             const SizedBox(height: 16),
             child,

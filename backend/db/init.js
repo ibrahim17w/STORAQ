@@ -893,6 +893,17 @@ async function initSupportTables() {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_support_tickets_user ON support_tickets(user_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_support_tickets_status ON support_tickets(status, last_message_at DESC);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_support_messages_ticket ON support_ticket_messages(ticket_id, created_at);`);
+  await pool.query(`
+    ALTER TABLE support_tickets
+      ADD COLUMN IF NOT EXISTS image_quota INTEGER NOT NULL DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS images_sent INTEGER NOT NULL DEFAULT 0;
+  `);
+  await pool.query(`
+    ALTER TABLE support_ticket_messages
+      ADD COLUMN IF NOT EXISTS message_type VARCHAR(20) NOT NULL DEFAULT 'text',
+      ADD COLUMN IF NOT EXISTS attachment_url VARCHAR(500),
+      ADD COLUMN IF NOT EXISTS request_status VARCHAR(20);
+  `);
   console.log('✅ Support ticket tables initialized');
 }
 
@@ -1066,6 +1077,61 @@ async function initPromoTables() {
   console.log('✅ Promo tables initialized');
 }
 
+async function initReviewTables() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS store_reviews (
+      id SERIAL PRIMARY KEY,
+      store_id INTEGER NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      rating INTEGER NOT NULL CHECK (rating >= 1 AND rating <= 5),
+      comment TEXT,
+      status VARCHAR(20) DEFAULT 'active',
+      removed_at TIMESTAMP,
+      removed_by_admin_id INTEGER,
+      removal_reason TEXT,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW(),
+      UNIQUE(store_id, user_id)
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_store_reviews_store ON store_reviews(store_id, status, created_at DESC);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_store_reviews_user ON store_reviews(user_id);`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS product_reviews (
+      id SERIAL PRIMARY KEY,
+      product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      rating INTEGER NOT NULL CHECK (rating >= 1 AND rating <= 5),
+      comment TEXT,
+      status VARCHAR(20) DEFAULT 'active',
+      removed_at TIMESTAMP,
+      removed_by_admin_id INTEGER,
+      removal_reason TEXT,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW(),
+      UNIQUE(product_id, user_id)
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_product_reviews_product ON product_reviews(product_id, status, created_at DESC);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_product_reviews_user ON product_reviews(user_id);`);
+
+  await pool.query(`
+    DO $$ BEGIN
+      IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'products') THEN
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='products' AND column_name='rating') THEN
+          ALTER TABLE products ADD COLUMN rating DECIMAL(2,1) DEFAULT 5.0;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='products' AND column_name='review_count') THEN
+          ALTER TABLE products ADD COLUMN review_count INTEGER DEFAULT 0;
+        END IF;
+      END IF;
+    END $$;
+  `);
+
+  console.log('✅ Review tables initialized');
+}
+
 module.exports = {
   initInventoryTables,
   initAuthTables,
@@ -1074,4 +1140,5 @@ module.exports = {
   initSupportTables,
   initSponsoredProductTables,
   initPromoTables,
+  initReviewTables,
 };

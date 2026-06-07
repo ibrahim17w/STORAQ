@@ -4,7 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
-import '../widgets/cached_tile_provider.dart';
+import '../config/map_tiles_config.dart';
 import '../lang/translations.dart';
 
 class MapPickerScreen extends ConsumerStatefulWidget {
@@ -156,13 +156,7 @@ class _MapPickerScreenState extends ConsumerState<MapPickerScreen> {
           ),
         ),
         children: [
-          TileLayer(
-            urlTemplate:
-                'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png',
-            subdomains: const ['a', 'b', 'c', 'd'],
-            maxZoom: 20,
-            tileProvider: CachedNetworkTileProvider(),
-          ),
+          MapTilesConfig.standardTileLayer(),
 
           if (_userLocation != null &&
               _userAccuracy != null &&
