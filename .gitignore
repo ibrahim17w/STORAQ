@@ -26,6 +26,11 @@ android/app/build/
 # is commented out by default.
 #.vscode/
 .env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
 node_modules/
 build/
 .dart_tool/
@@ -55,3 +60,10 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Runtime uploads and generated reports
+backend/uploads/
+admin-dashboard/uploads/
+coverage/
+backend/coverage/
+admin-dashboard/coverage/

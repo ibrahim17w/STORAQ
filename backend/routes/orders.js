@@ -82,9 +82,21 @@ router.post('/checkout', authenticateToken, requireRealUser, attachStoreContext,
 
     for (const item of validatedItems) {
       await client.query(
-        `INSERT INTO order_items (order_id, product_id, product_name, quantity, unit_price, total_price)
-         VALUES ($1,$2,$3,$4,$5,$6)`,
-        [order.id, item.product_id, item.product_name, item.quantity, item.unit_price, item.total_price]
+        `INSERT INTO order_items (order_id, product_id, product_name, quantity, unit_price, total_price, currency, display_price, display_currency)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+        [
+          order.id,
+          item.product_id,
+          item.product_name,
+          item.quantity,
+          item.unit_price,
+          item.total_price,
+          item.currency || null,
+          item.display_price != null && !isNaN(parseFloat(item.display_price))
+            ? parseFloat(item.display_price)
+            : null,
+          item.display_currency || null,
+        ]
       );
       await client.query(
         'UPDATE products SET quantity = quantity - $1 WHERE id = $2',
@@ -95,9 +107,12 @@ router.post('/checkout', authenticateToken, requireRealUser, attachStoreContext,
     await client.query('COMMIT');
 
     const itemsResult = await pool.query(
-      `SELECT oi.*, p.name as product_name, p.barcode
+      `SELECT oi.*,
+              COALESCE(oi.product_name, p.name) AS product_name,
+              COALESCE(oi.barcode, p.barcode) AS barcode,
+              p.image_url
        FROM order_items oi
-       JOIN products p ON oi.product_id = p.id
+       LEFT JOIN products p ON oi.product_id = p.id
        WHERE oi.order_id=$1`,
       [order.id]
     );
@@ -112,6 +127,39 @@ router.post('/checkout', authenticateToken, requireRealUser, attachStoreContext,
     res.status(400).json({ error: err.message || 'Checkout failed' });
   } finally {
     client.release();
+  }
+});
+
+router.get('/my-orders', authenticateToken, requireRealUser, async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const { page, limit, offset } = getPagination(req, 20, 100);
+
+    const countResult = await pool.query(
+      'SELECT COUNT(*) as total FROM orders WHERE customer_user_id = $1',
+      [userId]
+    );
+    const total = parseInt(countResult.rows[0].total);
+
+    const result = await pool.query(
+      `SELECT o.*,
+              s.name AS store_name,
+              (SELECT COUNT(*) FROM order_items oi WHERE oi.order_id = o.id) as item_count
+       FROM orders o
+       LEFT JOIN stores s ON s.id = o.store_id
+       WHERE o.customer_user_id = $1
+       ORDER BY o.created_at DESC
+       LIMIT $2 OFFSET $3`,
+      [userId, limit, offset]
+    );
+
+    res.json({
+      data: result.rows,
+      pagination: { page, limit, total, total_pages: Math.ceil(total / limit) },
+    });
+  } catch (err) {
+    console.error('My orders error:', err);
+    res.status(500).json({ error: 'Failed to load orders' });
   }
 });
 
@@ -153,9 +201,12 @@ router.get('/orders/:id', authenticateToken, requireRealUser, attachStoreContext
     if (orderResult.rows.length === 0) return res.status(404).json({ error: 'Order not found' });
 
     const itemsResult = await pool.query(
-      `SELECT oi.*, p.name as product_name, p.barcode, p.image_url
+      `SELECT oi.*,
+              COALESCE(oi.product_name, p.name) AS product_name,
+              COALESCE(oi.barcode, p.barcode) AS barcode,
+              p.image_url
        FROM order_items oi
-       JOIN products p ON oi.product_id = p.id
+       LEFT JOIN products p ON oi.product_id = p.id
        WHERE oi.order_id=$1`,
       [req.params.id]
     );
@@ -179,6 +230,11 @@ router.post('/orders', authenticateToken, requireRealUser, attachStoreContext, r
       return res.status(400).json({ error: 'Items required' });
     }
 
+    // Build a validated, server-side view of the cart. We capture each
+    // line's authoritative unit price from the DB (under FOR UPDATE) and
+    // ignore any unit_price the client sent so a malicious or compromised
+    // staff client cannot undercharge an order.
+    const validatedItems = [];
     let subtotal = 0;
     for (const item of items) {
       const productId = item.product_id;
@@ -189,33 +245,61 @@ router.post('/orders', authenticateToken, requireRealUser, attachStoreContext, r
       }
 
       const stockCheck = await client.query(
-        'SELECT quantity, name FROM products WHERE id = $1 AND store_id = $2 FOR UPDATE',
+        'SELECT id, name, price, quantity, barcode, currency FROM products WHERE id = $1 AND store_id = $2 FOR UPDATE',
         [productId, storeId]
       );
       if (stockCheck.rows.length === 0) {
         await client.query('ROLLBACK');
         return res.status(400).json({ error: `Product ${productId} not found` });
       }
-      const available = stockCheck.rows[0].quantity;
+      const row = stockCheck.rows[0];
+      const available = row.quantity;
       if (available < qty) {
         await client.query('ROLLBACK');
         return res.status(400).json({
-          error: `Insufficient stock for "${stockCheck.rows[0].name}". Available: ${available}, Requested: ${qty}`
+          error: `Insufficient stock for "${row.name}". Available: ${available}, Requested: ${qty}`
         });
       }
 
-      const unitPrice = parseFloat(item.unit_price) || 0;
-      subtotal += unitPrice * qty;
+      const unitPrice = parseFloat(row.price) || 0;
+      const lineTotal = unitPrice * qty;
+      subtotal += lineTotal;
+
+      // Display values are currency-conversion snapshots the client uses
+      // for receipt rendering only; we never bill from them.
+      const clientDisplayPrice = item.display_price;
+      const displayPriceNum =
+        clientDisplayPrice != null && !isNaN(parseFloat(clientDisplayPrice))
+          ? parseFloat(clientDisplayPrice)
+          : null;
+
+      validatedItems.push({
+        product_id: row.id,
+        product_name: row.name,
+        barcode: row.barcode,
+        quantity: qty,
+        unit_price: unitPrice,
+        total_price: lineTotal,
+        currency: row.currency,
+        display_price: displayPriceNum,
+        display_currency: item.display_currency || null,
+      });
     }
 
-    const discount = parseFloat(req.validatedBody.discount) || 0;
-    const tax = parseFloat(req.validatedBody.tax) || 0;
-    
-    const frontendSubtotal = parseFloat(req.validatedBody.subtotal);
-    const frontendTotal = parseFloat(req.validatedBody.total);
-    const finalSubtotal = (!isNaN(frontendSubtotal) && frontendSubtotal > 0) ? frontendSubtotal : subtotal;
-    const computedTotal = Math.max(0, finalSubtotal - discount + tax);
-    const finalTotal = (!isNaN(frontendTotal) && frontendTotal > 0) ? frontendTotal : computedTotal;
+    const discount = Math.max(0, parseFloat(req.validatedBody.discount) || 0);
+    const tax = Math.max(0, parseFloat(req.validatedBody.tax) || 0);
+    const displaySubtotal = parseFloat(req.validatedBody.display_subtotal);
+    const displayDiscount = parseFloat(req.validatedBody.display_discount);
+    const displayTax = parseFloat(req.validatedBody.display_tax);
+    const displayTotal = parseFloat(req.validatedBody.display_total);
+    const displayCurrency = req.validatedBody.display_currency
+      ? sanitizeString(req.validatedBody.display_currency, 10)
+      : null;
+
+    // Always recompute the canonical totals from the locked items.
+    // Client-sent subtotal/total are ignored on purpose.
+    const finalSubtotal = subtotal;
+    const finalTotal = Math.max(0, finalSubtotal - discount + tax);
 
     let receiptNumber = generateReceiptNumber();
     const requestedReceipt = req.validatedBody.receipt_number?.trim();
@@ -237,8 +321,13 @@ router.post('/orders', authenticateToken, requireRealUser, attachStoreContext, r
     const cashierName = cashierResult.rows[0]?.full_name || 'Unknown';
 
     const orderResult = await client.query(
-      `INSERT INTO orders (store_id, cashier_id, cashier_name, customer_name, customer_phone, subtotal, discount, tax, total, status, payment_method, receipt_number, notes)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+      `INSERT INTO orders (
+         store_id, cashier_id, cashier_name, customer_name, customer_phone,
+         subtotal, discount, tax, total,
+         display_subtotal, display_discount, display_tax, display_total, display_currency,
+         status, payment_method, receipt_number, notes
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
        RETURNING *`,
       [
         storeId,
@@ -250,6 +339,11 @@ router.post('/orders', authenticateToken, requireRealUser, attachStoreContext, r
         discount,
         tax,
         finalTotal,
+        !isNaN(displaySubtotal) ? displaySubtotal : null,
+        !isNaN(displayDiscount) ? displayDiscount : null,
+        !isNaN(displayTax) ? displayTax : null,
+        !isNaN(displayTotal) ? displayTotal : null,
+        displayCurrency,
         'completed',
         req.validatedBody.payment_method || 'cash',
         receiptNumber,
@@ -258,21 +352,27 @@ router.post('/orders', authenticateToken, requireRealUser, attachStoreContext, r
     );
     const orderId = orderResult.rows[0].id;
 
-    for (const item of items) {
-      const productId = item.product_id;
-      const qty = parseInt(item.quantity);
-      const unitPrice = parseFloat(item.unit_price) || 0;
-      const lineTotal = parseFloat(item.total_price) || (unitPrice * qty);
-
+    for (const item of validatedItems) {
       await client.query(
-        `INSERT INTO order_items (order_id, product_id, product_name, quantity, unit_price, total_price, barcode)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-        [orderId, productId, item.product_name || null, qty, unitPrice, lineTotal, item.barcode || null]
+        `INSERT INTO order_items (order_id, product_id, product_name, quantity, unit_price, total_price, barcode, currency, display_price, display_currency)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+        [
+          orderId,
+          item.product_id,
+          item.product_name,
+          item.quantity,
+          item.unit_price,
+          item.total_price,
+          item.barcode,
+          item.currency,
+          item.display_price,
+          item.display_currency,
+        ]
       );
 
       await client.query(
         'UPDATE products SET quantity = quantity - $1, updated_at = NOW() WHERE id = $2',
-        [qty, productId]
+        [item.quantity, item.product_id]
       );
     }
 

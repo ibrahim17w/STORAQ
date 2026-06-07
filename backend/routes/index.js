@@ -10,6 +10,12 @@ const geocodeRoutes = require('./geocode');
 const searchRoutes = require('./search');
 const categoryRoutes = require('./categories');
 const healthRoutes = require('./health');
+const subscriptionRoutes = require('./subscriptions');
+const analyticsRoutes = require('./analytics');
+const chatRoutes = require('./chat');
+const supportRoutes = require('./support');
+const sponsoredProductRoutes = require('./sponsored_products');
+const platformRatesRoutes = require('./platform_rates');
 const { authLimiter } = require('../middleware/auth');
 
 function mountRoutes(app) {
@@ -23,6 +29,12 @@ function mountRoutes(app) {
   app.use('/api', productRoutes);
   app.use('/api', storeRoutes);
   app.use('/api', orderRoutes);
+  app.use('/api', subscriptionRoutes);
+  app.use('/api', analyticsRoutes);
+  app.use('/api', chatRoutes);
+  app.use('/api', supportRoutes);
+  app.use('/api', sponsoredProductRoutes);
+  app.use('/api', platformRatesRoutes);
   // marketplaceRoutes MUST come LAST because it likely has catch-all or broad matchers
   app.use('/api', marketplaceRoutes);
 }

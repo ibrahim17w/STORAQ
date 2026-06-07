@@ -30,7 +30,7 @@ async function nominatimFetch(url, retries = 3) {
       await new Promise(r => setTimeout(r, 1100));
       const res = await fetch(url, {
         headers: {
-          'User-Agent': 'MarketBridge/1.0 (contact@marketbridge.app)',
+          'User-Agent': 'STORAQ/1.0 (contact@storaq.app)',
         },
       });
       if (!res.ok) {

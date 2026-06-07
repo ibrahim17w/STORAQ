@@ -1,23 +1,27 @@
 // lib/screens/favorites_screen.dart
 import 'package:flutter/material.dart';
-import '../services/api_service.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../providers/auth_provider.dart';
 import '../services/favorites_service.dart';
+import '../providers/viewer_currency_provider.dart';
+import '../models/models.dart';
 import '../lang/translations.dart';
 import '../widgets/guest_login_sheet.dart';
 import '../widgets/product/product_card.dart';
 import '../widgets/product/product_list_tile.dart';
 import '../widgets/store/store_list_tile.dart';
+import '../utils/product_store_helper.dart';
 import 'product_detail_screen.dart';
 import 'store_products_screen.dart';
 
-class FavoritesScreen extends StatefulWidget {
+class FavoritesScreen extends ConsumerStatefulWidget {
   const FavoritesScreen({super.key});
 
   @override
-  State<FavoritesScreen> createState() => _FavoritesScreenState();
+  ConsumerState<FavoritesScreen> createState() => _FavoritesScreenState();
 }
 
-class _FavoritesScreenState extends State<FavoritesScreen>
+class _FavoritesScreenState extends ConsumerState<FavoritesScreen>
     with SingleTickerProviderStateMixin {
   List<dynamic> _favorites = [];
   List<dynamic> _favoriteStores = [];
@@ -90,7 +94,11 @@ class _FavoritesScreenState extends State<FavoritesScreen>
   void _onProductTap(dynamic product) {
     Navigator.push(
       context,
-      MaterialPageRoute(builder: (_) => ProductDetailScreen(product: product)),
+      MaterialPageRoute(
+        builder: (_) => ProductDetailScreen(
+          product: productToDetailMap(product),
+        ),
+      ),
     );
   }
 
@@ -100,7 +108,7 @@ class _FavoritesScreenState extends State<FavoritesScreen>
       MaterialPageRoute(
         builder: (_) => StoreProductsScreen(
           storeId: store['id'],
-          storeName: store['name']?.toString() ?? 'Unknown Store',
+          storeName: store['name']?.toString() ?? t('unknown_store'),
         ),
       ),
     );
@@ -130,16 +138,14 @@ class _FavoritesScreenState extends State<FavoritesScreen>
 
   @override
   Widget build(BuildContext context) {
-    return FutureBuilder<bool>(
-      future: ApiService.isLoggedIn(),
-      builder: (context, snapshot) {
-        final isLoggedIn = snapshot.data ?? false;
+    final auth = ref.watch(authProvider);
+    final isLoggedIn = auth.isAuthenticated && !auth.isGuest;
 
-        if (!isLoggedIn) {
-          return _buildGuestPrompt();
-        }
+    if (!isLoggedIn) {
+      return _buildGuestPrompt();
+    }
 
-        return Scaffold(
+    return Scaffold(
           appBar: AppBar(
             title: Text(t('favorites') ?? 'Favorites'),
             bottom: TabBar(
@@ -164,8 +170,6 @@ class _FavoritesScreenState extends State<FavoritesScreen>
             children: [_buildProductsTab(), _buildStoresTab()],
           ),
         );
-      },
-    );
   }
 
   Widget _buildGuestPrompt() {
@@ -208,9 +212,7 @@ class _FavoritesScreenState extends State<FavoritesScreen>
           ? _buildEmptyState(
               icon: Icons.shopping_bag_outlined,
               title: t('no_favorite_products') ?? 'No favorite products yet',
-              subtitle:
-                  t('tap_heart_products') ??
-                  'Tap the heart on products to add them',
+              subtitle: t('tap_heart_products'),
             )
           : _isGridView
           ? _buildProductGrid()
@@ -234,6 +236,7 @@ class _FavoritesScreenState extends State<FavoritesScreen>
             onFavoriteToggle: () {
               if (pid != null) _removeFavorite(pid);
             },
+            currencySettings: ref.watch(viewerCurrencyProvider).currencySettings,
           );
         }).toList(),
       ),
@@ -257,6 +260,7 @@ class _FavoritesScreenState extends State<FavoritesScreen>
             onFavoriteToggle: () {
               if (pid != null) _removeFavorite(pid);
             },
+            currencySettings: ref.watch(viewerCurrencyProvider).currencySettings,
           ),
         );
       },
@@ -273,9 +277,7 @@ class _FavoritesScreenState extends State<FavoritesScreen>
           ? _buildEmptyState(
               icon: Icons.store_outlined,
               title: t('no_favorite_stores') ?? 'No favorite stores yet',
-              subtitle:
-                  t('tap_heart_stores') ??
-                  'Tap the heart on stores to add them',
+              subtitle: t('tap_heart_stores'),
             )
           : _buildStoreList(),
     );

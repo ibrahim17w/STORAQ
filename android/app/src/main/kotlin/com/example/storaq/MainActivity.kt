@@ -1,4 +1,4 @@
-package com.example.market_bridge
+package com.example.storaq
 
 import io.flutter.embedding.android.FlutterActivity
 

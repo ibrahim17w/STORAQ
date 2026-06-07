@@ -1,7 +1,9 @@
-// lib/widgets/product/product_list_tile.dart
 import 'package:flutter/material.dart';
 import '../cached_image.dart';
 import '../../services/offline_service.dart';
+import '../../services/currency_service.dart';
+import '../../utils/location_helper.dart';
+import 'product_image_viewer.dart';
 
 class ProductListTile extends StatelessWidget {
   final dynamic product;
@@ -10,6 +12,9 @@ class ProductListTile extends StatelessWidget {
   final bool showFavorite;
   final bool isFavorite;
   final VoidCallback? onFavoriteToggle;
+  final Map<String, dynamic>? currencySettings;
+  final bool compact;
+  final VoidCallback? onImageTap;
 
   const ProductListTile({
     super.key,
@@ -19,115 +24,203 @@ class ProductListTile extends StatelessWidget {
     this.showFavorite = false,
     this.isFavorite = false,
     this.onFavoriteToggle,
+    this.currencySettings,
+    this.compact = false,
+    this.onImageTap,
   });
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     final productImages = OfflineService.getProductImagePaths(product);
+    final info = CurrencyService.getProductDisplayInfo(product, currencySettings);
 
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        decoration: BoxDecoration(
-          color: Theme.of(context).cardColor,
-          borderRadius: BorderRadius.circular(14),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.04),
-              blurRadius: 8,
-              offset: const Offset(0, 2),
-            ),
-          ],
-        ),
-        child: Row(
-          children: [
-            ClipRRect(
-              borderRadius: const BorderRadius.horizontal(
-                left: Radius.circular(14),
-              ),
-              child: CachedAppImage(
-                imageUrl: productImages.isNotEmpty ? productImages.first : null,
-                width: 100,
-                height: 100,
-                fit: BoxFit.cover,
-                memCacheWidth: 300,
-              ),
-            ),
-            Expanded(
-              child: Padding(
-                padding: const EdgeInsets.all(12),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+    final originalPrice = info['original_price'];
+    final originalCurrency = info['original_currency'] as String;
+    final displayPrice = info['display_price'];
+    final displayCurrency = info['display_currency'] as String?;
+    final showBoth = info['show_both'] == true;
+
+    final hasDisplay = displayPrice != null && displayCurrency != null;
+    final primaryText = hasDisplay
+        ? CurrencyService.formatPrice(displayPrice, displayCurrency)
+        : CurrencyService.formatPrice(originalPrice, originalCurrency);
+    final showSecondary = hasDisplay && showBoth;
+    final imageSize = compact ? 72.0 : 88.0;
+    final qty = (product['quantity'] as num?)?.toInt() ?? 0;
+    final extraImages = productImages.length > 1 ? productImages.length - 1 : 0;
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(14),
+        child: Ink(
+          decoration: compactListCardDecoration(context),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              GestureDetector(
+                onTap: onImageTap ??
+                    (productImages.isNotEmpty
+                        ? () => ProductImageViewer.openGallery(
+                              context,
+                              images: productImages,
+                            )
+                        : null),
+                child: Stack(
                   children: [
-                    Text(
-                      product['name'] ?? '',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontWeight: FontWeight.w600,
-                        fontSize: 14,
+                    ClipRRect(
+                      borderRadius: const BorderRadius.horizontal(
+                        left: Radius.circular(11),
+                      ),
+                      child: CachedAppImage(
+                        imageUrl: productImages.isNotEmpty
+                            ? productImages.first
+                            : null,
+                        width: imageSize,
+                        height: imageSize,
+                        fit: BoxFit.cover,
+                        memCacheWidth: 240,
                       ),
                     ),
-                    const SizedBox(height: 4),
-                    Text(
-                      '\$${product['price']}',
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 16,
-                        color: Theme.of(context).colorScheme.primary,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Row(
-                      children: [
-                        Expanded(
+                    if (extraImages > 0)
+                      Positioned(
+                        right: 4,
+                        bottom: 4,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 5,
+                            vertical: 2,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.6),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
                           child: Text(
-                            product['shop_name'] ?? '',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: Colors.grey.shade500,
+                            '+$extraImages',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 9,
+                              fontWeight: FontWeight.w600,
                             ),
                           ),
                         ),
-                        if (distanceKm != null &&
-                            distanceKm != double.infinity) ...[
-                          Icon(
-                            Icons.location_on,
-                            size: 12,
-                            color: Theme.of(context).colorScheme.primary,
-                          ),
-                          const SizedBox(width: 4),
-                          Text(
-                            '${distanceKm!.toStringAsFixed(1)} km',
-                            style: TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                              color: Theme.of(context).colorScheme.primary,
-                            ),
-                          ),
-                        ],
-                      ],
-                    ),
+                      ),
                   ],
                 ),
               ),
-            ),
-            if (showFavorite)
-              IconButton(
-                icon: Icon(
-                  isFavorite ? Icons.favorite : Icons.favorite_border,
-                  color: isFavorite ? Colors.red : Colors.grey,
+              Expanded(
+                child: Padding(
+                  padding: EdgeInsets.fromLTRB(
+                    compact ? 10 : 12,
+                    compact ? 8 : 10,
+                    compact ? 8 : 10,
+                    compact ? 8 : 10,
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        product['name'] ?? '',
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontWeight: FontWeight.w600,
+                          fontSize: compact ? 13 : 14,
+                          height: 1.2,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        primaryText,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontWeight: FontWeight.w700,
+                          fontSize: compact ? 14 : 15,
+                          color: theme.colorScheme.primary,
+                        ),
+                      ),
+                      if (showSecondary)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 1),
+                          child: Text(
+                            CurrencyService.formatPrice(
+                              originalPrice,
+                              originalCurrency,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ),
+                      const SizedBox(height: 4),
+                      Row(
+                        children: [
+                          if ((product['shop_name'] ?? '').toString().isNotEmpty)
+                            Expanded(
+                              child: Text(
+                                product['shop_name'] ?? '',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: theme.colorScheme.onSurfaceVariant,
+                                ),
+                              ),
+                            ),
+                          if (distanceKm != null &&
+                              distanceKm != double.infinity) ...[
+                            Icon(
+                              Icons.near_me_outlined,
+                              size: 12,
+                              color: theme.colorScheme.primary,
+                            ),
+                            const SizedBox(width: 3),
+                            Text(
+                              LocationHelper.formatDistanceKm(distanceKm!),
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                                color: theme.colorScheme.primary,
+                              ),
+                            ),
+                          ],
+                          if (qty >= 0) ...[
+                            const SizedBox(width: 8),
+                            stockBadge(context, qty),
+                          ],
+                        ],
+                      ),
+                    ],
+                  ),
                 ),
-                onPressed: onFavoriteToggle,
-              )
-            else
-              const Padding(
-                padding: EdgeInsets.only(right: 12),
-                child: Icon(Icons.chevron_right, color: Colors.grey),
               ),
-          ],
+              if (showFavorite)
+                IconButton(
+                  visualDensity: VisualDensity.compact,
+                  icon: Icon(
+                    isFavorite ? Icons.favorite : Icons.favorite_border,
+                    size: 20,
+                    color: isFavorite ? Colors.red : theme.colorScheme.outline,
+                  ),
+                  onPressed: onFavoriteToggle,
+                )
+              else
+                Padding(
+                  padding: const EdgeInsets.only(top: 28, right: 6),
+                  child: Icon(
+                    Icons.chevron_right,
+                    size: 20,
+                    color: theme.colorScheme.outline,
+                  ),
+                ),
+            ],
+          ),
         ),
       ),
     );

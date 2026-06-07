@@ -7,6 +7,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:http/http.dart' as http;
 import 'store_catalog_service.dart';
+import 'desktop_db_init.dart';
 
 class OfflineService {
   static void _notifyCatalogChanged() {
@@ -21,11 +22,12 @@ class OfflineService {
   }
 
   static Future<Database> _init() async {
+    await DesktopDbInit.ensureInitialized();
     final dir = await getApplicationDocumentsDirectory();
-    final path = join(dir.path, 'market_bridge.db');
+    final path = join(dir.path, 'storaq.db');
     return openDatabase(
       path,
-      version: 13,
+      version: 15,
       onCreate: (db, v) async {
         await _createTables(db);
       },
@@ -66,8 +68,50 @@ class OfflineService {
         if (oldV < 13) {
           await _migrateV13(db);
         }
+        if (oldV < 14) {
+          await _migrateV14(db);
+        }
+        if (oldV < 15) {
+          await _migrateV15(db);
+        }
       },
     );
+  }
+
+  // Adds the converted display price columns to the product cache so the
+  // checkout and receipt screens can show prices in the store's display
+  // currency without recomputing them client-side.
+  static Future<void> _migrateV14(Database db) async {
+    try {
+      await db.execute(
+        'ALTER TABLE cached_products ADD COLUMN display_price REAL',
+      );
+    } catch (_) {}
+    try {
+      await db.execute(
+        'ALTER TABLE cached_products ADD COLUMN display_currency TEXT',
+      );
+    } catch (_) {}
+  }
+
+  // Adds marketplace visibility fields to cached products so store UI can
+  // accurately reflect online/store-only state while offline.
+  static Future<void> _migrateV15(Database db) async {
+    try {
+      await db.execute(
+        'ALTER TABLE cached_products ADD COLUMN is_online INTEGER DEFAULT 1',
+      );
+    } catch (_) {}
+    try {
+      await db.execute(
+        'ALTER TABLE cached_products ADD COLUMN went_online_at TEXT',
+      );
+    } catch (_) {}
+    try {
+      await db.execute(
+        'UPDATE cached_products SET is_online = COALESCE(is_online, 1)',
+      );
+    } catch (_) {}
   }
 
   static Future<void> _createTables(Database db) async {
@@ -105,6 +149,10 @@ class OfflineService {
         category_id INTEGER,
         low_stock_threshold INTEGER DEFAULT 5,
         currency TEXT DEFAULT 'SYP',
+        display_price REAL,
+        display_currency TEXT,
+        is_online INTEGER DEFAULT 1,
+        went_online_at TEXT,
         updated_at TEXT
       )
     """);
@@ -799,8 +847,29 @@ class OfflineService {
     }, conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
-  static Future<Map<String, dynamic>?> getCachedStore() async {
+  static Future<void> clearSessionCache() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('cached_user');
+  }
+
+  static Future<Map<String, dynamic>?> getCachedStore({int? storeId}) async {
     final database = await db;
+    if (storeId != null) {
+      final rows = await database.query(
+        'cached_store',
+        where: 'id = ?',
+        whereArgs: [storeId],
+        limit: 1,
+      );
+      if (rows.isNotEmpty) {
+        try {
+          return jsonDecode(rows.first['data'] as String)
+              as Map<String, dynamic>;
+        } catch (_) {
+          return null;
+        }
+      }
+    }
     final rows = await database.query('cached_store', limit: 1);
     if (rows.isEmpty) return null;
     try {
@@ -867,6 +936,10 @@ class OfflineService {
         'category_id': p['category_id'],
         'low_stock_threshold': p['low_stock_threshold'] ?? 5,
         'currency': p['currency'] ?? 'SYP',
+        'display_price': p['display_price'],
+        'display_currency': p['display_currency'],
+        'is_online': p['is_online'] == true ? 1 : 0,
+        'went_online_at': p['went_online_at']?.toString(),
         'updated_at': p['updated_at'] ?? DateTime.now().toIso8601String(),
       }, conflictAlgorithm: ConflictAlgorithm.replace);
     }
@@ -943,6 +1016,9 @@ class OfflineService {
           map['local_images'] = jsonDecode(map['local_images']);
         } catch (_) {}
       }
+      if (map['is_online'] is int) {
+        map['is_online'] = (map['is_online'] as int) == 1;
+      }
       return map;
     }).toList();
   }
@@ -966,6 +1042,9 @@ class OfflineService {
         map['local_images'] = jsonDecode(map['local_images']);
       } catch (_) {}
     }
+    if (map['is_online'] is int) {
+      map['is_online'] = (map['is_online'] as int) == 1;
+    }
     return map;
   }
 
@@ -986,6 +1065,8 @@ class OfflineService {
         'category_id': product['category_id'],
         'low_stock_threshold': product['low_stock_threshold'] ?? 5,
         'currency': product['currency'] ?? 'SYP',
+        'is_online': product['is_online'] == true ? 1 : 0,
+        'went_online_at': product['went_online_at']?.toString(),
         'updated_at': DateTime.now().toIso8601String(),
       },
       where: 'id = ?',
@@ -1337,6 +1418,9 @@ class OfflineService {
         try {
           map['local_images'] = jsonDecode(map['local_images']);
         } catch (_) {}
+      }
+      if (map['is_online'] is int) {
+        map['is_online'] = (map['is_online'] as int) == 1;
       }
       products.add(map);
       cachedNames.add((map['name'] as String? ?? '').toLowerCase().trim());

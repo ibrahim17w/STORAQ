@@ -2,6 +2,7 @@
 import 'dart:async';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/api_service.dart';
@@ -9,7 +10,9 @@ import '../lang/translations.dart';
 import '../widgets/cached_image.dart';
 import 'store_products_screen.dart';
 import 'store_map_screen.dart';
+import 'store_qr_scanner_screen.dart';
 import 'product_detail_screen.dart';
+import '../utils/product_store_helper.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:flutter/services.dart';
 import '../utils/location_helper.dart';
@@ -18,7 +21,10 @@ import '../services/marketplace_service.dart';
 import '../services/location_service.dart';
 import '../services/image_search_service.dart';
 import '../services/store_service.dart';
+import '../models/models.dart';
 import '../services/favorites_service.dart';
+import '../providers/viewer_currency_provider.dart';
+import '../services/currency_service.dart';
 import '../widgets/product/product_card.dart';
 import '../widgets/product/product_list_tile.dart';
 import '../widgets/store/store_card.dart';
@@ -26,17 +32,17 @@ import '../widgets/store/store_list_tile.dart';
 import '../widgets/guest_login_sheet.dart' as guest;
 import '../utils/tr.dart';
 
-class ExploreScreen extends StatefulWidget {
+class ExploreScreen extends ConsumerStatefulWidget {
   const ExploreScreen({super.key});
 
   @override
-  State<ExploreScreen> createState() => _ExploreScreenState();
+  ConsumerState<ExploreScreen> createState() => _ExploreScreenState();
 }
 
-class _ExploreScreenState extends State<ExploreScreen> {
-  List<dynamic> _stores = [];
-  List<dynamic> _products = [];
-  List<dynamic> _filtered = [];
+class _ExploreScreenState extends ConsumerState<ExploreScreen> {
+  List<Store> _stores = [];
+  List<Product> _products = [];
+  List<Store> _filtered = [];
   bool _isLoading = true;
   bool _isGridView = true;
 
@@ -51,8 +57,8 @@ class _ExploreScreenState extends State<ExploreScreen> {
 
   final _searchController = TextEditingController();
   final _searchFocusNode = FocusNode();
-  List<dynamic> _searchProductResults = [];
-  List<dynamic> _searchStoreResults = [];
+  List<Product> _searchProductResults = [];
+  List<Store> _searchStoreResults = [];
   List<String> _searchHistory = [];
   bool _hasSearched = false;
   static const String _historyKey = 'search_history';
@@ -127,19 +133,22 @@ class _ExploreScreenState extends State<ExploreScreen> {
 
   Future<void> _toggleFavorite(
     int productId,
-    Map<String, dynamic> product,
+    dynamic product,
   ) async {
-    await FavoritesService.toggleFavorite(productId, product: product);
+    final map = product is Product ? product.toJson() : product as Map<String, dynamic>;
+    await FavoritesService.toggleFavorite(productId, product: map);
   }
 
   Future<void> _toggleFavoriteStore(
     int storeId,
-    Map<String, dynamic> store,
+    dynamic store,
   ) async {
-    await FavoritesService.toggleFavoriteStore(storeId, store: store);
+    final map = store is Store ? store.toJson() : store as Map<String, dynamic>;
+    await FavoritesService.toggleFavoriteStore(storeId, store: map);
   }
 
   int? _productId(dynamic product) {
+    if (product is Product) return product.intId;
     final id = product['id'];
     if (id == null) return null;
     if (id is int) return id;
@@ -147,6 +156,7 @@ class _ExploreScreenState extends State<ExploreScreen> {
   }
 
   int? _storeId(dynamic store) {
+    if (store is Store) return store.intId;
     final id = store['id'];
     if (id == null) return null;
     if (id is int) return id;
@@ -170,17 +180,10 @@ class _ExploreScreenState extends State<ExploreScreen> {
     }
   }
 
-  double _distanceToStore(dynamic store) {
+  double _distanceToStore(Store store) {
     if (_userPosition == null) return double.infinity;
-    final sLat = store['lat'];
-    final sLng = store['lng'];
-    if (sLat == null || sLng == null) return double.infinity;
-    final lat = sLat is num
-        ? sLat.toDouble()
-        : double.tryParse(sLat.toString());
-    final lng = sLng is num
-        ? sLng.toDouble()
-        : double.tryParse(sLng.toString());
+    final lat = store.lat;
+    final lng = store.lng;
     if (lat == null || lng == null) return double.infinity;
     return LocationHelper.distanceKm(
       _userPosition!.latitude,
@@ -192,18 +195,20 @@ class _ExploreScreenState extends State<ExploreScreen> {
 
   double _distanceToProduct(dynamic product) {
     if (_userPosition == null) return double.infinity;
-    final shopId = product['shop_id'];
+    final shopId = product is Product ? product.storeId : product['shop_id'];
     if (shopId != null) {
       for (final store in _stores) {
-        if (store['id'] == shopId) {
+        if (store.id == shopId) {
           return _distanceToStore(store);
         }
       }
     }
-    final shopName = product['shop_name']?.toString();
+    final shopName = product is Product
+        ? product.shopName
+        : product['shop_name']?.toString();
     if (shopName != null && shopName.isNotEmpty) {
       for (final store in _stores) {
-        if (store['name']?.toString() == shopName) {
+        if (store.name == shopName) {
           return _distanceToStore(store);
         }
       }
@@ -211,9 +216,9 @@ class _ExploreScreenState extends State<ExploreScreen> {
     return double.infinity;
   }
 
-  List<dynamic> _sortStoresByDistance(List<dynamic> stores) {
+  List<Store> _sortStoresByDistance(List<Store> stores) {
     if (_userPosition == null || !_sortByClosest) return stores;
-    final sorted = List<dynamic>.from(stores);
+    final sorted = List<Store>.from(stores);
     sorted.sort((a, b) {
       final da = _distanceToStore(a);
       final db = _distanceToStore(b);
@@ -233,14 +238,14 @@ class _ExploreScreenState extends State<ExploreScreen> {
     setState(() => _isLoading = true);
     _initLocation();
     try {
-      final results = await Future.wait([
-        StoreService.fetchStores(),
-        MarketplaceService.fetchMarketplaceFeed(),
-      ]);
+      final storesFuture = StoreService.fetchStores();
+      final productsFuture = MarketplaceService.fetchMarketplaceFeed();
+      final fetchedStores = await storesFuture;
+      final fetchedProducts = await productsFuture;
       if (mounted) {
         setState(() {
-          _stores = results[0];
-          _products = results[1];
+          _stores = fetchedStores;
+          _products = fetchedProducts;
           _filtered = _stores;
           _isLoading = false;
         });
@@ -250,30 +255,30 @@ class _ExploreScreenState extends State<ExploreScreen> {
     }
   }
 
-  dynamic _enrichProductWithStoreInfo(dynamic product) {
-    if (product['shop_id'] != null) return product;
-    final shopName = product['shop_name']?.toString();
+  Map<String, dynamic> _enrichProductWithStoreInfo(dynamic product) {
+    final map = product is Product
+        ? product.toJson()
+        : Map<String, dynamic>.from(product as Map);
+    if (map['shop_id'] != null) return map;
+    final shopName = map['shop_name']?.toString();
     if (shopName != null && shopName.isNotEmpty && _stores.isNotEmpty) {
       for (final store in _stores) {
-        if (store['name']?.toString() == shopName) {
-          final enriched = Map<String, dynamic>.from(product);
-          enriched['shop_id'] = store['id'];
-          return enriched;
+        if (store.name == shopName) {
+          map['shop_id'] = store.id;
+          return map;
         }
       }
     }
-    if (product['store_id'] != null) {
-      final enriched = Map<String, dynamic>.from(product);
-      enriched['shop_id'] = product['store_id'];
-      return enriched;
+    if (map['store_id'] != null) {
+      map['shop_id'] = map['store_id'];
     }
-    return product;
+    return map;
   }
 
   void _onProductTap(dynamic product) async {
     final canProceed = await guest.requireAuth(context);
     if (!canProceed) return;
-    final enriched = _enrichProductWithStoreInfo(product);
+    final enriched = productToDetailMap(_enrichProductWithStoreInfo(product));
     _trackProductView(enriched);
     Navigator.push(
       context,
@@ -328,31 +333,26 @@ class _ExploreScreenState extends State<ExploreScreen> {
     }
 
     final products = _products.where((item) {
-      final name = item['name']?.toString().toLowerCase() ?? '';
-      final desc = item['description']?.toString().toLowerCase() ?? '';
-      final shop = item['shop_name']?.toString().toLowerCase() ?? '';
-      final cat = item['category']?.toString().toLowerCase() ?? '';
+      final name = item.name?.toLowerCase() ?? '';
+      final desc = item.description?.toLowerCase() ?? '';
+      final shop = item.shopName?.toLowerCase() ?? '';
       return queryWords.any(
         (word) =>
             name.contains(word) ||
             desc.contains(word) ||
-            shop.contains(word) ||
-            cat.contains(word),
+            shop.contains(word),
       );
     }).toList();
 
     final stores = _stores.where((item) {
-      final name = item['name']?.toString().toLowerCase() ?? '';
-      final city = item['city']?.toString().toLowerCase() ?? '';
-      final country = item['country']?.toString().toLowerCase() ?? '';
-      final description =
-          item['location_description']?.toString().toLowerCase() ?? '';
+      final name = item.name?.toLowerCase() ?? '';
+      final city = item.city?.toLowerCase() ?? '';
+      final country = item.country?.toLowerCase() ?? '';
       return queryWords.any(
         (word) =>
             name.contains(word) ||
             city.contains(word) ||
-            country.contains(word) ||
-            description.contains(word),
+            country.contains(word),
       );
     }).toList();
 
@@ -537,6 +537,18 @@ class _ExploreScreenState extends State<ExploreScreen> {
           automaticallyImplyLeading: false,
           title: Text(t('explore') ?? 'Explore'),
           actions: [
+            IconButton(
+              icon: const Icon(Icons.qr_code_scanner, size: 22),
+              tooltip: t('scan_store_qr') ?? 'Scan Store QR',
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => const StoreQrScannerScreen(),
+                  ),
+                );
+              },
+            ),
             if (!_isImageSearchActive && !isSearching)
               IconButton(
                 icon: Icon(
@@ -792,7 +804,7 @@ class _ExploreScreenState extends State<ExploreScreen> {
                     _performInlineSearch(broader);
                   },
                   child: Text(
-                    'Try broader search: "${_searchController.text.trim().split(' ').take(2).join(' ')}"',
+                    '${t('try_broader_search')}: "${_searchController.text.trim().split(' ').take(2).join(' ')}"',
                   ),
                 ),
             ],
@@ -832,13 +844,14 @@ class _ExploreScreenState extends State<ExploreScreen> {
                   children: _searchProductResults.map((p) {
                     final pid = _productId(p);
                     return ProductCard(
-                      product: p,
+                      product: p.toJson(),
                       onTap: () => _onProductTap(p),
                       showFavorite: pid != null,
                       isFavorite: pid != null && _favoriteIds.contains(pid),
                       onFavoriteToggle: pid != null
                           ? () => _toggleFavorite(pid, p)
                           : null,
+                      currencySettings: ref.watch(viewerCurrencyProvider).currencySettings,
                     );
                   }).toList(),
                 )
@@ -848,13 +861,14 @@ class _ExploreScreenState extends State<ExploreScreen> {
                     return Padding(
                       padding: const EdgeInsets.only(bottom: 8),
                       child: ProductListTile(
-                        product: p,
+                        product: p.toJson(),
                         onTap: () => _onProductTap(p),
                         showFavorite: pid != null,
                         isFavorite: pid != null && _favoriteIds.contains(pid),
                         onFavoriteToggle: pid != null
                             ? () => _toggleFavorite(pid, p)
                             : null,
+                        currencySettings: ref.watch(viewerCurrencyProvider).currencySettings,
                       ),
                     );
                   }).toList(),
@@ -892,7 +906,7 @@ class _ExploreScreenState extends State<ExploreScreen> {
                       final store = _searchStoreResults[i];
                       final sid = _storeId(store);
                       return StoreCard(
-                        store: store,
+                        store: store.toJson(),
                         onTap: () async {
                           final canProceed = await guest.requireAuth(context);
                           if (!canProceed) return;
@@ -900,11 +914,9 @@ class _ExploreScreenState extends State<ExploreScreen> {
                             context,
                             MaterialPageRoute(
                               builder: (_) => StoreProductsScreen(
-                                storeId: _searchStoreResults[i]['id'],
+                                storeId: store.intId ?? 0,
                                 storeName:
-                                    _searchStoreResults[i]['name']
-                                        ?.toString() ??
-                                    'Unknown Store',
+                                    store.name ?? t('unknown_store'),
                               ),
                             ),
                           );
@@ -927,7 +939,7 @@ class _ExploreScreenState extends State<ExploreScreen> {
                     return Padding(
                       padding: const EdgeInsets.only(bottom: 8),
                       child: StoreListTile(
-                        store: s,
+                        store: s.toJson(),
                         onTap: () async {
                           final canProceed = await guest.requireAuth(context);
                           if (!canProceed) return;
@@ -935,9 +947,9 @@ class _ExploreScreenState extends State<ExploreScreen> {
                             context,
                             MaterialPageRoute(
                               builder: (_) => StoreProductsScreen(
-                                storeId: s['id'],
+                                storeId: s.intId ?? 0,
                                 storeName:
-                                    s['name']?.toString() ?? 'Unknown Store',
+                                    s.name ?? t('unknown_store'),
                               ),
                             ),
                           );
@@ -1076,15 +1088,27 @@ class _ExploreScreenState extends State<ExploreScreen> {
     switch (_imageSearchSort) {
       case 'price_asc':
         results.sort((a, b) {
-          final pa = double.tryParse(a['price']?.toString() ?? '0') ?? 0;
-          final pb = double.tryParse(b['price']?.toString() ?? '0') ?? 0;
+          final pa = CurrencyService.comparablePrice(
+            a,
+            ref.read(viewerCurrencyProvider).currencySettings,
+          );
+          final pb = CurrencyService.comparablePrice(
+            b,
+            ref.read(viewerCurrencyProvider).currencySettings,
+          );
           return pa.compareTo(pb);
         });
         break;
       case 'price_desc':
         results.sort((a, b) {
-          final pa = double.tryParse(a['price']?.toString() ?? '0') ?? 0;
-          final pb = double.tryParse(b['price']?.toString() ?? '0') ?? 0;
+          final pa = CurrencyService.comparablePrice(
+            a,
+            ref.read(viewerCurrencyProvider).currencySettings,
+          );
+          final pb = CurrencyService.comparablePrice(
+            b,
+            ref.read(viewerCurrencyProvider).currencySettings,
+          );
           return pb.compareTo(pa);
         });
         break;
@@ -1289,7 +1313,7 @@ class _ExploreScreenState extends State<ExploreScreen> {
                                 ),
                                 const SizedBox(width: 2),
                                 Text(
-                                  '${distance.toStringAsFixed(1)} km',
+                                  LocationHelper.formatDistanceKm(distance),
                                   style: TextStyle(
                                     fontSize: 10,
                                     fontWeight: FontWeight.w600,
@@ -1338,6 +1362,7 @@ class _ExploreScreenState extends State<ExploreScreen> {
                   onFavoriteToggle: pid != null
                       ? () => _toggleFavorite(pid, product)
                       : null,
+                  currencySettings: ref.watch(viewerCurrencyProvider).currencySettings,
                 ),
                 if (!showDistance)
                   Positioned(
@@ -1404,13 +1429,13 @@ class _ExploreScreenState extends State<ExploreScreen> {
         children: stores.map((store) {
           final sid = _storeId(store);
           return StoreCard(
-            store: store,
+            store: store.toJson(),
             onTap: () => Navigator.push(
               context,
               MaterialPageRoute(
                 builder: (_) => StoreProductsScreen(
-                  storeId: store['id'],
-                  storeName: store['name']?.toString() ?? 'Unknown Store',
+                  storeId: store.intId ?? 0,
+                  storeName: store.name ?? t('unknown_store'),
                 ),
               ),
             ),
@@ -1433,13 +1458,9 @@ class _ExploreScreenState extends State<ExploreScreen> {
       itemCount: stores.length,
       itemBuilder: (context, i) {
         final store = stores[i];
-        final lat = double.tryParse(store['lat']?.toString() ?? '');
-        final lng = double.tryParse(store['lng']?.toString() ?? '');
+        final lat = store.lat;
+        final lng = store.lng;
         final hasLocation = lat != null && lng != null;
-        final description =
-            store['location_description']?.toString() ??
-            store['description']?.toString() ??
-            '';
         final sid = _storeId(store);
 
         return Card(
@@ -1450,8 +1471,8 @@ class _ExploreScreenState extends State<ExploreScreen> {
               context,
               MaterialPageRoute(
                 builder: (_) => StoreProductsScreen(
-                  storeId: store['id'],
-                  storeName: store['name']?.toString() ?? 'Unknown Store',
+                  storeId: store.intId ?? 0,
+                  storeName: store.name ?? t('unknown_store'),
                 ),
               ),
             ),
@@ -1463,7 +1484,7 @@ class _ExploreScreenState extends State<ExploreScreen> {
                   ClipRRect(
                     borderRadius: BorderRadius.circular(12),
                     child: CachedAppImage(
-                      imageUrl: store['image_url'],
+                      imageUrl: store.imageUrl,
                       width: 80,
                       height: 80,
                       fit: BoxFit.cover,
@@ -1476,7 +1497,7 @@ class _ExploreScreenState extends State<ExploreScreen> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          store['name'] ?? '',
+                          store.name ?? '',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(
@@ -1486,7 +1507,7 @@ class _ExploreScreenState extends State<ExploreScreen> {
                         ),
                         const SizedBox(height: 4),
                         Text(
-                          '${store['city'] ?? ''}, ${store['country'] ?? ''}',
+                          '${store.city ?? ''}, ${store.country ?? ''}',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
@@ -1494,18 +1515,6 @@ class _ExploreScreenState extends State<ExploreScreen> {
                             color: Colors.grey.shade500,
                           ),
                         ),
-                        if (description.isNotEmpty) ...[
-                          const SizedBox(height: 4),
-                          Text(
-                            description,
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: Colors.grey.shade600,
-                            ),
-                          ),
-                        ],
                         if (_sortByClosest && _userPosition != null) ...[
                           const SizedBox(height: 4),
                           Row(
@@ -1517,7 +1526,9 @@ class _ExploreScreenState extends State<ExploreScreen> {
                               ),
                               const SizedBox(width: 4),
                               Text(
-                                '${_distanceToStore(store).toStringAsFixed(1)} km',
+                                LocationHelper.formatDistanceKm(
+                                  _distanceToStore(store),
+                                ),
                                 style: TextStyle(
                                   fontSize: 11,
                                   fontWeight: FontWeight.w600,
@@ -1553,12 +1564,12 @@ class _ExploreScreenState extends State<ExploreScreen> {
                         context,
                         MaterialPageRoute(
                           builder: (_) => StoreLocationView(
-                            target: LatLng(lat!, lng!),
-                            targetStoreId: store['id'],
+                            target: LatLng(lat, lng),
+                            targetStoreId: store.intId,
                             targetName:
-                                store['name']?.toString() ?? 'Unknown Store',
-                            targetImageUrl: store['image_url']?.toString(),
-                            stores: _stores,
+                                store.name ?? t('unknown_store'),
+                            targetImageUrl: store.imageUrl,
+                            stores: _stores.map((s) => s.toJson()).toList(),
                           ),
                         ),
                       ),

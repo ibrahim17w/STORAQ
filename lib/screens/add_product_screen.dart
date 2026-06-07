@@ -7,6 +7,7 @@ import 'dart:convert';
 import 'dart:async' show scheduleMicrotask;
 import 'dart:math' show max;
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
@@ -19,17 +20,21 @@ import '../widgets/product_image_gallery.dart';
 import '../utils/barcode_helper.dart';
 import '../lang/translations.dart';
 import '../services/product_service.dart';
+import '../services/subscription_service.dart';
+import '../models/models.dart';
+import '../utils/error_mapper.dart';
+import 'subscription_upgrade_screen.dart';
 import 'package:http/http.dart' as http;
 
-class AddProductScreen extends StatefulWidget {
+class AddProductScreen extends ConsumerStatefulWidget {
   final Map<String, dynamic>? product;
   const AddProductScreen({super.key, this.product});
 
   @override
-  State<AddProductScreen> createState() => _AddProductScreenState();
+  ConsumerState<AddProductScreen> createState() => _AddProductScreenState();
 }
 
-class _AddProductScreenState extends State<AddProductScreen> {
+class _AddProductScreenState extends ConsumerState<AddProductScreen> {
   final _nameCtrl = TextEditingController();
   final _priceCtrl = TextEditingController();
   final _qtyCtrl = TextEditingController();
@@ -45,6 +50,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
   bool _isLoading = false;
   bool _barcodeExists = false;
   Map<String, dynamic>? _existingBarcodeProduct;
+  bool _listOnline = true;
 
   static const int _maxImagesPerProduct = 4;
 
@@ -82,6 +88,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
     _descCtrl.text = product['description']?.toString() ?? '';
     _barcodeCtrl.text = product['barcode']?.toString() ?? '';
     _currencyCtrl.text = product['currency']?.toString() ?? 'SYP';
+    _listOnline = product['is_online'] == true;
 
     List<String> images = [];
 
@@ -237,7 +244,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
     }
 
     if (storeId == null) {
-      _showError('No store context. Please login online first.');
+      _showError(t('no_store_context'));
       return;
     }
 
@@ -351,7 +358,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
     // ==================== ONLINE ====================
     setState(() => _isLoading = true);
     try {
-      Map<String, dynamic> result;
+      Product result;
       if (widget.product != null) {
         result = await ProductService.updateProduct(
           id: widget.product!['id'],
@@ -366,6 +373,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
           image: _newImages.isNotEmpty ? _newImages.first : null,
           extraImages: _newImages.length > 1 ? _newImages.sublist(1) : null,
           existingImages: _existingImages,
+          listOnline: _listOnline,
         );
       } else {
         result = await ProductService.createProduct(
@@ -379,27 +387,74 @@ class _AddProductScreenState extends State<AddProductScreen> {
           currency: _currencyCtrl.text.trim(),
           image: _newImages.isNotEmpty ? _newImages.first : null,
           extraImages: _newImages.length > 1 ? _newImages.sublist(1) : null,
+          listOnline: _listOnline,
         );
       }
 
       if (mounted) {
+        final pendingApproval = result.pendingApproval == true;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              widget.product != null
-                  ? (t('updated') ?? 'Updated')
-                  : (t('saved') ?? 'Saved'),
+              pendingApproval
+                  ? (t('pending_approval'))
+                  : widget.product != null
+                      ? (t('updated') ?? 'Updated')
+                      : (t('saved') ?? 'Saved'),
             ),
-            backgroundColor: Colors.green,
+            backgroundColor: pendingApproval ? Colors.orange : Colors.green,
+            duration: Duration(seconds: pendingApproval ? 4 : 2),
           ),
         );
-        Navigator.pop(context, result);
+        Navigator.pop(context, result.toJson());
       }
+    } on SubscriptionLimitException catch (e) {
+      if (mounted) _showLimitDialog(e);
     } catch (e) {
-      if (mounted) _showError(e.toString());
+      if (mounted) _showError(mapBackendError(e.toString()));
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
+  }
+
+  void _showLimitDialog(SubscriptionLimitException e) {
+    final isDaily = e.code == 'daily_creation_limit_reached';
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Text(
+          isDaily
+              ? (t('daily_limit_reached') ?? 'Daily Limit Reached')
+              : (t('online_limit_reached') ?? 'Online Limit Reached'),
+        ),
+        content: Text(e.message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text(t('cancel') ?? 'Cancel'),
+          ),
+          if (!isDaily)
+            FilledButton(
+              onPressed: () {
+                Navigator.pop(context);
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => SubscriptionUpgradeScreen(
+                      initialStatus: {
+                        'online_count': e.onlineCount,
+                        'online_limit': e.onlineLimit,
+                        'tiers': e.tiers,
+                      },
+                    ),
+                  ),
+                );
+              },
+              child: Text(t('upgrade') ?? 'Upgrade'),
+            ),
+        ],
+      ),
+    );
   }
 
   void _showError(String msg) {
@@ -567,7 +622,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
                                     borderRadius: BorderRadius.circular(8),
                                   ),
                                   child: Text(
-                                    'Limit reached',
+                                    t('limit_reached'),
                                     style: theme.textTheme.labelSmall?.copyWith(
                                       color: Colors.orange.shade800,
                                       fontWeight: FontWeight.w600,
@@ -722,6 +777,34 @@ class _AddProductScreenState extends State<AddProductScreen> {
                             ],
                           ),
                         ],
+                      ),
+                    ),
+                    const SizedBox(height: 28),
+
+                    _buildSectionHeader(
+                      context,
+                      Icons.public,
+                      t('marketplace') ?? 'Marketplace',
+                    ),
+                    Container(
+                      decoration: BoxDecoration(
+                        color: theme.colorScheme.surface,
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(color: Colors.grey.shade200),
+                      ),
+                      child: SwitchListTile(
+                        value: _listOnline,
+                        onChanged: (v) => setState(() => _listOnline = v),
+                        title: Text(t('list_on_marketplace') ?? 'List on marketplace'),
+                        subtitle: Text(
+                          t('list_online_desc') ??
+                              'When off, product is saved in your store but hidden from the marketplace.',
+                          style: const TextStyle(fontSize: 12),
+                        ),
+                        secondary: Icon(
+                          _listOnline ? Icons.storefront : Icons.inventory_2_outlined,
+                          color: theme.colorScheme.primary,
+                        ),
                       ),
                     ),
                     const SizedBox(height: 28),

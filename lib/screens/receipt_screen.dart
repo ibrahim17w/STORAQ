@@ -5,6 +5,7 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:pdf/pdf.dart';
@@ -19,26 +20,58 @@ import '../lang/translations.dart';
 import '../services/store_service.dart';
 import '../services/order_service.dart';
 import '../services/offline_service.dart';
+import '../services/currency_service.dart';
+import '../utils/order_price_helper.dart';
+import '../utils/store_qr_helper.dart';
+import '../models/models.dart';
 
-class ReceiptScreen extends StatefulWidget {
+class ReceiptScreen extends ConsumerStatefulWidget {
   final int? orderId;
   final Map<String, dynamic>? offlineOrder;
   const ReceiptScreen({super.key, this.orderId, this.offlineOrder});
 
   @override
-  State<ReceiptScreen> createState() => _ReceiptScreenState();
+  ConsumerState<ReceiptScreen> createState() => _ReceiptScreenState();
 }
 
-class _ReceiptScreenState extends State<ReceiptScreen> {
+class _ReceiptScreenState extends ConsumerState<ReceiptScreen> {
   Map<String, dynamic>? _order;
   Map<String, dynamic>? _store;
   Map<String, dynamic>? _settings;
   bool _loading = true;
 
+  // Currency settings (display currency + exchange rates) for converting the
+  // receipt into the store's display currency. Loaded in the background.
+  Map<String, dynamic> _currencySettings = {
+    'display_currency': null,
+    'show_both_prices': false,
+    'exchange_rates': <dynamic>[],
+  };
+
   final GlobalKey _printKey = GlobalKey();
 
-  /// Configure this later to your app store / download link
-  static const String _appDownloadUrl = 'https://marketbridge.app/download';
+  int? get _storeId {
+    final fromStore = _store?['id'];
+    if (fromStore != null) {
+      if (fromStore is int) return fromStore;
+      return int.tryParse(fromStore.toString());
+    }
+    final fromOrder = _order?['store_id'];
+    if (fromOrder != null) {
+      if (fromOrder is int) return fromOrder;
+      return int.tryParse(fromOrder.toString());
+    }
+    return null;
+  }
+
+  /// Same smart link as the store-owner QR: opens store in app or download page.
+  String get _qrPayload {
+    final storeId = _storeId;
+    if (storeId != null && storeId > 0) {
+      return StoreQrHelper.storeQrPayload(storeId);
+    }
+    return StoreQrHelper.downloadUrl();
+  }
 
   @override
   void initState() {
@@ -48,6 +81,14 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
     } else {
       _loadOnline();
     }
+    _loadCurrencySettings();
+  }
+
+  Future<void> _loadCurrencySettings() async {
+    try {
+      final settings = await CurrencyService.getCurrencySettings();
+      if (mounted) setState(() => _currencySettings = settings.toLegacyMap());
+    } catch (_) {}
   }
 
   // ==================== DATA LOADING ====================
@@ -79,19 +120,19 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
       Map<String, dynamic>? store;
       Map<String, dynamic>? settings;
 
-      // Try cached store first (fast, no network)
       try {
         store = await OfflineService.getCachedStore();
       } catch (_) {}
 
-      settings = await OrderService.getReceiptSettingsOffline();
-
-      // Try server (may fail if offline)
       try {
-        store ??= await StoreService.getMyStore();
+        settings = (await OrderService.getReceiptSettingsOffline()).toJson();
+      } catch (_) {}
+
+      try {
+        store ??= (await StoreService.getMyStore()).toJson();
       } catch (_) {}
       try {
-        settings = await OrderService.loadReceiptSettings();
+        settings = (await OrderService.loadReceiptSettings()).toJson();
       } catch (_) {}
 
       if (mounted && store != null) {
@@ -100,29 +141,24 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
       if (mounted && settings != null) {
         setState(() => _settings = settings);
       }
-    } catch (_) {
-      // Never crash — receipt is already visible with defaults
-    }
+    } catch (_) {}
   }
 
   Future<void> _loadOnline() async {
     try {
       final response = await OrderService.fetchOrder(widget.orderId!);
-
-      final orderRow = response['order'] as Map<String, dynamic>? ?? {};
-      final items = response['items'] as List<dynamic>? ?? [];
-      final flattenedOrder = <String, dynamic>{...orderRow, 'items': items};
+      final flattenedOrder = response.toJson();
 
       Map<String, dynamic>? store;
       Map<String, dynamic>? settings;
 
       try {
-        store = await StoreService.getMyStore();
+        store = (await StoreService.getMyStore()).toJson();
       } catch (_) {
         store = await OfflineService.getCachedStore();
       }
       try {
-        settings = await OrderService.loadReceiptSettings();
+        settings = (await OrderService.loadReceiptSettings()).toJson();
       } catch (_) {}
 
       if (mounted) {
@@ -187,7 +223,79 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
 
   // ==================== PRICE / HELPERS ====================
 
-  String get _currency => _settings?['currency_symbol']?.toString() ?? 'SYP';
+  /// The cart's base currency (currency the order amounts were recorded in).
+  String get _baseCurrency {
+    final oc = _order?['currency']?.toString();
+    if (oc != null && oc.trim().isNotEmpty) return oc.trim();
+    for (final it in _items) {
+      final c = it['currency']?.toString();
+      if (c != null && c.trim().isNotEmpty) return c.trim();
+    }
+    return _settings?['currency_symbol']?.toString() ?? 'SYP';
+  }
+
+  /// The currency the customer should see this receipt in (display currency),
+  /// preferring the value stored on the order, then the current store setting.
+  /// Null when no display currency applies.
+  String? get _receiptDisplayCurrency {
+    final oc = _order?['display_currency']?.toString().trim();
+    if (oc != null && oc.isNotEmpty) return oc;
+    final sc = _currencySettings['display_currency']?.toString().trim();
+    if (sc != null && sc.isNotEmpty) return sc;
+    return null;
+  }
+
+  /// The currency the receipt is actually rendered in.
+  String get _currency => _receiptDisplayCurrency ?? _baseCurrency;
+
+  dynamic get _rates => _currencySettings['exchange_rates'];
+
+  /// Converts an amount from [from] into the receipt's render currency.
+  double _toRender(double amount, String from) {
+    final target = _receiptDisplayCurrency;
+    if (target == null) return amount;
+    if (from.trim().toLowerCase() == target.toLowerCase()) return amount;
+    final converted = CurrencyService.convertPrice(amount, from, target, _rates);
+    return converted ?? amount;
+  }
+
+  /// Resolves an aggregate (subtotal/discount/tax/total) in the render currency.
+  /// Prefers a value precomputed at checkout (stored on the order in the display
+  /// currency) so offline receipts stay exact even before live rates load.
+  double _renderAggregate(String storedKey, double baseValue) {
+    final target = _receiptDisplayCurrency;
+    if (target != null) {
+      final storedCur = _order?['display_currency']?.toString().trim();
+      final stored = _parsePrice(_order?[storedKey]);
+      if (stored > 0 &&
+          storedCur != null &&
+          storedCur.toLowerCase() == target.toLowerCase()) {
+        return stored;
+      }
+
+      if (storedKey == 'display_subtotal') {
+        return _items.fold<double>(
+          0,
+          (sum, item) => sum + _itemTotalRender(item),
+        );
+      }
+
+      if (storedKey == 'display_total') {
+        final subtotal = _items.fold<double>(
+          0,
+          (sum, item) => sum + _itemTotalRender(item),
+        );
+        final displayDiscount = _parsePrice(_order?['display_discount']);
+        final displayTax = _parsePrice(_order?['display_tax']);
+        final discount = displayDiscount > 0
+            ? displayDiscount
+            : _toRender(_computedDiscount, _baseCurrency);
+        final tax = displayTax > 0 ? displayTax : _toRender(_computedTax, _baseCurrency);
+        return subtotal - discount + tax;
+      }
+    }
+    return _toRender(baseValue, _baseCurrency);
+  }
 
   double _parsePrice(dynamic value) {
     if (value == null) return 0;
@@ -199,7 +307,7 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
 
   String _fmt(dynamic value) {
     final d = _parsePrice(value);
-    return '$_currency ${d.toStringAsFixed(2)}';
+    return OrderPriceHelper.formatAmount(d, _currency);
   }
 
   String get _receiptNumber =>
@@ -207,15 +315,34 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
       _order?['id']?.toString() ??
       'OFFLINE';
 
-  List<Map<String, dynamic>> get _items =>
-      List<Map<String, dynamic>>.from(_order?['items'] ?? []);
+  List<Map<String, dynamic>> get _items {
+    final raw = _order?['items'];
+    if (raw is! List) return [];
+    return raw.map((item) {
+      if (item is OrderItem) return item.toJson();
+      if (item is Map<String, dynamic>) return item;
+      if (item is Map) return Map<String, dynamic>.from(item);
+      return <String, dynamic>{};
+    }).where((item) => item.isNotEmpty).toList();
+  }
 
   double _itemTotal(Map<String, dynamic> item) {
     final tp = _parsePrice(item['total_price']);
     if (tp > 0) return tp;
-    final p = _parsePrice(item['price']);
+    final p = _parsePrice(item['price'] ?? item['unit_price']);
     final q = (item['quantity'] as num?)?.toDouble() ?? 1.0;
     return p * q;
+  }
+
+  /// An item's line total expressed in the receipt's render currency. Prefers a
+  /// stored per-item display price, then converts from the item's own currency.
+  double _itemTotalRender(Map<String, dynamic> item) {
+    return OrderPriceHelper.lineTotalInCurrency(
+      item,
+      targetCurrency: _receiptDisplayCurrency,
+      exchangeRates: _rates,
+      fallbackCurrency: _baseCurrency,
+    );
   }
 
   double get _computedSubtotal {
@@ -399,10 +526,10 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
         DateTime.tryParse(_order?['created_at']?.toString() ?? '') ??
         DateTime.now();
 
-    final subtotal = _computedSubtotal;
-    final discount = _computedDiscount;
-    final tax = _computedTax;
-    final total = _computedTotal;
+    final subtotal = _renderAggregate('display_subtotal', _computedSubtotal);
+    final discount = _renderAggregate('display_discount', _computedDiscount);
+    final tax = _renderAggregate('display_tax', _computedTax);
+    final total = _renderAggregate('display_total', _computedTotal);
     final hasDiscount = _order?.containsKey('discount') == true || discount > 0;
     final hasTax = _order?.containsKey('tax') == true || tax > 0;
 
@@ -547,7 +674,7 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
               item['name']?.toString() ??
               t('unknown');
           final qty = item['quantity'] ?? 1;
-          final itemTotal = _itemTotal(item);
+          final itemTotal = _itemTotalRender(item);
           return Padding(
             padding: const EdgeInsets.symmetric(vertical: 4),
             child: Row(
@@ -631,7 +758,7 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
                 children: [
                   BarcodeWidget(
                     barcode: Barcode.qrCode(),
-                    data: _appDownloadUrl,
+                    data: _qrPayload,
                     width: 100,
                     height: 100,
                     color: theme.colorScheme.primary,

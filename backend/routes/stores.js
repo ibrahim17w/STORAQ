@@ -187,13 +187,14 @@ router.post('/stores/my-invitations/:id/reject', authenticateToken, requireRealU
 router.get('/stores', async (req, res) => {
   try {
     const { page, limit, offset } = getPagination(req, 20, 100);
-    const countResult = await pool.query('SELECT COUNT(*) as total FROM stores');
+    const countResult = await pool.query('SELECT COUNT(*) as total FROM stores WHERE COALESCE(is_active, TRUE) = TRUE');
     const total = parseInt(countResult.rows[0].total);
 
     const result = await pool.query(`
       SELECT s.*, c.display_names as city_display_names
       FROM stores s
       LEFT JOIN canonical_cities c ON s.city_id = c.canonical_id
+      WHERE COALESCE(s.is_active, TRUE) = TRUE
       ORDER BY s.id DESC
       LIMIT $1 OFFSET $2
     `, [limit, offset]);
@@ -215,6 +216,7 @@ router.get('/stores/sponsored', async (req, res) => {
       FROM stores s
       LEFT JOIN canonical_cities c ON s.city_id = c.canonical_id
       WHERE s.is_sponsored = TRUE
+      AND COALESCE(s.is_active, TRUE) = TRUE
       AND (s.sponsorship_expires_at IS NULL OR s.sponsorship_expires_at > NOW())
       ORDER BY s.sponsorship_tier DESC, s.rating DESC
       LIMIT 10
@@ -235,7 +237,9 @@ router.get('/stores/:id', async (req, res) => {
       WHERE s.id=$1
     `, [req.params.id]);
     if (result.rows.length === 0) return res.status(404).json({ error: 'Store not found' });
-    res.json(result.rows[0]);
+    const store = result.rows[0];
+    if (store.is_active === false) return res.status(403).json({ error: 'This store has been deactivated' });
+    res.json(store);
   } catch (err) {
     console.error('Get store error:', err);
     res.status(500).json({ error: 'Failed to load store' });
@@ -389,24 +393,50 @@ router.put('/my-store/staff/:id/permissions', authenticateToken, requireRealUser
 // ADMIN
 // ============================================================
 
-router.put('/admin/stores/:id/sponsor', authenticateToken, async (req, res) => {
+// Local requireAdmin (matches the pattern in routes/products.js and
+// routes/subscriptions.js — TODO consolidate into middleware/auth.js).
+async function requireAdmin(req, res, next) {
   try {
-    const userResult = await pool.query('SELECT role FROM users WHERE id = $1', [req.user.userId]);
-    if (userResult.rows.length === 0 || userResult.rows[0].role !== 'admin') {
+    const result = await pool.query('SELECT role FROM users WHERE id = $1', [req.user.userId]);
+    if (result.rows.length === 0 || result.rows[0].role !== 'admin') {
       return res.status(403).json({ error: 'Admin access required' });
     }
+    next();
+  } catch (err) {
+    res.status(500).json({ error: 'Authorization failed' });
+  }
+}
 
+router.put('/admin/stores/:id/sponsor', authenticateToken, requireRealUser, requireAdmin, async (req, res) => {
+  try {
     const storeId = parseInt(req.params.id);
-    const { tier, expiresAt } = req.body;
+    if (!Number.isInteger(storeId) || storeId <= 0) {
+      return res.status(400).json({ error: 'Invalid store id' });
+    }
+    const tier = Number.isInteger(parseInt(req.body.tier)) ? parseInt(req.body.tier) : 1;
+    // Validate expiresAt — accept ISO date strings only, reject garbage
+    // that Postgres would otherwise reject with a 500 leaking detail.
+    let expiresAt = null;
+    if (req.body.expiresAt) {
+      const parsed = new Date(req.body.expiresAt);
+      if (isNaN(parsed.getTime())) {
+        return res.status(400).json({ error: 'Invalid expiresAt' });
+      }
+      expiresAt = parsed.toISOString();
+    }
 
-    await pool.query(
+    const result = await pool.query(
       `UPDATE stores
-       SET is_sponsored = TRUE,
-       sponsorship_tier = $1,
-       sponsorship_expires_at = $2
-       WHERE id = $3`,
-      [tier || 1, expiresAt || null, storeId]
+         SET is_sponsored = TRUE,
+             sponsorship_tier = $1,
+             sponsorship_expires_at = $2
+       WHERE id = $3
+       RETURNING id`,
+      [tier, expiresAt, storeId]
     );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Store not found' });
+    }
 
     res.json({ message: 'Store sponsorship updated' });
   } catch (err) {

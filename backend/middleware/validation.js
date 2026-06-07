@@ -31,6 +31,7 @@ const schemas = {
       village: z.string().max(100).nullish().transform(v => v || undefined),
     }).nullish().transform(v => v || undefined),
     preferred_language: z.string().max(10).nullish().transform(v => v || undefined),
+    turnstile_token: z.string().max(2048).nullish().transform(v => v || undefined),
   }),
   verifyEmail: z.object({
     email: z.string().email(),
@@ -77,14 +78,23 @@ const schemas = {
       quantity: numField().refine(n => Number.isInteger(n) && n > 0, { message: 'quantity must be a positive integer' }),
       unit_price: numField({ optional: true }).refine(n => n === undefined || n === null || n >= 0, { message: 'unit_price must be non-negative' }),
       total_price: numField({ optional: true }).refine(n => n === undefined || n === null || n >= 0, { message: 'total_price must be non-negative' }),
+      display_price: numField({ optional: true }).refine(n => n === undefined || n === null || n >= 0, { message: 'display_price must be non-negative' }),
+      display_currency: z.string().max(10).nullish().transform(v => v ?? undefined),
       product_name: z.string().max(200).optional(),
       barcode: z.string().max(50).nullish().transform(v => v ?? undefined),
-      currency: z.string().max(10).optional(),
+      currency: z.string().max(10).nullish().transform(v => v ?? undefined),
     })).min(1),
     customer_name: z.string().max(100).optional(),
     customer_phone: z.string().max(50).optional(),
+    subtotal: numField({ optional: true }).refine(n => n === undefined || n === null || n >= 0, { message: 'subtotal must be non-negative' }),
     discount: numField({ optional: true }).refine(n => n === undefined || n === null || n >= 0, { message: 'discount must be non-negative' }),
     tax: numField({ optional: true }).refine(n => n === undefined || n === null || n >= 0, { message: 'tax must be non-negative' }),
+    total: numField({ optional: true }).refine(n => n === undefined || n === null || n >= 0, { message: 'total must be non-negative' }),
+    display_subtotal: numField({ optional: true }).refine(n => n === undefined || n === null || n >= 0, { message: 'display_subtotal must be non-negative' }),
+    display_discount: numField({ optional: true }).refine(n => n === undefined || n === null || n >= 0, { message: 'display_discount must be non-negative' }),
+    display_tax: numField({ optional: true }).refine(n => n === undefined || n === null || n >= 0, { message: 'display_tax must be non-negative' }),
+    display_total: numField({ optional: true }).refine(n => n === undefined || n === null || n >= 0, { message: 'display_total must be non-negative' }),
+    display_currency: z.string().max(10).nullish().transform(v => v ?? undefined),
     payment_method: z.string().max(50).optional(),
     notes: z.string().max(500).optional(),
   }),
@@ -108,6 +118,7 @@ const schemas = {
     category_id: numField({ optional: true }).refine(n => n === undefined || n === null || (Number.isInteger(n) && n > 0), { message: 'category_id must be a positive integer' }),
     low_stock_threshold: numField({ optional: true }).refine(n => n === undefined || n === null || (Number.isInteger(n) && n >= 0), { message: 'low_stock_threshold must be a non-negative integer' }),
     currency: z.string().max(10).optional(),
+    list_online: z.preprocess(v => v === 'true' || v === true, z.boolean().optional()),
   }),
   updateProduct: z.object({
     name: z.string().max(200).optional(),
@@ -119,6 +130,51 @@ const schemas = {
     low_stock_threshold: numField({ optional: true }).refine(n => n === undefined || n === null || (Number.isInteger(n) && n >= 0), { message: 'low_stock_threshold must be a non-negative integer' }),
     existing_images: z.string().optional(),
     currency: z.string().max(10).optional(),
+    list_online: z.preprocess(v => v === 'true' || v === true || v === 'false' || v === false ? (v === 'true' || v === true) : undefined, z.boolean().optional()),
+    is_online: z.preprocess(v => v === 'true' || v === true || v === 'false' || v === false ? (v === 'true' || v === true) : undefined, z.boolean().optional()),
+  }),
+  subscriptionRequest: z.object({
+    tier_id: numField().refine(n => Number.isInteger(n) && n > 0, { message: 'tier_id must be a positive integer' }),
+    payment_track: z.enum(['syria_agent', 'stripe']),
+  }),
+  sponsorshipQuote: z.object({
+    scope_type: z.enum(['radius', 'village', 'city', 'country', 'world']),
+    radius_km: numField({ optional: true }).refine(
+      n => n === undefined || n === null || (Number.isInteger(n) && n >= 5 && n <= 100),
+      { message: 'radius_km must be between 5 and 100' }
+    ),
+    duration_days: numField().refine(
+      n => Number.isInteger(n) && n >= 3 && n <= 90,
+      { message: 'duration_days must be between 3 and 90' }
+    ),
+    target_village: z.string().max(100).optional(),
+    target_city: z.string().max(100).optional(),
+    target_country: z.string().max(100).optional(),
+    target_country_code: z.string().max(2).optional(),
+    target_city_id: z.string().max(100).optional(),
+  }),
+  sponsorshipRequest: z.object({
+    scope_type: z.enum(['radius', 'village', 'city', 'country', 'world']),
+    radius_km: numField({ optional: true }).refine(
+      n => n === undefined || n === null || (Number.isInteger(n) && n >= 5 && n <= 100),
+      { message: 'radius_km must be between 5 and 100' }
+    ),
+    duration_days: numField().refine(
+      n => Number.isInteger(n) && n >= 3 && n <= 90,
+      { message: 'duration_days must be between 3 and 90' }
+    ),
+    payment_track: z.enum(['syria_agent', 'stripe']),
+    target_village: z.string().max(100).optional(),
+    target_city: z.string().max(100).optional(),
+    target_country: z.string().max(100).optional(),
+    target_country_code: z.string().max(2).optional(),
+    target_city_id: z.string().max(100).optional(),
+  }),
+  setProductOnline: z.object({
+    is_online: z.boolean(),
+  }),
+  bulkSetOnline: z.object({
+    online_product_ids: z.array(numField().refine(n => Number.isInteger(n) && n > 0)).max(2000),
   }),
   sponsorStore: z.object({
     tier: z.number().optional(),

@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../lang/translations.dart';
 import '../../services/marketplace_service.dart';
+import '../../services/currency_service.dart';
+import '../../models/models.dart';
 import '../product/product_card.dart';
 import '../product/product_list_tile.dart';
 import '../store/store_card.dart';
@@ -36,11 +38,26 @@ class _SearchBottomSheetState extends State<SearchBottomSheet> {
   bool _hasSearched = false;
   static const String _historyKey = 'search_history';
 
+  // Currency display settings (defaults: no conversion until loaded)
+  Map<String, dynamic> _currencySettings = {
+    'display_currency': null,
+    'show_both_prices': false,
+    'exchange_rates': <dynamic>[],
+  };
+
   @override
   void initState() {
     super.initState();
     _focusNode.requestFocus();
     _loadHistory();
+    _loadCurrencySettings();
+  }
+
+  Future<void> _loadCurrencySettings() async {
+    try {
+      final settings = await CurrencyService.getCurrencySettings();
+      if (mounted) setState(() => _currencySettings = settings.toLegacyMap());
+    } catch (_) {}
   }
 
   Future<void> _loadHistory() async {
@@ -280,6 +297,7 @@ class _SearchBottomSheetState extends State<SearchBottomSheet> {
                             child: ProductListTile(
                               product: p,
                               onTap: () => widget.onProductTap(p),
+                              currencySettings: _currencySettings,
                             ),
                           ),
                         ),

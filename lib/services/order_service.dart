@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../models/models.dart';
 import 'api_service.dart';
 import 'offline_service.dart';
 
@@ -31,6 +32,11 @@ class OrderService {
     double discount = 0,
     double tax = 0,
     double total = 0,
+    double? displaySubtotal,
+    double? displayDiscount,
+    double? displayTax,
+    double? displayTotal,
+    String? displayCurrency,
     String paymentMethod = 'cash',
     String? notes,
     String? receiptNumber,
@@ -49,6 +55,13 @@ class OrderService {
     if (receiptNumber != null && receiptNumber.isNotEmpty) {
       body['receipt_number'] = receiptNumber;
     }
+    if (displaySubtotal != null) body['display_subtotal'] = displaySubtotal;
+    if (displayDiscount != null) body['display_discount'] = displayDiscount;
+    if (displayTax != null) body['display_tax'] = displayTax;
+    if (displayTotal != null) body['display_total'] = displayTotal;
+    if (displayCurrency != null && displayCurrency.isNotEmpty) {
+      body['display_currency'] = displayCurrency;
+    }
 
     final response = await ApiService.postWithTimeout(
       '${ApiService.baseUrl}/api/orders',
@@ -60,7 +73,27 @@ class OrderService {
     throw Exception(data['error']?.toString() ?? 'Checkout failed');
   }
 
-  static Future<List<dynamic>> fetchOrders({
+  static Future<List<Order>> fetchMyOrders({
+    int limit = 50,
+    int offset = 0,
+  }) async {
+    final response = await ApiService.getWithTimeout(
+      '${ApiService.baseUrl}/api/my-orders?limit=$limit&offset=$offset',
+      headers: await ApiService.authHeaders,
+    );
+    if (response.statusCode == 200) {
+      final body = jsonDecode(response.body) as Map<String, dynamic>;
+      final rawOrders = body.containsKey('data')
+          ? body['data'] as List<dynamic>
+          : body as List<dynamic>? ?? [];
+      return rawOrders
+          .map((item) => Order.fromJson(item as Map<String, dynamic>))
+          .toList();
+    }
+    throw Exception('Failed to load orders');
+  }
+
+  static Future<List<Order>> fetchOrders({
     int limit = 50,
     int offset = 0,
   }) async {
@@ -70,27 +103,33 @@ class OrderService {
     );
     if (response.statusCode == 200) {
       final body = jsonDecode(response.body) as Map<String, dynamic>;
-      final List<dynamic> orders;
+      final List<dynamic> rawOrders;
       if (body.containsKey('data')) {
-        orders = body['data'] as List<dynamic>;
+        rawOrders = body['data'] as List<dynamic>;
       } else {
-        orders = body as List<dynamic>? ?? [];
+        rawOrders = body as List<dynamic>? ?? [];
       }
-      await OfflineService.cacheOrders(orders);
-      return orders;
+      await OfflineService.cacheOrders(rawOrders);
+      return rawOrders
+          .map((item) => Order.fromJson(item as Map<String, dynamic>))
+          .toList();
     }
     throw Exception('Failed to load orders');
   }
 
   /// Order history when offline or server unreachable.
-  static Future<List<dynamic>> fetchOrdersOffline({
+  static Future<List<Order>> fetchOrdersOffline({
     int limit = 200,
     int offset = 0,
   }) async {
-    return OfflineService.getCachedOrders(limit: limit, offset: offset);
+    final rawOrders =
+        await OfflineService.getCachedOrders(limit: limit, offset: offset);
+    return rawOrders
+        .map((item) => Order.fromJson(item as Map<String, dynamic>))
+        .toList();
   }
 
-  static Future<List<dynamic>> loadOrderHistory({
+  static Future<List<Order>> loadOrderHistory({
     int limit = 50,
     int offset = 0,
   }) async {
@@ -102,13 +141,18 @@ class OrderService {
     return fetchOrdersOffline(limit: limit, offset: offset);
   }
 
-  static Future<Map<String, dynamic>> fetchOrder(int id) async {
+  static Future<Order> fetchOrder(int id) async {
     final response = await ApiService.getWithTimeout(
       '${ApiService.baseUrl}/api/orders/$id',
       headers: await ApiService.authHeaders,
     );
     final data = jsonDecode(response.body) as Map<String, dynamic>;
-    if (response.statusCode == 200) return data;
+    if (response.statusCode == 200) {
+      final orderRow = data['order'] as Map<String, dynamic>? ?? data;
+      final items = data['items'] as List<dynamic>? ?? [];
+      final flatMap = <String, dynamic>{...orderRow, 'items': items};
+      return Order.fromJson(flatMap);
+    }
     throw Exception(data['error']?.toString() ?? 'Order not found');
   }
 
@@ -116,43 +160,38 @@ class OrderService {
   // RECEIPT SETTINGS
   // ============================================================
 
-  static Future<Map<String, dynamic>> getReceiptSettings() async {
+  static Future<ReceiptSettings> getReceiptSettings() async {
     final response = await ApiService.getWithTimeout(
       '${ApiService.baseUrl}/api/my-store/receipt-settings',
       headers: await ApiService.authHeaders,
     );
     if (response.statusCode == 200) {
-      final settings = jsonDecode(response.body) as Map<String, dynamic>;
-      await _cacheReceiptSettings(settings);
-      return settings;
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+      await _cacheReceiptSettings(data);
+      return ReceiptSettings.fromJson(data);
     }
-    return _defaultReceiptSettings();
+    return ReceiptSettings.defaults;
   }
-
-  static Map<String, dynamic> _defaultReceiptSettings() => {
-    'footer_message': 'Thank you for your purchase!',
-    'show_logo': true,
-    'show_barcode': true,
-    'currency_symbol': 'SYP',
-  };
 
   static Future<void> _cacheReceiptSettings(Map<String, dynamic> settings) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('cached_receipt_settings', jsonEncode(settings));
   }
 
-  static Future<Map<String, dynamic>> getReceiptSettingsOffline() async {
+  static Future<ReceiptSettings> getReceiptSettingsOffline() async {
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getString('cached_receipt_settings');
-    if (raw == null) return _defaultReceiptSettings();
+    if (raw == null) return ReceiptSettings.defaults;
     try {
-      return jsonDecode(raw) as Map<String, dynamic>;
+      return ReceiptSettings.fromJson(
+        jsonDecode(raw) as Map<String, dynamic>,
+      );
     } catch (_) {
-      return _defaultReceiptSettings();
+      return ReceiptSettings.defaults;
     }
   }
 
-  static Future<Map<String, dynamic>> loadReceiptSettings() async {
+  static Future<ReceiptSettings> loadReceiptSettings() async {
     try {
       if (await ApiService.isServerReachable()) {
         return await getReceiptSettings();
@@ -161,7 +200,7 @@ class OrderService {
     return getReceiptSettingsOffline();
   }
 
-  static Future<Map<String, dynamic>> updateReceiptSettings({
+  static Future<ReceiptSettings> updateReceiptSettings({
     String? footerMessage,
     bool? showLogo,
     bool? showBarcode,
@@ -179,7 +218,7 @@ class OrderService {
       body: jsonEncode(body),
     );
     final data = jsonDecode(response.body) as Map<String, dynamic>;
-    if (response.statusCode == 200) return data;
+    if (response.statusCode == 200) return ReceiptSettings.fromJson(data);
     throw Exception(data['error']?.toString() ?? 'Update failed');
   }
 
@@ -187,14 +226,17 @@ class OrderService {
   // LOW STOCK ALERTS
   // ============================================================
 
-  static Future<List<dynamic>> fetchLowStockProducts() async {
+  static Future<List<Product>> fetchLowStockProducts() async {
     final response = await ApiService.getWithTimeout(
       '${ApiService.baseUrl}/api/my-store/low-stock',
       headers: await ApiService.authHeaders,
       timeout: const Duration(seconds: 5),
     );
     if (response.statusCode == 200) {
-      return jsonDecode(response.body) as List<dynamic>;
+      final rawList = jsonDecode(response.body) as List<dynamic>;
+      return rawList
+          .map((item) => Product.fromJson(item as Map<String, dynamic>))
+          .toList();
     }
     return [];
   }
@@ -308,6 +350,11 @@ class OrderService {
           discount: (orderData['discount'] as num?)?.toDouble() ?? 0,
           tax: (orderData['tax'] as num?)?.toDouble() ?? 0,
           total: (orderData['total'] as num?)?.toDouble() ?? 0,
+          displaySubtotal: (orderData['display_subtotal'] as num?)?.toDouble(),
+          displayDiscount: (orderData['display_discount'] as num?)?.toDouble(),
+          displayTax: (orderData['display_tax'] as num?)?.toDouble(),
+          displayTotal: (orderData['display_total'] as num?)?.toDouble(),
+          displayCurrency: orderData['display_currency']?.toString(),
           notes: orderData['notes']?.toString(),
           paymentMethod: orderData['payment_method']?.toString() ?? 'cash',
           receiptNumber: receiptNo,

@@ -20,13 +20,10 @@ class FilterChipWidget extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
         decoration: BoxDecoration(
-          color: Theme.of(
-            context,
-          ).colorScheme.primaryContainer.withOpacity(0.5),
+          color: Theme.of(context).colorScheme.primaryContainer.withValues(
+                alpha: 0.45,
+              ),
           borderRadius: BorderRadius.circular(20),
-          border: Border.all(
-            color: Theme.of(context).colorScheme.primary.withOpacity(0.3),
-          ),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,

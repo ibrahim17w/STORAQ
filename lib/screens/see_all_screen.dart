@@ -1,16 +1,18 @@
 // lib/screens/see_all_screen.dart
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../widgets/product/product_card.dart';
 import '../widgets/product/product_list_tile.dart';
 import '../widgets/store/store_card.dart';
 import '../widgets/store/store_list_tile.dart';
 
-class SeeAllScreen extends StatefulWidget {
+class SeeAllScreen extends ConsumerStatefulWidget {
   final String title;
   final List<dynamic> items;
   final bool isStore;
   final void Function(dynamic) onProductTap;
   final void Function(dynamic) onStoreTap;
+  final Map<String, dynamic>? currencySettings;
 
   const SeeAllScreen({
     super.key,
@@ -19,13 +21,14 @@ class SeeAllScreen extends StatefulWidget {
     required this.isStore,
     required this.onProductTap,
     required this.onStoreTap,
+    this.currencySettings,
   });
 
   @override
-  State<SeeAllScreen> createState() => _SeeAllScreenState();
+  ConsumerState<SeeAllScreen> createState() => _SeeAllScreenState();
 }
 
-class _SeeAllScreenState extends State<SeeAllScreen> {
+class _SeeAllScreenState extends ConsumerState<SeeAllScreen> {
   bool _isGrid = true;
 
   void _toggleView() => setState(() => _isGrid = !_isGrid);
@@ -65,6 +68,7 @@ class _SeeAllScreenState extends State<SeeAllScreen> {
             product: item,
             onTap: () => widget.onProductTap(item),
             width: 160,
+            currencySettings: widget.currencySettings,
           );
         }).toList(),
       ),
@@ -90,6 +94,7 @@ class _SeeAllScreenState extends State<SeeAllScreen> {
           child: ProductListTile(
             product: widget.items[i],
             onTap: () => widget.onProductTap(widget.items[i]),
+            currencySettings: widget.currencySettings,
           ),
         );
       },

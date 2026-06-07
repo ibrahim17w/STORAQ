@@ -4,7 +4,7 @@ import 'dart:typed_data';
 import 'dart:io';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:http/http.dart' as http;
-import 'package:shared_preferences/shared_preferences.dart';
+import 'prefs_service.dart';
 import 'package:flutter/foundation.dart' show kDebugMode;
 
 class ApiService {
@@ -17,7 +17,7 @@ class ApiService {
       if (Platform.isIOS) return 'http://localhost:3000';
       return 'http://localhost:3000';
     }
-    return 'https://market-bridge-baug.onrender.com';
+    return 'https://storaq-baug.onrender.com';
   }
 
   static final Map<String, dynamic> _cache = {};
@@ -29,28 +29,29 @@ class ApiService {
   };
 
   static Future<String?> getToken() async {
-    final prefs = await SharedPreferences.getInstance();
+    final prefs = await PrefsService.instance;
     return prefs.getString('token');
   }
 
   static Future<void> setToken(String token) async {
-    final prefs = await SharedPreferences.getInstance();
+    final prefs = await PrefsService.instance;
     await prefs.setString('token', token);
   }
 
   static Future<void> clearToken() async {
-    final prefs = await SharedPreferences.getInstance();
+    final prefs = await PrefsService.instance;
     await prefs.remove('token');
     await prefs.remove('store_context');
+    await prefs.remove('is_guest');
   }
 
   static Future<void> setGuest(bool isGuest) async {
-    final prefs = await SharedPreferences.getInstance();
+    final prefs = await PrefsService.instance;
     await prefs.setBool('is_guest', isGuest);
   }
 
   static Future<bool> isGuest() async {
-    final prefs = await SharedPreferences.getInstance();
+    final prefs = await PrefsService.instance;
     return prefs.getBool('is_guest') ?? false;
   }
 
@@ -59,7 +60,7 @@ class ApiService {
   }
 
   static Future<void> logoutGuest() async {
-    final prefs = await SharedPreferences.getInstance();
+    final prefs = await PrefsService.instance;
     await prefs.remove('is_guest');
     await prefs.remove('token');
     await prefs.remove('store_context');
@@ -103,12 +104,12 @@ class ApiService {
   // ==================== STORE CONTEXT (Owner / Worker) ====================
 
   static Future<void> setStoreContext(Map<String, dynamic> context) async {
-    final prefs = await SharedPreferences.getInstance();
+    final prefs = await PrefsService.instance;
     await prefs.setString('store_context', jsonEncode(context));
   }
 
   static Future<Map<String, dynamic>?> getStoreContext() async {
-    final prefs = await SharedPreferences.getInstance();
+    final prefs = await PrefsService.instance;
     final raw = prefs.getString('store_context');
     if (raw == null || raw.isEmpty) return null;
     try {
@@ -119,7 +120,7 @@ class ApiService {
   }
 
   static Future<void> clearStoreContext() async {
-    final prefs = await SharedPreferences.getInstance();
+    final prefs = await PrefsService.instance;
     await prefs.remove('store_context');
   }
 

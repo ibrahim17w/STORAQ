@@ -1,6 +1,7 @@
-// lib/widgets/store/store_card.dart
 import 'package:flutter/material.dart';
 import '../cached_image.dart';
+import '../product/product_image_viewer.dart';
+import '../../utils/location_helper.dart';
 
 class StoreCard extends StatelessWidget {
   final dynamic store;
@@ -21,14 +22,13 @@ class StoreCard extends StatelessWidget {
     this.distanceKm,
     this.isSponsored = false,
     this.isCompact = false,
-    this.width = 160,
+    this.width = 148,
     this.sponsoredLabel,
     this.showFavorite = false,
     this.isFavorite = false,
     this.onFavoriteToggle,
   });
 
-  /// Keep only the first 2 parts of a long geocoding string
   String _shortLocation(dynamic store) {
     final city = store['city']?.toString() ?? '';
     final country = store['country']?.toString() ?? '';
@@ -41,165 +41,163 @@ class StoreCard extends StatelessWidget {
         .toList();
     final shortCity = parts.length > 2 ? '${parts[0]}, ${parts[1]}' : city;
 
-    if (shortCity.isNotEmpty && country.isNotEmpty)
+    if (shortCity.isNotEmpty && country.isNotEmpty) {
       return '$shortCity, $country';
+    }
     return shortCity.isNotEmpty ? shortCity : country;
   }
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     final description =
         store['location_description']?.toString() ??
         store['description']?.toString() ??
         '';
+    final imageHeight = isCompact ? 82.0 : 90.0;
 
-    final imageHeight = isCompact ? 90 : (isSponsored ? 80 : 90);
-    final padding = isCompact
-        ? const EdgeInsets.fromLTRB(8, 6, 8, 4)
-        : const EdgeInsets.fromLTRB(10, 6, 10, 4);
-
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        width: width,
-        margin: isSponsored ? const EdgeInsets.symmetric(horizontal: 4) : null,
-        decoration: BoxDecoration(
-          color: Theme.of(context).cardColor,
+    return Container(
+      width: width,
+      margin: isSponsored ? const EdgeInsets.symmetric(horizontal: 4) : null,
+      decoration: compactListCardDecoration(context),
+      clipBehavior: Clip.antiAlias,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
           borderRadius: BorderRadius.circular(14),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.04),
-              blurRadius: 8,
-              offset: const Offset(0, 2),
-            ),
-          ],
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ClipRRect(
-              borderRadius: const BorderRadius.vertical(
-                top: Radius.circular(14),
-              ),
-              child: Stack(
-                children: [
-                  CachedAppImage(
-                    imageUrl: store['image_url'],
-                    height: imageHeight.toDouble(),
-                    width: double.infinity,
-                    fit: BoxFit.cover,
-                    memCacheWidth: isCompact ? 300 : 400,
-                  ),
-                  if (showFavorite)
-                    Positioned(
-                      top: 6,
-                      right: 6,
-                      child: Material(
-                        color: Colors.black.withOpacity(0.35),
-                        borderRadius: BorderRadius.circular(12),
-                        child: InkWell(
-                          borderRadius: BorderRadius.circular(12),
-                          onTap: onFavoriteToggle,
-                          child: Padding(
-                            padding: const EdgeInsets.all(5),
-                            child: Icon(
-                              isFavorite
-                                  ? Icons.favorite
-                                  : Icons.favorite_border,
-                              size: 18,
-                              color: isFavorite ? Colors.red : Colors.white,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ClipRRect(
+                borderRadius: const BorderRadius.vertical(
+                  top: Radius.circular(14),
+                ),
+                child: Stack(
+                  children: [
+                    CachedAppImage(
+                      imageUrl: store['image_url'],
+                      height: imageHeight,
+                      width: double.infinity,
+                      fit: BoxFit.cover,
+                      memCacheWidth: isCompact ? 280 : 360,
+                    ),
+                    if (showFavorite)
+                      Positioned(
+                        top: 4,
+                        right: 4,
+                        child: Material(
+                          color: Colors.black.withValues(alpha: 0.4),
+                          borderRadius: BorderRadius.circular(8),
+                          child: InkWell(
+                            borderRadius: BorderRadius.circular(8),
+                            onTap: onFavoriteToggle,
+                            child: Padding(
+                              padding: const EdgeInsets.all(4),
+                              child: Icon(
+                                isFavorite
+                                    ? Icons.favorite
+                                    : Icons.favorite_border,
+                                size: 16,
+                                color:
+                                    isFavorite ? Colors.red : Colors.white,
+                              ),
                             ),
                           ),
                         ),
                       ),
-                    ),
-                ],
+                  ],
+                ),
               ),
-            ),
-            Padding(
-              padding: padding,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    store['name'] ?? '',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontWeight: FontWeight.w600,
-                      fontSize: isCompact ? 11 : 12,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    _shortLocation(store),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: isCompact ? 9 : 10,
-                      color: Colors.grey.shade500,
-                    ),
-                  ),
-                  if (description.isNotEmpty && !isSponsored) ...[
-                    const SizedBox(height: 2),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(8, 7, 8, 8),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
                     Text(
-                      description,
+                      store['name'] ?? '',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
-                        fontSize: isCompact ? 8 : 9,
-                        color: Colors.grey.shade600,
+                        fontWeight: FontWeight.w600,
+                        fontSize: isCompact ? 11 : 12,
                       ),
                     ),
-                  ],
-                  if (isSponsored) ...[
-                    const SizedBox(height: 3),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 6,
-                        vertical: 2,
+                    const SizedBox(height: 2),
+                    Text(
+                      _shortLocation(store),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: isCompact ? 9 : 10,
+                        color: theme.colorScheme.onSurfaceVariant,
                       ),
-                      decoration: BoxDecoration(
-                        color: Colors.amber.shade100,
-                        borderRadius: BorderRadius.circular(6),
-                      ),
-                      child: Text(
-                        sponsoredLabel ?? 'TOP',
+                    ),
+                    if (description.isNotEmpty && !isSponsored) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        description,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                         style: TextStyle(
-                          fontSize: 8,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.amber.shade800,
+                          fontSize: isCompact ? 8 : 9,
+                          color: theme.colorScheme.onSurfaceVariant,
                         ),
                       ),
-                    ),
-                  ],
-                  if (distanceKm != null && distanceKm != double.infinity) ...[
-                    const SizedBox(height: 3),
-                    Row(
-                      children: [
-                        Icon(
-                          Icons.location_on,
-                          size: 10,
-                          color: Theme.of(context).colorScheme.primary,
+                    ],
+                    if (isSponsored) ...[
+                      const SizedBox(height: 4),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 2,
                         ),
-                        const SizedBox(width: 2),
-                        Text(
-                          '${distanceKm!.toStringAsFixed(1)} km',
-                          style: TextStyle(
-                            fontSize: 9,
-                            fontWeight: FontWeight.w600,
-                            color: Theme.of(context).colorScheme.primary,
+                        decoration: BoxDecoration(
+                          color: theme.colorScheme.tertiaryContainer,
+                          borderRadius: BorderRadius.circular(4),
+                          border: Border.all(
+                            color: theme.colorScheme.tertiary
+                                .withValues(alpha: 0.3),
                           ),
                         ),
-                      ],
-                    ),
+                        child: Text(
+                          sponsoredLabel ?? 'TOP',
+                          style: TextStyle(
+                            fontSize: 8,
+                            fontWeight: FontWeight.w700,
+                            color: theme.colorScheme.onTertiaryContainer,
+                          ),
+                        ),
+                      ),
+                    ],
+                    if (distanceKm != null && distanceKm != double.infinity) ...[
+                      const SizedBox(height: 3),
+                      Row(
+                        children: [
+                          Icon(
+                            Icons.near_me_outlined,
+                            size: 10,
+                            color: theme.colorScheme.primary,
+                          ),
+                          const SizedBox(width: 2),
+                          Text(
+                            LocationHelper.formatDistanceKm(distanceKm!),
+                            style: TextStyle(
+                              fontSize: 9,
+                              fontWeight: FontWeight.w600,
+                              color: theme.colorScheme.primary,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
                   ],
-                ],
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );

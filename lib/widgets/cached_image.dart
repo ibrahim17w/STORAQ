@@ -104,11 +104,22 @@ class CachedAppImage extends StatelessWidget {
       color: theme.colorScheme.surfaceContainerHighest,
       child: Icon(
         icon,
-        color: theme.colorScheme.onSurfaceVariant.withOpacity(0.4),
-        size: (width != null && height != null)
-            ? (width! < height! ? width! : height!) * 0.3
-            : 32,
+        color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.4),
+        size: _placeholderIconSize(width, height),
       ),
     );
+  }
+
+  static double _placeholderIconSize(double? w, double? h) {
+    if (w != null &&
+        h != null &&
+        w.isFinite &&
+        h.isFinite &&
+        w > 0 &&
+        h > 0) {
+      final minDim = w < h ? w : h;
+      return (minDim * 0.3).clamp(16.0, 48.0);
+    }
+    return 32;
   }
 }

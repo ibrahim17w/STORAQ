@@ -4,13 +4,24 @@ const router = express.Router();
 const crypto = require('crypto');
 
 const { pool } = require('../config/database');
-const { authenticateToken, optionalAuth, requireRealUser } = require('../middleware/auth');
+const { authenticateToken, optionalAuth, requireRealUser, genericIpRateLimit } = require('../middleware/auth');
 const { schemas, validate, validateQuery } = require('../middleware/validation');
 const { reverseGeocodeLogic, createCanonicalCity } = require('../services/location');
 const { nominatimFetch } = require('../services/location');
 
 // ==================== GEOCODING ENDPOINTS ====================
-router.get('/geocode/search', validateQuery(schemas.geocodeSearch), async (req, res) => {
+// Per-IP rate limit: every cache miss here makes an outbound request to
+// Nominatim (OpenStreetMap), whose policy caps us at ~1 req/sec from one
+// IP for the whole project. Without per-caller throttling, a single
+// attacker can blow through our quota in seconds and get the entire
+// service IP-banned by Nominatim — taking down geocoding for every
+// user. 60/hour is well above legitimate flows (one search per address
+// the user types) but well below abuse rates.
+router.get(
+  '/geocode/search',
+  genericIpRateLimit({ keyPrefix: 'geo-search', max: 60, windowMs: 60 * 60 * 1000 }),
+  validateQuery(schemas.geocodeSearch),
+  async (req, res) => {
   try {
     const { q: query, lang: userLang } = req.validatedQuery;
     const lang = userLang || 'en';
@@ -66,7 +77,11 @@ router.get('/geocode/search', validateQuery(schemas.geocodeSearch), async (req, 
   }
 });
 
-router.get('/geocode/reverse', validateQuery(schemas.geocodeReverse), async (req, res) => {
+router.get(
+  '/geocode/reverse',
+  genericIpRateLimit({ keyPrefix: 'geo-reverse', max: 60, windowMs: 60 * 60 * 1000 }),
+  validateQuery(schemas.geocodeReverse),
+  async (req, res) => {
   try {
     const { lat, lng, lang: userLang } = req.validatedQuery;
     const lang = userLang || 'en';

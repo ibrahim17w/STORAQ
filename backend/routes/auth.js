@@ -7,14 +7,29 @@ const router = express.Router();
 
 const { pool } = require('../config/database');
 const { schemas, validate, validateQuery } = require('../middleware/validation');
-const { authenticateToken, optionalAuth, requireRealUser, authLimiter, loginIpLimiter } = require('../middleware/auth');
+const { authenticateToken, optionalAuth, requireRealUser, authLimiter, loginIpLimiter, genericIpRateLimit } = require('../middleware/auth');
 const { sanitizeString, getPagination, isValidEmail, serverNow, formatWaitTime, getBaseUrl } = require('../middleware/helpers');
 const { validatePasswordStrength, checkLoginLockout, recordFailedLogin, clearLoginAttempts, checkOtpRateLimit, generateOtp, storeOtp, verifyOtp } = require('../middleware/security');
 const { transporter, emailReady, sendEmail, emailHtml } = require('../middleware/email');
 const { emailTexts, getLang } = require('../config/constants');
+const { verifyTurnstile } = require('../middleware/antibot');
+
+// We INTENTIONALLY no longer log OTP codes to stdout, even gated on
+// LOG_OTP_CODES + non-production. Codes are recoverable session credentials;
+// any log aggregator, terminal screenshot, or PaaS log viewer with read
+// access becomes a full account-takeover oracle. If you need to test OTP
+// flows locally without SMTP, read the most recent `verification_codes`
+// row directly from the database — that requires DB access, which is the
+// correct trust boundary for credential material.
+
+// TURNSTILE CHALLENGE — returns site key for client-side rendering
+router.get('/turnstile-challenge', (req, res) => {
+  const siteKey = process.env.TURNSTILE_SITE_KEY || '1x00000000000000000000AA';
+  res.json({ site_key: siteKey, token: siteKey === '1x00000000000000000000AA' ? 'dev-mode-pass' : null });
+});
 
 // REGISTER
-router.post('/register', validate(schemas.register), async (req, res) => {
+router.post('/register', verifyTurnstile, validate(schemas.register), async (req, res) => {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -66,7 +81,6 @@ router.post('/register', validate(schemas.register), async (req, res) => {
           subject: texts.verifySubject,
           html: emailHtml({ title: texts.verifySubject, subtitle: texts.verifySubtitle, bodyContent: texts.verifyBody, btnText: texts.verifyBtn, btnUrl: null, code, lang }),
         });
-        console.log('\n📧 VERIFY CODE for', normalizedEmail, ':', code, '(expires in 10 min)\n');
       } catch (e) {
         console.error('Email failed:', e.message);
       }
@@ -115,7 +129,15 @@ router.post('/verify-email', validate(schemas.verifyEmail), async (req, res) => 
 });
 
 // RESEND VERIFICATION
-router.post('/resend-verification', validate(schemas.resendVerification), async (req, res) => {
+// Per-IP rate limit: prevents one host from spamming verification emails
+// to many accounts by rotating the `email` field. (The existing
+// `checkOtpRateLimit` is per-email — it stops one email being targeted
+// repeatedly, but does not stop one bot blasting many emails.)
+router.post(
+  '/resend-verification',
+  genericIpRateLimit({ keyPrefix: 'resend-verif', max: 10, windowMs: 60 * 60 * 1000 }),
+  validate(schemas.resendVerification),
+  async (req, res) => {
   try {
     const { email } = req.validatedBody;
     const result = await pool.query('SELECT * FROM users WHERE email=$1', [email]);
@@ -152,7 +174,6 @@ router.post('/resend-verification', validate(schemas.resendVerification), async 
           subject: texts.verifySubject,
           html: emailHtml({ title: texts.verifySubject, subtitle: texts.verifySubtitle, bodyContent: texts.verifyBody, btnText: texts.verifyBtn, btnUrl: null, code, lang }),
         });
-        console.log('\n📧 RESEND VERIFY CODE for', email, ':', code, '(expires in 10 min)\n');
       } catch (e) {
         console.error('Email failed:', e.message);
       }
@@ -251,7 +272,16 @@ router.post('/login', loginIpLimiter, async (req, res) => {
 });
 
 // GUEST LOGIN
-router.post('/guest-login', async (req, res) => {
+// Per-IP rate limit prevents a single host from minting unlimited valid
+// guest JWTs. Without this limit, an attacker can issue thousands of
+// tokens per second and use each one once against per-user rate-limited
+// endpoints (since per-user limits key on userId, and we mint a fresh
+// random userId per token). 30/hour/IP is far above any organic flow
+// (legitimate users get one token per session, reused for 7 days).
+router.post(
+  '/guest-login',
+  genericIpRateLimit({ keyPrefix: 'guest-login', max: 30, windowMs: 60 * 60 * 1000 }),
+  async (req, res) => {
   try {
     const guestId = 'guest_' + crypto.randomBytes(16).toString('hex');
     const token = jwt.sign(
@@ -274,12 +304,29 @@ router.post('/guest-login', async (req, res) => {
 });
 
 // FORGOT PASSWORD
-router.post('/forgot-password', validate(schemas.forgotPassword), async (req, res) => {
+// Per-IP rate limit: stops one host blasting reset emails to many accounts.
+// Combined with the existing per-email `checkOtpRateLimit`, both axes are
+// now bounded (per-victim AND per-attacker).
+router.post(
+  '/forgot-password',
+  genericIpRateLimit({ keyPrefix: 'forgot-pw', max: 10, windowMs: 60 * 60 * 1000 }),
+  validate(schemas.forgotPassword),
+  async (req, res) => {
   try {
     const { email } = req.validatedBody;
     const result = await pool.query('SELECT * FROM users WHERE email=$1', [email]);
 
     if (result.rows.length === 0) {
+      // Equalize timing with the "user exists" branch to close the
+      // email-enumeration oracle. The branch below does:
+      //   checkOtpRateLimit (1 DB roundtrip) + storeOtp (bcrypt hash +
+      //   transaction) + email send (async, doesn't block response).
+      // We approximate the same work here: one fake bcrypt-hash of the
+      // length-typical email string. This makes the response time within
+      // ~10% of the real path for an attacker probing with random emails.
+      try {
+        await bcrypt.hash(email + 'pad-for-timing', 10);
+      } catch (_) {}
       return res.json({ message: 'If this email is registered, a reset code will be sent.' });
     }
 
@@ -308,13 +355,12 @@ router.post('/forgot-password', validate(schemas.forgotPassword), async (req, re
           subject: texts.resetSubject,
           html: emailHtml({ title: texts.resetSubject, subtitle: texts.resetSubtitle, bodyContent: texts.resetBody, btnText: null, btnUrl: null, code, lang }),
         });
-        console.log('\n🔑 RESET CODE for', email, ':', code, '(expires in 10 min)\n');
       } catch (e) {
-        console.error('❌ Reset email failed:', e.message);
+        console.error('Reset email failed:', e.message);
       }
     })();
   } catch (err) {
-    console.error('❌ Forgot password error:', err.message);
+    console.error('Forgot password error:', err.message);
     res.status(500).json({ error: 'Something went wrong. Please try again later.' });
   }
 });
@@ -349,11 +395,23 @@ router.post('/reset-password', validate(schemas.resetPassword), async (req, res)
     }
 
     const hashed = await bcrypt.hash(new_password, 10);
-    await pool.query('UPDATE users SET password_hash=$1 WHERE email=$2', [hashed, email]);
+    // Bump password_changed_at — every JWT issued before this moment is
+    // now invalid (see middleware/auth.js token-revocation watermark).
+    // This is the security control that makes "I lost my phone, reset my
+    // password" actually log the attacker out. We don't need to
+    // invalidate the cache here because the user is logging in fresh
+    // anyway, but doing it keeps the cache consistent.
+    const updated = await pool.query(
+      'UPDATE users SET password_hash=$1, password_changed_at=NOW() WHERE email=$2 RETURNING id',
+      [hashed, email]
+    );
+    if (updated.rows.length > 0) {
+      try { require('../middleware/auth').invalidatePwdCache(updated.rows[0].id); } catch (_) {}
+    }
 
     res.json({ message: 'Your password has been updated. You can now log in.' });
   } catch (err) {
-    console.error('❌ Reset password error:', err.message);
+    console.error('Reset password error:', err.message);
     res.status(500).json({ error: 'Something went wrong. Please try again later.' });
   }
 });

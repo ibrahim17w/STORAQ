@@ -4,30 +4,18 @@ const router = express.Router();
 
 const { pool } = require('../config/database');
 
+// Public health endpoint — must NEVER leak internals (NODE_ENV, version,
+// stack traces, error messages, uptime detail). Load balancers only need
+// a 200/503 + a tiny JSON body. Anything more is fingerprint material for
+// attackers (e.g. NODE_ENV='development' on prod, version='1.0.0' for
+// CVE matching, raw err.message exposing pg connection strings).
 router.get('/health', async (req, res) => {
   try {
-    const dbStart = Date.now();
     await pool.query('SELECT 1');
-    const dbLatency = Date.now() - dbStart;
-
-    res.json({
-      status: 'healthy',
-      timestamp: new Date().toISOString(),
-      uptime: process.uptime(),
-      database: {
-        connected: true,
-        latency_ms: dbLatency,
-      },
-      environment: process.env.NODE_ENV || 'development',
-      version: '1.0.0',
-    });
+    res.json({ status: 'healthy' });
   } catch (err) {
-    res.status(503).json({
-      status: 'unhealthy',
-      timestamp: new Date().toISOString(),
-      error: 'Database connection failed',
-      detail: err.message,
-    });
+    console.error('Health check DB error:', err.message);
+    res.status(503).json({ status: 'unhealthy' });
   }
 });
 

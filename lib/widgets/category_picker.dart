@@ -6,6 +6,7 @@ import 'package:connectivity_plus/connectivity_plus.dart';
 import '../services/categories_service.dart';
 import '../services/offline_service.dart';
 import '../lang/translations.dart';
+import '../utils/category_helper.dart';
 
 class CategoryPicker extends StatefulWidget {
   final List<int> selectedIds;
@@ -87,43 +88,8 @@ class _CategoryPickerState extends State<CategoryPicker> {
     }
   }
 
-  /// Translate category name using your translation system.
-  /// Falls back to original English name if no translation found.
-  String _displayName(Map<String, dynamic> cat) {
-    final rawName = cat['name']?.toString() ?? 'Unknown';
-
-    // Create a translation key from the category name
-    // e.g. "Food & Beverages" -> "cat_food_beverages"
-    final key = _makeTranslationKey(rawName);
-
-    // Try to get translated version
-    final translated = _safeTranslate(key);
-
-    // If translation returns the key itself (not found), use original
-    if (translated == key || translated.isEmpty) {
-      return rawName;
-    }
-    return translated;
-  }
-
-  /// Converts category name to a safe translation key
-  String _makeTranslationKey(String name) {
-    return 'cat_' +
-        name
-            .toLowerCase()
-            .replaceAll(RegExp(r'[^a-z0-9\s]'), '')
-            .trim()
-            .replaceAll(RegExp(r'\s+'), '_');
-  }
-
-  /// Safe wrapper around t() that won't crash if key missing
-  String _safeTranslate(String key) {
-    try {
-      return t(key);
-    } catch (_) {
-      return key;
-    }
-  }
+  String _displayName(Map<String, dynamic> cat) =>
+      CategoryHelper.displayNameFromMap(cat);
 
   @override
   Widget build(BuildContext context) {

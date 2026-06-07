@@ -1,5 +1,6 @@
 //stores_screen.dart
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:latlong2/latlong.dart';
 import '../services/api_service.dart';
@@ -11,16 +12,17 @@ import 'my_store_screen.dart';
 import 'store_map_screen.dart';
 import '../lang/translations.dart';
 import '../services/store_service.dart';
+import '../models/models.dart';
 
-class StoresScreen extends StatefulWidget {
+class StoresScreen extends ConsumerStatefulWidget {
   const StoresScreen({super.key});
 
   @override
-  State<StoresScreen> createState() => _StoresScreenState();
+  ConsumerState<StoresScreen> createState() => _StoresScreenState();
 }
 
-class _StoresScreenState extends State<StoresScreen> {
-  List<dynamic> stores = [];
+class _StoresScreenState extends ConsumerState<StoresScreen> {
+  List<Store> stores = [];
   bool isLoading = true;
   String error = '';
   bool _hasStoreAccess = false;
@@ -63,7 +65,7 @@ class _StoresScreenState extends State<StoresScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Market Bridge'),
+        title: Text(t('app_name')),
         actions: [
           // FIXED: Show My Store for both owner and accepted worker
           if (_hasStoreAccess)
@@ -75,9 +77,9 @@ class _StoresScreenState extends State<StoresScreen> {
                 );
               },
               icon: const Icon(Icons.inventory_2, color: Colors.white),
-              label: const Text(
-                'My Store',
-                style: TextStyle(color: Colors.white),
+              label: Text(
+                t('my_store'),
+                style: const TextStyle(color: Colors.white),
               ),
             ),
           const ThemeToggle(),
@@ -93,27 +95,22 @@ class _StoresScreenState extends State<StoresScreen> {
       body: isLoading
           ? const Center(child: CircularProgressIndicator())
           : error.isNotEmpty
-          ? Center(child: Text('Error: $error'))
+          ? Center(child: Text('${t('error')}: $error'))
           : ListView.builder(
               itemCount: stores.length,
               itemBuilder: (context, index) {
                 final store = stores[index];
 
-                // FIX: always parse ID safely
-                final int storeId = int.tryParse(store['id'].toString()) ?? 0;
+                final int storeId = store.intId ?? 0;
 
                 final String storeName =
-                    store['name']?.toString() ?? 'Unknown Store';
+                    store.name ?? t('unknown_store');
 
-                final String? storeImageUrl = store['image_url']?.toString();
+                final String? storeImageUrl = store.imageUrl;
 
-                final double? lat = store['lat'] != null
-                    ? double.tryParse(store['lat'].toString())
-                    : null;
+                final double? lat = store.lat;
 
-                final double? lng = store['lng'] != null
-                    ? double.tryParse(store['lng'].toString())
-                    : null;
+                final double? lng = store.lng;
 
                 return Card(
                   margin: const EdgeInsets.symmetric(
@@ -131,7 +128,7 @@ class _StoresScreenState extends State<StoresScreen> {
                       style: const TextStyle(fontWeight: FontWeight.bold),
                     ),
                     subtitle: Text(
-                      '${store['city']} - ${store['village']}\n${store['phone'] ?? ''}',
+                      '${store.city ?? ''} - ${store.village ?? ''}\n${store.phone ?? ''}',
                     ),
                     isThreeLine: true,
                     onTap: () {
@@ -162,7 +159,7 @@ class _StoresScreenState extends State<StoresScreen> {
                                 targetStoreId: storeId,
                                 targetName: storeName,
                                 targetImageUrl: storeImageUrl,
-                                stores: stores, // CHANGED: pass the full list
+                                stores: stores.map((s) => s.toJson()).toList(),
                               ),
                             ),
                           );

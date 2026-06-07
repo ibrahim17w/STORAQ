@@ -1,18 +1,19 @@
 // lib/screens/store_invitations_screen.dart
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../services/api_service.dart';
 import '../lang/translations.dart';
 import 'store_products_screen.dart';
 import '../services/store_service.dart';
 
-class StoreInvitationsScreen extends StatefulWidget {
+class StoreInvitationsScreen extends ConsumerStatefulWidget {
   const StoreInvitationsScreen({super.key});
 
   @override
-  State<StoreInvitationsScreen> createState() => _StoreInvitationsScreenState();
+  ConsumerState<StoreInvitationsScreen> createState() => _StoreInvitationsScreenState();
 }
 
-class _StoreInvitationsScreenState extends State<StoreInvitationsScreen> {
+class _StoreInvitationsScreenState extends ConsumerState<StoreInvitationsScreen> {
   List<dynamic> _invitations = [];
   bool _loading = true;
   String? _error;
@@ -189,7 +190,7 @@ class _StoreInvitationsScreenState extends State<StoreInvitationsScreen> {
                   final storeName =
                       inv['store_name']?.toString() ??
                       t('unknown_store') ??
-                      'Unknown Store';
+                      t('unknown_store');
                   final storeCity = inv['store_city']?.toString() ?? '';
                   final storeImage = inv['store_image']?.toString();
                   final invitedBy = inv['invited_by_name']?.toString();

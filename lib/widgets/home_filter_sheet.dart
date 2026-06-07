@@ -5,6 +5,13 @@ import '../utils/tr.dart';
 import 'common/price_input_field.dart';
 import 'common/price_preset_chip.dart';
 
+class FilterCategoryOption {
+  final int id;
+  final String label;
+
+  const FilterCategoryOption({required this.id, required this.label});
+}
+
 class HomeFilterSheet extends StatefulWidget {
   final String locationFilterMode;
   final String? userVillage;
@@ -17,8 +24,8 @@ class HomeFilterSheet extends StatefulWidget {
   final double? distanceFilterKm;
   final double selectedMinPrice;
   final double selectedMaxPrice;
-  final String? selectedCategory;
-  final List<String> categories;
+  final int? selectedCategoryId;
+  final List<FilterCategoryOption> categories;
   final double minRating;
   final String sortBy;
   final void Function(Map<String, dynamic>) onApply;
@@ -38,7 +45,7 @@ class HomeFilterSheet extends StatefulWidget {
     this.distanceFilterKm,
     required this.selectedMinPrice,
     required this.selectedMaxPrice,
-    required this.selectedCategory,
+    required this.selectedCategoryId,
     required this.categories,
     required this.minRating,
     required this.sortBy,
@@ -56,7 +63,7 @@ class _HomeFilterSheetState extends State<HomeFilterSheet> {
   late double? _distanceFilterKm;
   late double _selMinPrice;
   late double _selMaxPrice;
-  late String? _category;
+  late int? _categoryId;
   late double _rating;
   late String _sort;
 
@@ -76,7 +83,7 @@ class _HomeFilterSheetState extends State<HomeFilterSheet> {
     _distanceFilterKm = widget.distanceFilterKm;
     _selMinPrice = widget.selectedMinPrice;
     _selMaxPrice = widget.selectedMaxPrice;
-    _category = widget.selectedCategory;
+    _categoryId = widget.selectedCategoryId;
     _rating = widget.minRating;
     _sort = widget.sortBy;
   }
@@ -114,7 +121,7 @@ class _HomeFilterSheetState extends State<HomeFilterSheet> {
   }
 
   String _formatPriceLabel(double price) {
-    if (price == double.infinity) return t('unlimited') ?? 'Unlimited';
+    if (price == double.infinity) return t('unlimited');
     if (price >= 1000000) return '\$${(price / 1000000).toStringAsFixed(1)}M';
     if (price >= 1000) return '\$${(price / 1000).toStringAsFixed(1)}K';
     return '\$${price.toStringAsFixed(0)}';
@@ -154,7 +161,7 @@ class _HomeFilterSheetState extends State<HomeFilterSheet> {
             child: Row(
               children: [
                 Text(
-                  t('filters') ?? 'Filters',
+                  t('filters'),
                   style: Theme.of(
                     context,
                   ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
@@ -162,7 +169,7 @@ class _HomeFilterSheetState extends State<HomeFilterSheet> {
                 const Spacer(),
                 TextButton(
                   onPressed: widget.onReset,
-                  child: Text(t('reset_all') ?? 'Reset all'),
+                  child: Text(t('reset_all')),
                 ),
               ],
             ),
@@ -174,10 +181,7 @@ class _HomeFilterSheetState extends State<HomeFilterSheet> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _buildSectionTitle(
-                    t('location') ?? 'Location',
-                    Icons.location_on,
-                  ),
+                  _buildSectionTitle(t('location'), Icons.location_on),
                   const SizedBox(height: 8),
                   if (!widget.hasPosition)
                     SizedBox(
@@ -188,9 +192,7 @@ class _HomeFilterSheetState extends State<HomeFilterSheet> {
                           Navigator.pop(context);
                         },
                         icon: const Icon(Icons.my_location, size: 18),
-                        label: Text(
-                          t('enable_gps_location') ?? 'Enable GPS location',
-                        ),
+                        label: Text(t('enable_gps_location')),
                       ),
                     )
                   else
@@ -201,9 +203,7 @@ class _HomeFilterSheetState extends State<HomeFilterSheet> {
                           spacing: 8,
                           children: [
                             ChoiceChip(
-                              label: Text(
-                                tr('all_regions', fallback: 'All Regions'),
-                              ),
+                              label: Text(tr('all_regions', fallback: 'All Regions')),
                               selected: _locationFilterMode == 'all',
                               onSelected: (_) =>
                                   setState(() => _locationFilterMode = 'all'),
@@ -211,10 +211,7 @@ class _HomeFilterSheetState extends State<HomeFilterSheet> {
                             if (villageId != null || village != null)
                               ChoiceChip(
                                 label: Text(
-                                  village ??
-                                      villageId ??
-                                      t('nearby') ??
-                                      'Nearby',
+                                  village ?? villageId ?? t('nearby'),
                                 ),
                                 selected: _locationFilterMode == 'village',
                                 onSelected: (_) => setState(
@@ -228,7 +225,7 @@ class _HomeFilterSheetState extends State<HomeFilterSheet> {
                                           city.isNotEmpty &&
                                           city.toLowerCase() != 'null'
                                       ? city
-                                      : (cityId ?? t('nearby') ?? 'Nearby'),
+                                      : (cityId ?? t('nearby')),
                                 ),
                                 selected: _locationFilterMode == 'city',
                                 onSelected: (_) => setState(
@@ -241,8 +238,7 @@ class _HomeFilterSheetState extends State<HomeFilterSheet> {
                                   country != null && country.isNotEmpty
                                       ? country
                                       : (countryCode?.toUpperCase() ??
-                                            t('unknown_country') ??
-                                            'Unknown Country'),
+                                            t('unknown_country')),
                                 ),
                                 selected: _locationFilterMode == 'country',
                                 onSelected: (_) => setState(
@@ -259,7 +255,7 @@ class _HomeFilterSheetState extends State<HomeFilterSheet> {
                             country != null ||
                             countryCode != null)
                           Text(
-                            '${t('location') ?? 'Location'}: ${[village ?? villageId, city ?? cityId, country ?? countryCode?.toUpperCase()].where((e) => e != null).join(', ')}',
+                            '${t('location')}: ${[village ?? villageId, city ?? cityId, country ?? countryCode?.toUpperCase()].where((e) => e != null).join(', ')}',
                             style: TextStyle(
                               fontSize: 12,
                               color: Theme.of(
@@ -270,13 +266,13 @@ class _HomeFilterSheetState extends State<HomeFilterSheet> {
                       ],
                     ),
                   const SizedBox(height: 20),
-                  _buildSectionTitle(t('radius') ?? 'Radius', Icons.straighten),
+                  _buildSectionTitle(t('radius'), Icons.straighten),
                   const SizedBox(height: 8),
                   Wrap(
                     spacing: 8,
                     children: [
                       ChoiceChip(
-                        label: Text(t('all') ?? 'All'),
+                        label: Text(t('all')),
                         selected: _distanceFilterKm == null,
                         onSelected: (_) =>
                             setState(() => _distanceFilterKm = null),
@@ -292,16 +288,13 @@ class _HomeFilterSheetState extends State<HomeFilterSheet> {
                     ],
                   ),
                   const SizedBox(height: 20),
-                  _buildSectionTitle(
-                    t('price_range') ?? 'Price Range',
-                    Icons.attach_money,
-                  ),
+                  _buildSectionTitle(t('price_range'), Icons.attach_money),
                   const SizedBox(height: 8),
                   Row(
                     children: [
                       Expanded(
                         child: PriceInputField(
-                          label: t('min') ?? 'Min',
+                          label: t('min'),
                           value: _selMinPrice == double.infinity
                               ? ''
                               : _selMinPrice.toStringAsFixed(0),
@@ -320,11 +313,11 @@ class _HomeFilterSheetState extends State<HomeFilterSheet> {
                       ),
                       Expanded(
                         child: PriceInputField(
-                          label: t('max') ?? 'Max',
+                          label: t('max'),
                           value: _selMaxPrice == double.infinity
                               ? ''
                               : _selMaxPrice.toStringAsFixed(0),
-                          hint: t('unlimited') ?? 'Unlimited',
+                          hint: t('unlimited'),
                           onChanged: (val) {
                             if (val.isEmpty) {
                               _setMaxPrice(double.infinity);
@@ -432,31 +425,37 @@ class _HomeFilterSheetState extends State<HomeFilterSheet> {
                     ],
                   ),
                   const SizedBox(height: 20),
-                  _buildSectionTitle(
-                    t('category') ?? 'Category',
-                    Icons.category,
-                  ),
+                  _buildSectionTitle(t('category'), Icons.category),
                   const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [
-                      ChoiceChip(
-                        label: Text(t('all') ?? 'All'),
-                        selected: _category == null,
-                        onSelected: (_) => setState(() => _category = null),
+                  if (widget.categories.isEmpty)
+                    Text(
+                      t('no_categories'),
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
                       ),
-                      ...widget.categories.map((cat) {
-                        return ChoiceChip(
-                          label: Text(cat),
-                          selected: _category == cat,
-                          onSelected: (_) => setState(() => _category = cat),
-                        );
-                      }),
-                    ],
-                  ),
+                    )
+                  else
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        ChoiceChip(
+                          label: Text(t('all')),
+                          selected: _categoryId == null,
+                          onSelected: (_) => setState(() => _categoryId = null),
+                        ),
+                        ...widget.categories.map((cat) {
+                          return ChoiceChip(
+                            label: Text(cat.label),
+                            selected: _categoryId == cat.id,
+                            onSelected: (_) =>
+                                setState(() => _categoryId = cat.id),
+                          );
+                        }),
+                      ],
+                    ),
                   const SizedBox(height: 20),
-                  _buildSectionTitle(t('sort_by') ?? 'Sort By', Icons.sort),
+                  _buildSectionTitle(t('sort_by'), Icons.sort),
                   const SizedBox(height: 8),
                   Wrap(
                     spacing: 8,
@@ -482,10 +481,7 @@ class _HomeFilterSheetState extends State<HomeFilterSheet> {
                     }).toList(),
                   ),
                   const SizedBox(height: 20),
-                  _buildSectionTitle(
-                    t('minimum_rating') ?? 'Minimum Rating',
-                    Icons.star,
-                  ),
+                  _buildSectionTitle(t('minimum_rating'), Icons.star),
                   const SizedBox(height: 8),
                   Row(
                     children: List.generate(5, (index) {
@@ -505,9 +501,7 @@ class _HomeFilterSheetState extends State<HomeFilterSheet> {
                   if (_rating > 0)
                     TextButton(
                       onPressed: () => setState(() => _rating = 0),
-                      child: Text(
-                        t('clear_rating_filter') ?? 'Clear rating filter',
-                      ),
+                      child: Text(t('clear_rating_filter')),
                     ),
                   const SizedBox(height: 24),
                 ],
@@ -526,7 +520,7 @@ class _HomeFilterSheetState extends State<HomeFilterSheet> {
                     'distanceFilterKm': _distanceFilterKm,
                     'minPrice': _selMinPrice,
                     'maxPrice': _selMaxPrice,
-                    'category': _category,
+                    'categoryId': _categoryId,
                     'minRating': _rating,
                     'sortBy': _sort,
                   });
@@ -538,7 +532,7 @@ class _HomeFilterSheetState extends State<HomeFilterSheet> {
                   ),
                 ),
                 child: Text(
-                  t('apply_filters') ?? 'Apply Filters',
+                  t('apply_filters'),
                   style: const TextStyle(
                     fontSize: 16,
                     fontWeight: FontWeight.bold,

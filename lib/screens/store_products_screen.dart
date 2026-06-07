@@ -1,39 +1,59 @@
 // lib/screens/store_products_screen.dart
-// FIXED: Image resolution now uses centralized CachedAppImage widget
-// to properly display cached local images when offline.
 
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:latlong2/latlong.dart';
-import '../services/api_service.dart';
+import '../services/analytics_service.dart';
 import '../lang/translations.dart';
 import '../widgets/cached_image.dart';
+import '../widgets/product/product_list_tile.dart';
+import '../utils/product_store_helper.dart';
 import 'store_map_screen.dart';
+import 'product_detail_screen.dart';
 import '../services/store_service.dart';
-import '../services/location_service.dart';
 import '../services/product_service.dart';
-import '../services/offline_service.dart';
+import '../providers/viewer_currency_provider.dart';
+import '../models/models.dart';
 
-class StoreProductsScreen extends StatefulWidget {
+class StoreProductsScreen extends ConsumerStatefulWidget {
   final int storeId;
   final String? storeName;
   const StoreProductsScreen({super.key, required this.storeId, this.storeName});
 
   @override
-  State<StoreProductsScreen> createState() => _StoreProductsScreenState();
+  ConsumerState<StoreProductsScreen> createState() =>
+      _StoreProductsScreenState();
 }
 
-class _StoreProductsScreenState extends State<StoreProductsScreen> {
-  List<dynamic> products = [];
+class _StoreProductsScreenState extends ConsumerState<StoreProductsScreen> {
+  List<Product> products = [];
   bool isLoading = true;
   String error = '';
   String _displayName = '';
-  Map<String, dynamic>? _storeData;
+  Store? _storeData;
+
+  Map<String, dynamic> _productMap(Product product) {
+    final map = product.toJson();
+    if (_storeData != null) {
+      map['shop_name'] ??= _storeData!.name;
+      map['store_id'] ??= widget.storeId;
+      map['shop_id'] ??= widget.storeId;
+    }
+    return map;
+  }
 
   @override
   void initState() {
     super.initState();
     _displayName = widget.storeName ?? '';
     loadData();
+    _trackVisit();
+  }
+
+  Future<void> _trackVisit() async {
+    try {
+      await AnalyticsService.trackStoreVisit(widget.storeId);
+    } catch (_) {}
   }
 
   Future<void> loadData() async {
@@ -41,7 +61,7 @@ class _StoreProductsScreenState extends State<StoreProductsScreen> {
       final storeData = await StoreService.fetchStore(widget.storeId);
       _storeData = storeData;
       if (_displayName.isEmpty) {
-        _displayName = storeData['name'] ?? t('store');
+        _displayName = storeData.name ?? t('store');
       }
 
       final data = await ProductService.fetchProducts(widget.storeId);
@@ -57,13 +77,24 @@ class _StoreProductsScreenState extends State<StoreProductsScreen> {
     }
   }
 
+  void _openProduct(Product product) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ProductDetailScreen(
+          product: productToDetailMap(_productMap(product)),
+        ),
+      ),
+    );
+  }
+
   void _openOnMap() {
-    final lat = double.tryParse(_storeData?['lat']?.toString() ?? '');
-    final lng = double.tryParse(_storeData?['lng']?.toString() ?? '');
+    final lat = _storeData?.lat;
+    final lng = _storeData?.lng;
     if (lat == null || lng == null) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Location not available')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(t('location_not_available'))),
+      );
       return;
     }
     Navigator.push(
@@ -72,150 +103,123 @@ class _StoreProductsScreenState extends State<StoreProductsScreen> {
         builder: (_) => StoreLocationView(
           target: LatLng(lat, lng),
           targetStoreId: widget.storeId,
-          targetName: _displayName.isNotEmpty
-              ? _displayName
-              : _storeData?['name'],
-          targetImageUrl: _storeData?['image_url']?.toString(),
-          stores: _storeData != null ? [_storeData!] : [],
+          targetName:
+              _displayName.isNotEmpty ? _displayName : _storeData?.name,
+          targetImageUrl: _storeData?.imageUrl,
+          stores: _storeData != null ? [_storeData!.toJson()] : [],
         ),
       ),
     );
   }
 
-  // CRITICAL FIX: Use CachedAppImage which properly handles all image types
-  Widget _buildProductImage(Map<String, dynamic> product) {
-    final imagePaths = OfflineService.getProductImagePaths(product);
-    final firstPath = imagePaths.isNotEmpty ? imagePaths.first : null;
+  Widget _buildStoreHeader(ThemeData theme) {
+    final store = _storeData;
+    if (store == null) return const SizedBox.shrink();
 
-    return CachedAppImage(
-      imageUrl: firstPath,
-      height: 180,
-      width: double.infinity,
-      fit: BoxFit.cover,
-      borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
-      placeholder: Container(
-        height: 180,
-        color: Colors.grey.shade800,
-        child: const Icon(Icons.image_not_supported, size: 50),
+    final city = store.city ?? '';
+    final country = store.country ?? '';
+    final location = [city, country]
+        .where((part) => part.trim().isNotEmpty)
+        .join(', ');
+    final hasLocation = store.lat != null && store.lng != null;
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+      child: Row(
+        children: [
+          ClipRRect(
+            borderRadius: BorderRadius.circular(10),
+            child: CachedAppImage(
+              imageUrl: store.imageUrl,
+              width: 52,
+              height: 52,
+              fit: BoxFit.cover,
+              memCacheWidth: 120,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  _displayName,
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                if (location.isNotEmpty)
+                  Text(
+                    location,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                Text(
+                  '${products.length} ${t('products') ?? 'products'}',
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (hasLocation)
+            OutlinedButton.icon(
+              onPressed: _openOnMap,
+              icon: const Icon(Icons.location_on_outlined, size: 18),
+              label: Text(t('map') ?? 'Map'),
+              style: OutlinedButton.styleFrom(
+                visualDensity: VisualDensity.compact,
+                padding: const EdgeInsets.symmetric(horizontal: 10),
+              ),
+            ),
+        ],
       ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    final hasLocation =
-        _storeData?['lat'] != null && _storeData?['lng'] != null;
-
     return Scaffold(
       appBar: AppBar(
-        title: Text(_displayName.isNotEmpty ? _displayName : t('store')),
-        actions: [
-          if (hasLocation)
-            IconButton(
-              icon: const Icon(Icons.location_on),
-              tooltip: 'View on map',
-              onPressed: _openOnMap,
-            ),
-        ],
+        title: Text(
+          _displayName.isNotEmpty ? _displayName : t('store'),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
       ),
       body: isLoading
           ? const Center(child: CircularProgressIndicator())
           : error.isNotEmpty
-          ? Center(child: Text('Error: $error'))
-          : products.isEmpty
-          ? const Center(child: Text('No products yet'))
-          : ListView.builder(
-              padding: const EdgeInsets.all(12),
-              itemCount: products.length,
-              itemBuilder: (context, index) {
-                final p = products[index];
-                return Card(
-                  margin: const EdgeInsets.only(bottom: 12),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      ClipRRect(
-                        borderRadius: const BorderRadius.vertical(
-                          top: Radius.circular(12),
-                        ),
-                        child: _buildProductImage(p),
+              ? Center(child: Text('${t('error')}: $error'))
+              : products.isEmpty
+                  ? Center(child: Text(t('no_products_yet')))
+                  : RefreshIndicator(
+                      onRefresh: loadData,
+                      child: ListView.separated(
+                        padding: const EdgeInsets.fromLTRB(12, 0, 12, 16),
+                        itemCount: products.length + 1,
+                        separatorBuilder: (_, i) =>
+                            SizedBox(height: i == 0 ? 8 : 10),
+                        itemBuilder: (context, index) {
+                          if (index == 0) {
+                            return _buildStoreHeader(Theme.of(context));
+                          }
+                          final product = products[index - 1];
+                          final map = _productMap(product);
+                          return ProductListTile(
+                            product: map,
+                            compact: true,
+                            currencySettings:
+                                ref.watch(viewerCurrencyProvider).currencySettings,
+                            onTap: () => _openProduct(product),
+                          );
+                        },
                       ),
-                      Padding(
-                        padding: const EdgeInsets.all(16),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              p['name'],
-                              style: const TextStyle(
-                                fontSize: 18,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            if (p['description'] != null)
-                              Text(
-                                p['description'],
-                                style: TextStyle(color: Colors.grey.shade600),
-                              ),
-                            const SizedBox(height: 8),
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                Text(
-                                  '${p['price']} SYP',
-                                  style: TextStyle(
-                                    fontSize: 20,
-                                    fontWeight: FontWeight.bold,
-                                    color: Theme.of(
-                                      context,
-                                    ).colorScheme.primary,
-                                  ),
-                                ),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 12,
-                                    vertical: 4,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color: (p['quantity'] ?? 0) > 0
-                                        ? Colors.green.shade100
-                                        : Colors.red.shade100,
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                  child: Text(
-                                    '${p['quantity'] ?? 0} in stock',
-                                    style: TextStyle(
-                                      color: (p['quantity'] ?? 0) > 0
-                                          ? Colors.green.shade800
-                                          : Colors.red.shade800,
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                            if (p['barcode'] != null) ...[
-                              const SizedBox(height: 8),
-                              Row(
-                                children: [
-                                  const Icon(Icons.qr_code, size: 16),
-                                  const SizedBox(width: 4),
-                                  Text(
-                                    'Barcode: ${p['barcode']}',
-                                    style: const TextStyle(fontSize: 12),
-                                  ),
-                                ],
-                              ),
-                            ],
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                );
-              },
-            ),
+                    ),
     );
   }
 }

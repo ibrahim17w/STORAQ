@@ -1,24 +1,26 @@
-import 'dart:io';
-import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'bootstrap.dart';
+import 'services/desktop_db_init.dart';
+import 'services/deep_link_service.dart';
 import 'screens/login_screen.dart';
-import 'services/api_service.dart';
 import 'theme_provider.dart';
 import 'providers/locale_provider.dart';
+import 'providers/auth_provider.dart';
 import 'lang/translations.dart';
 import 'screens/main_nav_screen.dart';
 
-void main() async {
+void main() {
   WidgetsFlutterBinding.ensureInitialized();
-  await initializeLocale();
-  await initializeTheme();
 
-  if (Platform.isWindows || Platform.isLinux) {
-    sqfliteFfiInit();
-    databaseFactory = databaseFactoryFfi;
-  }
-  runApp(const MyApp());
+  runApp(const ProviderScope(child: MyApp()));
+
+  // Never block the first frame on disk I/O or native SQLite init.
+  unawaited(bootstrapAppSettings());
+  unawaited(DesktopDbInit.ensureInitialized());
+  unawaited(DeepLinkService.init());
 }
 
 class MyApp extends StatelessWidget {
@@ -33,7 +35,7 @@ class MyApp extends StatelessWidget {
           valueListenable: localeNotifier,
           builder: (context, locale, child) {
             return MaterialApp(
-              title: 'Market Bridge',
+              title: t('app_name'),
               debugShowCheckedModeBanner: false,
               themeMode: themeMode,
               locale: locale,
@@ -130,39 +132,36 @@ class MyApp extends StatelessWidget {
   }
 }
 
-class AuthGate extends StatefulWidget {
+class AuthGate extends ConsumerStatefulWidget {
   const AuthGate({super.key});
 
   @override
-  State<AuthGate> createState() => _AuthGateState();
+  ConsumerState<AuthGate> createState() => _AuthGateState();
 }
 
-class _AuthGateState extends State<AuthGate> {
-  bool? _isAuthenticated;
+class _AuthGateState extends ConsumerState<AuthGate> {
+  bool _authTimedOut = false;
 
   @override
   void initState() {
     super.initState();
-    _checkAuth();
-  }
-
-  Future<void> _checkAuth() async {
-    final hasToken = await ApiService.isLoggedIn();
-    final isGuest = await ApiService.isGuest();
-
-    // Stay logged in if we have a token OR if we are in guest mode.
-    // This check is LOCAL ONLY — it never contacts the server.
-    if (mounted) {
-      setState(() => _isAuthenticated = hasToken || isGuest);
-    }
+    // If prefs hang on Windows, never stay on a blank spinner forever.
+    Future.delayed(const Duration(seconds: 2), () {
+      if (!mounted) return;
+      if (ref.read(authProvider).isLoading) {
+        setState(() => _authTimedOut = true);
+      }
+    });
   }
 
   @override
   Widget build(BuildContext context) {
-    if (_isAuthenticated == null) {
+    final auth = ref.watch(authProvider);
+
+    if (auth.isLoading && !_authTimedOut) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
-    if (_isAuthenticated == true) {
+    if (auth.isAuthenticated) {
       return const PopScope(canPop: false, child: MainNavScreen());
     }
     return const LoginScreen();

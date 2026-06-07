@@ -1,4 +1,3 @@
-// lib/widgets/common/section_header.dart
 import 'package:flutter/material.dart';
 import '../../lang/translations.dart';
 
@@ -10,17 +9,21 @@ class SectionHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final primary = theme.colorScheme.primary;
+
     return SliverPadding(
-      padding: const EdgeInsets.fromLTRB(16, 20, 16, 8),
+      padding: const EdgeInsets.fromLTRB(20, 24, 20, 10),
       sliver: SliverToBoxAdapter(
         child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
           children: [
             Expanded(
               child: Text(
                 title,
-                style: const TextStyle(
-                  fontSize: 17,
-                  fontWeight: FontWeight.bold,
+                style: theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: -0.2,
                 ),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
@@ -29,7 +32,20 @@ class SectionHeader extends StatelessWidget {
             if (onSeeAll != null)
               TextButton(
                 onPressed: onSeeAll,
-                child: Text(t('see_all') ?? 'See All'),
+                style: TextButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  minimumSize: const Size(0, 32),
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  foregroundColor: primary,
+                ),
+                child: Text(
+                  t('see_all') ?? 'See All',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: primary,
+                  ),
+                ),
               ),
           ],
         ),

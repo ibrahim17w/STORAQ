@@ -72,7 +72,7 @@ p{line-height:1.7;font-size:16px;color:#555;margin:0 0 20px 0;}
 <body>
 <div class="wrapper">
 <div class="container">
-<div class="logo">🔗 Market Bridge</div>
+<div class="logo">🔗 STORAQ</div>
 <div class="tagline">${subtitle}</div>
 <h1>${title}</h1>
 <p>${bodyContent}</p>
@@ -89,7 +89,7 @@ ${code ? `<div class="code-box"><div class="code-label">${isRTL ? 'رمز الت
 </div>
 <div class="footer">
 ${isRTL ? 'إذا لم تطلب هذا، يمكنك تجاهل البريد بأمان.' : (lang === 'zh' ? '如果您没有请求此操作，可以安全忽略此邮件。' : (lang === 'ru' ? 'Если вы не запрашивали это, просто проигнорируйте письмо.' : 'If you didn\'t request this, you can safely ignore this email.'))}<br>
-© ${new Date().getFullYear()} Market Bridge. ${isRTL ? 'جميع الحقوق محفوظة.' : (lang === 'zh' ? '保留所有权利。' : (lang === 'ru' ? 'Все права защищены.' : 'All rights reserved.'))}
+© ${new Date().getFullYear()} STORAQ. ${isRTL ? 'جميع الحقوق محفوظة.' : (lang === 'zh' ? '保留所有权利。' : (lang === 'ru' ? 'Все права защищены.' : 'All rights reserved.'))}
 </div>
 </div>
 </div>

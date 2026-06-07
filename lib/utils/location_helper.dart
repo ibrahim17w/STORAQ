@@ -19,6 +19,19 @@ class LocationHelper {
 
   static double _rad(double deg) => deg * pi / 180.0;
 
+  /// Human-readable distance: meters under 1 km, otherwise km.
+  static String formatDistanceKm(double distanceKm) {
+    if (distanceKm.isNaN || distanceKm.isInfinite) return '';
+    if (distanceKm < 0.01) return '< 10 m';
+    if (distanceKm < 1.0) {
+      return '${(distanceKm * 1000).round()} m';
+    }
+    if (distanceKm < 10) {
+      return '${distanceKm.toStringAsFixed(1)} km';
+    }
+    return '${distanceKm.toStringAsFixed(0)} km';
+  }
+
   /// Get current GPS position
   static Future<Position?> getCurrentPosition() async {
     try {
@@ -33,7 +46,8 @@ class LocationHelper {
       if (permission == LocationPermission.deniedForever) return null;
 
       return await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
+        desiredAccuracy: LocationAccuracy.medium,
+        timeLimit: const Duration(seconds: 4),
       );
     } catch (e) {
       return null;

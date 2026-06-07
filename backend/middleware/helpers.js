@@ -4,21 +4,52 @@ const fs = require('fs');
 const path = require('path');
 const { uploadsDir } = require('../config/upload');
 
+// SECURITY: the Host header is attacker-controlled. The URLs we mint here
+// are persisted in the database (avatar_url, image_url) and later
+// rendered in users' browsers — letting an attacker swap the host into
+// stored URLs turns this into a phishing / image-replacement primitive.
+//
+// Resolution order (most-trusted first):
+//   1. BASE_URL env var. Set by the operator, single source of truth.
+//   2. ALLOWED_HOSTS whitelist: if the request's Host (or forwarded host)
+//      is on the list, accept it. Useful for multi-domain deployments
+//      where the operator can't pick one canonical BASE_URL.
+//   3. Dev fallback: if not production, accept the request Host. (Server
+//      startup also FATALs if BASE_URL is missing in production, so this
+//      branch is unreachable in real prod traffic.)
+//   4. Loopback fallback for tooling.
 function getBaseUrl(req) {
+  if (process.env.BASE_URL) return process.env.BASE_URL.replace(/\/+$/, '');
+
+  const allowedHosts = (process.env.ALLOWED_HOSTS || '')
+    .split(',')
+    .map((h) => h.trim().toLowerCase())
+    .filter(Boolean);
+
   const forwardedProto = req.headers['x-forwarded-proto'];
-  const forwardedHost = req.headers['x-forwarded-host'] || req.headers['host'];
-  if (forwardedProto && forwardedHost) {
-    return `${forwardedProto}://${forwardedHost}`;
+  const rawHost = (req.headers['x-forwarded-host'] || req.headers['host'] || '').toString().toLowerCase();
+  // Strip any port for whitelist comparison; the whitelist is host-only.
+  const hostOnly = rawHost.split(':')[0];
+
+  if (allowedHosts.length > 0 && hostOnly && allowedHosts.includes(hostOnly)) {
+    const proto = forwardedProto || (req.secure ? 'https' : 'http');
+    return `${proto}://${rawHost}`;
   }
-  if (forwardedHost && !forwardedProto) {
-    return `${req.secure ? 'https' : 'http'}://${forwardedHost}`;
+
+  // No BASE_URL, no whitelist match. In production we refuse to fall back
+  // to the request Host — the startup check forces operators to set
+  // BASE_URL, so reaching here in prod indicates misconfiguration we want
+  // to be loud about (broken image URLs > silent phishing primitive).
+  if (process.env.NODE_ENV === 'production') {
+    return 'https://invalid.local';
   }
-  const clientHost = req.headers['host'];
-  if (clientHost && !clientHost.includes('localhost')) {
-    const proto = req.secure ? 'https' : 'http';
-    return `${proto}://${clientHost}`;
+
+  // Dev fallback only.
+  if (rawHost) {
+    const proto = forwardedProto || (req.secure ? 'https' : 'http');
+    return `${proto}://${rawHost}`;
   }
-  return process.env.BASE_URL || `http://localhost:${PORT}`;
+  return `http://localhost:${PORT}`;
 }
 
 function sanitizeString(str, maxLen = 255) {

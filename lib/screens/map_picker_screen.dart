@@ -1,18 +1,20 @@
 // map_picker_screen.dart
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 import '../widgets/cached_tile_provider.dart';
+import '../lang/translations.dart';
 
-class MapPickerScreen extends StatefulWidget {
+class MapPickerScreen extends ConsumerStatefulWidget {
   const MapPickerScreen({super.key});
 
   @override
-  State<MapPickerScreen> createState() => _MapPickerScreenState();
+  ConsumerState<MapPickerScreen> createState() => _MapPickerScreenState();
 }
 
-class _MapPickerScreenState extends State<MapPickerScreen> {
+class _MapPickerScreenState extends ConsumerState<MapPickerScreen> {
   LatLng? _selectedPoint;
   LatLng? _userLocation;
   double? _userAccuracy;
@@ -92,7 +94,7 @@ class _MapPickerScreenState extends State<MapPickerScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Pick Store Location'),
+        title: Text(t('pick_store_location')),
         actions: [
           if (_locating)
             const Padding(
@@ -109,26 +111,26 @@ class _MapPickerScreenState extends State<MapPickerScreen> {
           else ...[
             IconButton(
               icon: const Icon(Icons.add),
-              tooltip: 'Zoom in',
+                tooltip: t('zoom_in'),
               onPressed: _zoomIn,
             ),
             IconButton(
               icon: const Icon(Icons.remove),
-              tooltip: 'Zoom out',
+                tooltip: t('zoom_out'),
               onPressed: _zoomOut,
             ),
             IconButton(
               icon: const Icon(Icons.my_location),
-              tooltip: 'My location',
+                tooltip: t('my_location'),
               onPressed: _goToUserLocation,
             ),
           ],
           if (_selectedPoint != null)
             TextButton(
               onPressed: () => Navigator.pop(context, _selectedPoint),
-              child: const Text(
-                'CONFIRM',
-                style: TextStyle(
+              child: Text(
+                t('confirm_location'),
+                style: const TextStyle(
                   color: Colors.white,
                   fontWeight: FontWeight.bold,
                 ),

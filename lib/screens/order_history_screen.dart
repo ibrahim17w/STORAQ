@@ -2,6 +2,7 @@
 // FIXED: Shows offline orders alongside server orders
 
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import '../services/api_service.dart';
 import 'receipt_screen.dart';
@@ -9,27 +10,37 @@ import '../lang/translations.dart';
 import '../services/order_service.dart';
 import '../services/offline_service.dart';
 import '../services/product_service.dart';
+import '../models/models.dart';
 
-class OrderHistoryScreen extends StatefulWidget {
+class OrderHistoryScreen extends ConsumerStatefulWidget {
   const OrderHistoryScreen({super.key});
 
   @override
-  State<OrderHistoryScreen> createState() => _OrderHistoryScreenState();
+  ConsumerState<OrderHistoryScreen> createState() => _OrderHistoryScreenState();
 }
 
-class _OrderHistoryScreenState extends State<OrderHistoryScreen> {
+class _OrderHistoryScreenState extends ConsumerState<OrderHistoryScreen> {
   List<dynamic> _orders = [];
   bool _loading = true;
   bool _hasMore = true;
   int _offset = 0;
   final int _limit = 20;
   bool _isSyncing = false;
+  bool _isStoreStaff = false;
+  bool _isConsumerView = false;
 
   @override
   void initState() {
     super.initState();
-    _load();
-    _tryAutoSync();
+    _initViewMode();
+  }
+
+  Future<void> _initViewMode() async {
+    final storeId = await ApiService.getMyStoreId();
+    _isStoreStaff = storeId != null;
+    _isConsumerView = !_isStoreStaff;
+    await _load();
+    if (_isStoreStaff) await _tryAutoSync();
   }
 
   Future<void> _tryAutoSync() async {
@@ -101,24 +112,35 @@ class _OrderHistoryScreenState extends State<OrderHistoryScreen> {
     bool serverFailed = false;
     try {
       if (await ApiService.isServerReachable()) {
-        serverOrders = await OrderService.fetchOrders(
+        if (_isConsumerView) {
+          serverOrders = (await OrderService.fetchMyOrders(
+            limit: _limit,
+            offset: _offset,
+          )).map((o) => o.toJson()).toList();
+        } else {
+          serverOrders = (await OrderService.fetchOrders(
+            limit: _limit,
+            offset: _offset,
+          )).map((o) => o.toJson()).toList();
+        }
+      } else if (!_isConsumerView) {
+        serverOrders = (await OrderService.fetchOrdersOffline(
           limit: _limit,
           offset: _offset,
-        );
+        )).map((o) => o.toJson()).toList();
+        serverFailed = true;
       } else {
-        serverOrders = await OrderService.fetchOrdersOffline(
-          limit: _limit,
-          offset: _offset,
-        );
         serverFailed = true;
       }
     } catch (e) {
-      try {
-        serverOrders = await OrderService.fetchOrdersOffline(
-          limit: _limit,
-          offset: _offset,
-        );
-      } catch (_) {}
+      if (!_isConsumerView) {
+        try {
+          serverOrders = (await OrderService.fetchOrdersOffline(
+            limit: _limit,
+            offset: _offset,
+          )).map((o) => o.toJson()).toList();
+        } catch (_) {}
+      }
       serverFailed = true;
     }
 
@@ -272,57 +294,57 @@ class _OrderHistoryScreenState extends State<OrderHistoryScreen> {
       appBar: AppBar(
         title: Text(t('order_history') ?? 'Order History'),
         actions: [
-          // Sync button with badge
-          FutureBuilder<int>(
-            future: OfflineService.pendingOrderCount(),
-            builder: (context, snap) {
-              final count = snap.data ?? 0;
-              return Stack(
-                alignment: Alignment.center,
-                children: [
-                  IconButton(
-                    icon: _isSyncing
-                        ? const SizedBox(
-                            width: 20,
-                            height: 20,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: Colors.white,
-                            ),
-                          )
-                        : const Icon(Icons.cloud_upload),
-                    onPressed: _isSyncing ? null : _syncOfflineOrders,
-                    tooltip: t('sync_orders') ?? 'Sync orders',
-                  ),
-                  if (count > 0 && !_isSyncing)
-                    Positioned(
-                      right: 4,
-                      top: 4,
-                      child: Container(
-                        padding: const EdgeInsets.all(4),
-                        decoration: const BoxDecoration(
-                          color: Colors.red,
-                          shape: BoxShape.circle,
-                        ),
-                        constraints: const BoxConstraints(
-                          minWidth: 18,
-                          minHeight: 18,
-                        ),
-                        child: Text(
-                          '$count',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 10,
-                            fontWeight: FontWeight.bold,
+          if (_isStoreStaff)
+            FutureBuilder<int>(
+              future: OfflineService.pendingOrderCount(),
+              builder: (context, snap) {
+                final count = snap.data ?? 0;
+                return Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    IconButton(
+                      icon: _isSyncing
+                          ? const SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white,
+                              ),
+                            )
+                          : const Icon(Icons.cloud_upload),
+                      onPressed: _isSyncing ? null : _syncOfflineOrders,
+                      tooltip: t('sync_orders') ?? 'Sync orders',
+                    ),
+                    if (count > 0 && !_isSyncing)
+                      Positioned(
+                        right: 4,
+                        top: 4,
+                        child: Container(
+                          padding: const EdgeInsets.all(4),
+                          decoration: const BoxDecoration(
+                            color: Colors.red,
+                            shape: BoxShape.circle,
                           ),
-                          textAlign: TextAlign.center,
+                          constraints: const BoxConstraints(
+                            minWidth: 18,
+                            minHeight: 18,
+                          ),
+                          child: Text(
+                            '$count',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                            ),
+                            textAlign: TextAlign.center,
+                          ),
                         ),
                       ),
-                    ),
-                ],
-              );
-            },
-          ),
+                  ],
+                );
+              },
+            ),
           IconButton(
             icon: const Icon(Icons.refresh),
             onPressed: () => _load(refresh: true),

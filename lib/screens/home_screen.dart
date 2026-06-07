@@ -1,28 +1,27 @@
 // lib/screens/home_screen.dart
 import 'dart:async';
-import 'dart:math';
+import 'dart:io';
 import 'package:flutter/material.dart';
-import '../services/api_service.dart';
 import '../lang/translations.dart';
 import '../providers/locale_provider.dart';
 import '../widgets/theme_toggle.dart';
-import '../widgets/cached_image.dart';
 import '../utils/location_helper.dart';
 import 'store_products_screen.dart';
 import 'product_detail_screen.dart';
+import '../utils/product_store_helper.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:flutter/services.dart';
 import '../services/marketplace_service.dart';
-import '../services/location_service.dart';
-import '../services/categories_service.dart';
-import '../services/auth_service.dart';
 import '../services/store_service.dart';
 import '../services/favorites_service.dart';
+import '../services/currency_service.dart';
+import '../services/categories_service.dart';
+import '../utils/category_helper.dart';
 import '../widgets/product/product_card.dart';
 import '../widgets/product/product_list_tile.dart';
 import '../widgets/store/store_card.dart';
-import '../widgets/store/store_list_tile.dart';
+import '../widgets/home/home_search_bar.dart';
+import '../widgets/common/cart_icon_button.dart';
 import '../widgets/common/section_header.dart';
 import '../widgets/common/filter_chip_widget.dart';
 import '../widgets/skeletons/product_skeleton.dart';
@@ -32,36 +31,34 @@ import '../widgets/guest_login_sheet.dart' as guest;
 import '../screens/see_all_screen.dart';
 import '../utils/tr.dart';
 import 'dart:convert';
+import '../models/models.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../providers/products_provider.dart';
+import '../providers/filter_provider.dart';
+import '../providers/viewer_location_provider.dart';
+import '../services/viewer_location_service.dart';
 
-class HomeScreen extends StatefulWidget {
+class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
 
   @override
-  State<HomeScreen> createState() => _HomeScreenState();
+  ConsumerState<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
-  List<dynamic> _products = [];
-  List<dynamic> _stores = [];
-  List<dynamic> _trendingProducts = [];
-  List<dynamic> _sponsoredStores = [];
-  List<dynamic> _apiRecommendations = [];
-  List<dynamic> _recommendedProducts = [];
-  bool _productsLoading = true;
+class _HomeScreenState extends ConsumerState<HomeScreen> {
+  List<Store> _stores = [];
+  List<Store> _sponsoredStores = [];
+  List<Product> _sponsoredProducts = [];
   bool _storesLoading = true;
-  bool _trendingLoading = true;
   bool _sponsoredLoading = true;
-  bool _recommendationsLoading = true;
-  String _userName = '';
+  bool _sponsoredProductsLoading = true;
   bool _isGridView = true;
 
-  // Location filter state
+  // Location state (geo-derived)
   Position? _userPosition;
-  String _locationFilterMode = 'all';
   String? _userVillage;
   String? _userCity;
   String? _userCountry;
-  double? _distanceFilterKm;
   bool _locationLoading = false;
 
   // Canonical location IDs
@@ -69,34 +66,97 @@ class _HomeScreenState extends State<HomeScreen> {
   String? _userVillageId;
   String? _userCountryCode;
 
-  // Guest mode
-  bool _isGuest = false;
+  List<Category> _categories = [];
 
-  // Price filter state
-  double _selectedMinPrice = 0;
-  double _selectedMaxPrice = double.infinity;
+  String? _categoryLabel(int? id) {
+    if (id == null) return null;
+    for (final cat in _categories) {
+      if (cat.id == id) return CategoryHelper.displayName(cat);
+    }
+    return null;
+  }
 
-  // Category filter state
-  String? _selectedCategory;
-  final List<String> _categories = [
-    'Electronics',
-    'Clothing',
-    'Food',
-    'Books',
-    'Home',
-    'Sports',
-    'Other',
-  ];
+  Future<void> _loadCategories() async {
+    try {
+      final cats = await CategoriesService.fetchCategories();
+      if (mounted) setState(() => _categories = cats);
+    } catch (_) {}
+  }
 
-  // Rating filter
-  double _minRating = 0;
+  List<FilterCategoryOption> get _filterCategoryOptions => _categories
+      .where((c) => c.id != null)
+      .map(
+        (c) => FilterCategoryOption(
+          id: c.id!,
+          label: CategoryHelper.displayName(c),
+        ),
+      )
+      .toList();
 
-  // Sort option
-  String _sortBy = 'newest';
+  String _locationModeString(LocationFilterMode mode) {
+    switch (mode) {
+      case LocationFilterMode.none:
+        return 'all';
+      case LocationFilterMode.city:
+        return 'city';
+      case LocationFilterMode.village:
+        return 'village';
+      case LocationFilterMode.nearby:
+        return 'country';
+    }
+  }
 
-  // Favorites
+  LocationFilterMode _parseLocationMode(String mode) {
+    switch (mode) {
+      case 'village':
+        return LocationFilterMode.village;
+      case 'city':
+        return LocationFilterMode.city;
+      case 'country':
+        return LocationFilterMode.nearby;
+      default:
+        return LocationFilterMode.none;
+    }
+  }
+
+  String _sortByString(SortBy sort) {
+    switch (sort) {
+      case SortBy.newest:
+        return 'newest';
+      case SortBy.priceAsc:
+        return 'price_low';
+      case SortBy.priceDesc:
+        return 'price_high';
+      case SortBy.rating:
+        return 'newest';
+      case SortBy.popular:
+        return 'popular';
+    }
+  }
+
+  SortBy _parseSortBy(String sort) {
+    switch (sort) {
+      case 'price_low':
+        return SortBy.priceAsc;
+      case 'price_high':
+        return SortBy.priceDesc;
+      case 'popular':
+        return SortBy.popular;
+      default:
+        return SortBy.newest;
+    }
+  }
+
+  // Provider type conversion helpers
   Set<int> _favoriteIds = {};
   Set<int> _favoriteStoreIds = {};
+
+  // Currency display settings (defaults: no conversion until loaded)
+  Map<String, dynamic> _currencySettings = {
+    'display_currency': null,
+    'show_both_prices': false,
+    'exchange_rates': <dynamic>[],
+  };
 
   static final List<String> _pendingViews = [];
   static Timer? _viewFlushTimer;
@@ -104,23 +164,44 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
-    _loadGuestStatus();
-    _loadGridPreference();
-    _loadFilterPreferences();
-    _loadUserName();
-    _initLocation();
-    _loadProducts();
-    _loadStores();
-    _loadTrending();
-    _loadSponsored();
-    _loadRecommendations();
-    _loadFavorites();
-    _loadFavoriteStores();
-
     FavoritesService.favoriteIdsNotifier.addListener(_onFavoritesChanged);
     FavoritesService.favoriteStoreIdsNotifier.addListener(
       _onStoreFavoritesChanged,
     );
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _bootstrapHomeData();
+    });
+  }
+
+  void _bootstrapHomeData() {
+    unawaited(_loadGridPreference());
+    unawaited(_loadFavorites());
+    unawaited(_loadFavoriteStores());
+    unawaited(_loadCategories());
+
+    Future.delayed(const Duration(milliseconds: 350), () {
+      if (!mounted) return;
+      unawaited(_loadStores());
+      unawaited(_loadSponsored());
+      unawaited(_loadSponsoredProducts());
+    });
+
+    // GPS is slow/unreliable on desktop — skip on launch.
+    if (Platform.isAndroid || Platform.isIOS) {
+      Future.delayed(const Duration(milliseconds: 900), () {
+        if (mounted) unawaited(_initLocation());
+      });
+    }
+
+    Future.delayed(const Duration(milliseconds: 450), () {
+      if (!mounted) return;
+      ref.read(productsProvider.notifier).loadAll();
+    });
+
+    Future.delayed(const Duration(seconds: 1), () {
+      if (mounted) unawaited(_loadCurrencySettings());
+    });
   }
 
   @override
@@ -161,6 +242,13 @@ class _HomeScreenState extends State<HomeScreen> {
     } catch (_) {}
   }
 
+  Future<void> _loadCurrencySettings() async {
+    try {
+      final settings = await CurrencyService.getCurrencySettings();
+      if (mounted) setState(() => _currencySettings = settings.toLegacyMap());
+    } catch (_) {}
+  }
+
   Future<void> _loadFavoriteStores() async {
     try {
       final ids = await FavoritesService.getLocalFavoriteStoreIds();
@@ -168,26 +256,22 @@ class _HomeScreenState extends State<HomeScreen> {
     } catch (_) {}
   }
 
-  Future<void> _toggleFavorite(
-    int productId,
-    Map<String, dynamic> product,
-  ) async {
-    await FavoritesService.toggleFavorite(productId, product: product);
+  Map<String, dynamic> _asMap(dynamic item) {
+    if (item is Product) return item.toJson();
+    if (item is Store) return item.toJson();
+    if (item is Map<String, dynamic>) return item;
+    return {};
   }
 
-  Future<void> _toggleFavoriteStore(
-    int storeId,
-    Map<String, dynamic> store,
-  ) async {
-    await FavoritesService.toggleFavoriteStore(storeId, store: store);
+  Future<void> _toggleFavorite(int productId, Product product) async {
+    await FavoritesService.toggleFavorite(productId, product: product.toJson());
   }
 
-  int? _storeId(dynamic store) {
-    final id = store['id'];
-    if (id == null) return null;
-    if (id is int) return id;
-    return int.tryParse(id.toString());
+  Future<void> _toggleFavoriteStore(int storeId, Store store) async {
+    await FavoritesService.toggleFavoriteStore(storeId, store: store.toJson());
   }
+
+  int? _storeId(Store store) => store.intId;
 
   Future<void> _loadGridPreference() async {
     final prefs = await SharedPreferences.getInstance();
@@ -195,77 +279,6 @@ class _HomeScreenState extends State<HomeScreen> {
       setState(() => _isGridView = prefs.getBool('home_grid_view') ?? true);
   }
 
-  Future<void> _loadGuestStatus() async {
-    final isGuest = await ApiService.isGuest();
-    final isLoggedIn = await ApiService.isLoggedIn();
-    if (mounted) setState(() => _isGuest = isGuest && !isLoggedIn);
-  }
-
-  Future<void> _loadFilterPreferences() async {
-    final prefs = await SharedPreferences.getInstance();
-    if (mounted) {
-      setState(() {
-        _locationFilterMode =
-            prefs.getString('home_location_filter_mode') ?? 'all';
-        if (_locationFilterMode == 'radius') {
-          _locationFilterMode = 'all';
-          _distanceFilterKm = prefs.getDouble('home_filter_radius') ?? 5.0;
-        }
-        _distanceFilterKm = prefs.containsKey('home_distance_filter_km')
-            ? prefs.getDouble('home_distance_filter_km')
-            : _distanceFilterKm;
-        _selectedMinPrice = prefs.getDouble('home_min_price') ?? 0;
-        final savedMax = prefs.getDouble('home_max_price');
-        _selectedMaxPrice = savedMax == null || savedMax >= 999999999
-            ? double.infinity
-            : savedMax;
-        _selectedCategory = prefs.getString('home_category');
-        _minRating = prefs.getDouble('home_min_rating') ?? 0;
-        _sortBy = prefs.getString('home_sort_by') ?? 'newest';
-        _userCityId = prefs.getString('home_city_id');
-        _userVillageId = prefs.getString('home_village_id');
-        _userCountryCode = prefs.getString('home_country_code');
-      });
-    }
-  }
-
-  Future<void> _saveFilterPreferences() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('home_location_filter_mode', _locationFilterMode);
-    if (_distanceFilterKm != null) {
-      await prefs.setDouble('home_distance_filter_km', _distanceFilterKm!);
-    } else {
-      await prefs.remove('home_distance_filter_km');
-    }
-    await prefs.remove('home_filter_radius');
-    await prefs.setDouble('home_min_price', _selectedMinPrice);
-    await prefs.setDouble(
-      'home_max_price',
-      _selectedMaxPrice == double.infinity ? 999999999 : _selectedMaxPrice,
-    );
-    if (_selectedCategory != null) {
-      await prefs.setString('home_category', _selectedCategory!);
-    } else {
-      await prefs.remove('home_category');
-    }
-    await prefs.setDouble('home_min_rating', _minRating);
-    await prefs.setString('home_sort_by', _sortBy);
-    if (_userCityId != null) {
-      await prefs.setString('home_city_id', _userCityId!);
-    } else {
-      await prefs.remove('home_city_id');
-    }
-    if (_userVillageId != null) {
-      await prefs.setString('home_village_id', _userVillageId!);
-    } else {
-      await prefs.remove('home_village_id');
-    }
-    if (_userCountryCode != null) {
-      await prefs.setString('home_country_code', _userCountryCode!);
-    } else {
-      await prefs.remove('home_country_code');
-    }
-  }
 
   Future<void> _toggleViewMode() async {
     final newMode = !_isGridView;
@@ -276,11 +289,12 @@ class _HomeScreenState extends State<HomeScreen> {
 
   // ── Location ──
   Future<void> _initLocation() async {
+    if (!mounted) return;
     setState(() => _locationLoading = true);
     Position? pos;
     try {
       pos = await LocationHelper.getCurrentPosition().timeout(
-        const Duration(seconds: 6),
+        const Duration(seconds: 4),
       );
     } catch (_) {
       pos = null;
@@ -293,13 +307,13 @@ class _HomeScreenState extends State<HomeScreen> {
     if (pos != null && _stores.isNotEmpty) {
       _inferUserLocationFromStores();
     }
+    unawaited(_loadSponsoredProducts());
     if (pos != null &&
         _userVillage == null &&
         _userCity == null &&
         _userCountry == null) {
-      if (mounted && _distanceFilterKm == null) {
-        setState(() => _distanceFilterKm = 5.0);
-        _saveFilterPreferences();
+      if (mounted && ref.read(filterProvider).maxDistance == null) {
+        ref.read(filterProvider.notifier).setMaxDistance(5.0);
       }
     }
   }
@@ -311,24 +325,17 @@ class _HomeScreenState extends State<HomeScreen> {
 
     _reverseGeocodeUserLocation(uLat, uLng);
 
-    final List<dynamic> villageStores = [];
-    final List<dynamic> closeStores = [];
-    final List<dynamic> regionStores = [];
-    dynamic nearest;
+    final List<Store> villageStores = [];
+    final List<Store> closeStores = [];
+    final List<Store> regionStores = [];
+    Store? nearest;
     double minDist = double.infinity;
 
     for (final store in _stores) {
-      final sLat = store['lat'];
-      final sLng = store['lng'];
+      final sLat = store.lat;
+      final sLng = store.lng;
       if (sLat == null || sLng == null) continue;
-      final lat = sLat is num
-          ? sLat.toDouble()
-          : double.tryParse(sLat.toString());
-      final lng = sLng is num
-          ? sLng.toDouble()
-          : double.tryParse(sLng.toString());
-      if (lat == null || lng == null) continue;
-      final d = LocationHelper.distanceKm(uLat, uLng, lat, lng);
+      final d = LocationHelper.distanceKm(uLat, uLng, sLat, sLng);
       if (d < minDist) {
         minDist = d;
         nearest = store;
@@ -346,7 +353,7 @@ class _HomeScreenState extends State<HomeScreen> {
       if (bestCity == null) bestCity = _mostCommonField(closeStores, 'city');
       if (bestCity == null) bestCity = _mostCommonField(regionStores, 'city');
       if (bestCity == null && nearest != null && minDist <= 50.0) {
-        final fallback = nearest['city']?.toString();
+        final fallback = nearest.city;
         if (fallback != null &&
             fallback.isNotEmpty &&
             fallback.toLowerCase() != 'null') {
@@ -370,7 +377,7 @@ class _HomeScreenState extends State<HomeScreen> {
     if (_userCountryCode == null) {
       String? bestCountry;
       if (nearest != null && minDist <= 50.0) {
-        bestCountry = nearest['country']?.toString();
+        bestCountry = nearest.country;
       }
       if (bestCountry != null) {
         setState(() => _userCountry = bestCountry);
@@ -401,8 +408,21 @@ class _HomeScreenState extends State<HomeScreen> {
             if (villageName != null) {
               _userVillageId = '${_userCityId}_village_$villageName';
             }
+            final countryName = addr['country']?.toString();
+            if (countryName != null) _userCountry = countryName;
           }
         });
+        unawaited(ViewerLocationService.saveCountry(
+          countryCode: _userCountryCode,
+          countryName: _userCountry,
+        ));
+        if (mounted) {
+          ref.read(viewerLocationProvider.notifier).setCountry(
+                countryCode: _userCountryCode,
+                countryName: _userCountry,
+              );
+        }
+        unawaited(_loadSponsoredProducts());
       }
     } catch (e) {
       // Silent fail
@@ -412,7 +432,8 @@ class _HomeScreenState extends State<HomeScreen> {
   String? _mostCommonField(List<dynamic> stores, String field) {
     final Map<String, int> counts = {};
     for (final s in stores) {
-      final val = s[field]?.toString().trim();
+      final m = _asMap(s);
+      final val = m[field]?.toString().trim();
       if (val != null &&
           val.isNotEmpty &&
           val.toLowerCase() != 'null' &&
@@ -432,15 +453,16 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   String? _getItemVillage(dynamic item) {
-    final village = item['village']?.toString();
+    final m = _asMap(item);
+    final village = m['village']?.toString();
     if (village != null && village.isNotEmpty) return village;
-    final storeVillage = item['store_village']?.toString();
+    final storeVillage = m['store_village']?.toString();
     if (storeVillage != null && storeVillage.isNotEmpty) return storeVillage;
-    final shopName = item['shop_name']?.toString();
+    final shopName = m['shop_name']?.toString();
     if (shopName != null && shopName.isNotEmpty && _stores.isNotEmpty) {
       for (final store in _stores) {
-        if (store['name']?.toString() == shopName) {
-          return store['village']?.toString();
+        if (store.name == shopName) {
+          return store.village;
         }
       }
     }
@@ -448,23 +470,24 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   String? _getItemCity(dynamic item) {
-    final cityId = item['city_id']?.toString();
+    final m = _asMap(item);
+    final cityId = m['city_id']?.toString();
     if (cityId != null && cityId.isNotEmpty) {
       return cityId;
     }
-    final city = item['city']?.toString();
+    final city = m['city']?.toString();
     if (city != null && city.isNotEmpty && city.toLowerCase() != 'null')
       return city;
-    final storeCity = item['store_city']?.toString();
+    final storeCity = m['store_city']?.toString();
     if (storeCity != null &&
         storeCity.isNotEmpty &&
         storeCity.toLowerCase() != 'null')
       return storeCity;
-    final shopName = item['shop_name']?.toString();
+    final shopName = m['shop_name']?.toString();
     if (shopName != null && shopName.isNotEmpty && _stores.isNotEmpty) {
       for (final store in _stores) {
-        if (store['name']?.toString() == shopName) {
-          return store['city_id']?.toString() ?? store['city']?.toString();
+        if (store.name == shopName) {
+          return store.cityId ?? store.city;
         }
       }
     }
@@ -472,15 +495,16 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   String? _getItemCountry(dynamic item) {
-    final country = item['country']?.toString();
+    final m = _asMap(item);
+    final country = m['country']?.toString();
     if (country != null && country.isNotEmpty) return country;
-    final storeCountry = item['store_country']?.toString();
+    final storeCountry = m['store_country']?.toString();
     if (storeCountry != null && storeCountry.isNotEmpty) return storeCountry;
-    final shopName = item['shop_name']?.toString();
+    final shopName = m['shop_name']?.toString();
     if (shopName != null && shopName.isNotEmpty && _stores.isNotEmpty) {
       for (final store in _stores) {
-        if (store['name']?.toString() == shopName) {
-          return store['country']?.toString();
+        if (store.name == shopName) {
+          return store.country;
         }
       }
     }
@@ -495,13 +519,14 @@ class _HomeScreenState extends State<HomeScreen> {
     final country = _userCountry;
     final countryCode = _userCountryCode;
 
-    switch (_locationFilterMode) {
+    switch (_locationModeString(ref.read(filterProvider).locationMode)) {
       case 'all':
         return items;
       case 'village':
         if (villageId != null && villageId.isNotEmpty) {
           final villageItems = items.where((item) {
-            final itemVillageId = item['village_id']?.toString();
+            final m = _asMap(item);
+            final itemVillageId = m['village_id']?.toString();
             return itemVillageId != null &&
                 itemVillageId.isNotEmpty &&
                 itemVillageId.toLowerCase() == villageId.toLowerCase();
@@ -519,7 +544,8 @@ class _HomeScreenState extends State<HomeScreen> {
         }
         if (cityId != null && cityId.isNotEmpty) {
           final cityItems = items.where((item) {
-            final itemCityId = item['city_id']?.toString();
+            final m = _asMap(item);
+            final itemCityId = m['city_id']?.toString();
             return itemCityId != null &&
                 itemCityId.isNotEmpty &&
                 itemCityId.toLowerCase() == cityId.toLowerCase();
@@ -537,7 +563,8 @@ class _HomeScreenState extends State<HomeScreen> {
         }
         if (countryCode != null && countryCode.isNotEmpty) {
           final countryItems = items.where((item) {
-            final itemCc = item['country_code']?.toString();
+            final m = _asMap(item);
+            final itemCc = m['country_code']?.toString();
             return itemCc != null &&
                 itemCc.isNotEmpty &&
                 itemCc.toLowerCase() == countryCode.toLowerCase();
@@ -557,7 +584,8 @@ class _HomeScreenState extends State<HomeScreen> {
       case 'city':
         if (cityId != null && cityId.isNotEmpty) {
           return items.where((item) {
-            final itemCityId = item['city_id']?.toString();
+            final m = _asMap(item);
+            final itemCityId = m['city_id']?.toString();
             if (itemCityId != null && itemCityId.isNotEmpty) {
               return itemCityId.toLowerCase() == cityId.toLowerCase();
             }
@@ -579,7 +607,8 @@ class _HomeScreenState extends State<HomeScreen> {
       case 'country':
         if (countryCode != null && countryCode.isNotEmpty) {
           return items.where((item) {
-            final itemCc = item['country_code']?.toString();
+            final m = _asMap(item);
+            final itemCc = m['country_code']?.toString();
             if (itemCc != null && itemCc.isNotEmpty) {
               return itemCc.toLowerCase() == countryCode.toLowerCase();
             }
@@ -604,12 +633,14 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   List<dynamic> _filterByDistance(List<dynamic> items) {
-    if (_distanceFilterKm == null || _userPosition == null) return items;
+    final distanceFilterKm = ref.read(filterProvider).maxDistance;
+    if (distanceFilterKm == null || _userPosition == null) return items;
     final uLat = _userPosition!.latitude;
     final uLng = _userPosition!.longitude;
     return items.where((item) {
-      final sLat = item['lat'];
-      final sLng = item['lng'];
+      final m = _asMap(item);
+      final sLat = m['lat'];
+      final sLng = m['lng'];
       if (sLat == null || sLng == null) return false;
       final lat = sLat is num
           ? sLat.toDouble()
@@ -619,41 +650,59 @@ class _HomeScreenState extends State<HomeScreen> {
           : double.tryParse(sLng.toString());
       if (lat == null || lng == null) return false;
       final d = LocationHelper.distanceKm(uLat, uLng, lat, lng);
-      return d <= _distanceFilterKm!;
+      return d <= distanceFilterKm;
     }).toList();
   }
 
   List<dynamic> _filterByPrice(List<dynamic> items) {
+    final fs = ref.read(filterProvider);
+    final selectedMinPrice = fs.minPrice ?? 0;
+    final selectedMaxPrice = fs.maxPrice ?? double.infinity;
     return items.where((item) {
-      final rawPrice = item['price'];
-      final price = rawPrice is num
-          ? rawPrice.toDouble()
-          : double.tryParse(rawPrice.toString()) ?? 0;
-      final passesMin = price >= _selectedMinPrice;
+      final m = _asMap(item);
+      final price = CurrencyService.comparablePrice(m, _currencySettings);
+      final passesMin = price >= selectedMinPrice;
       final passesMax =
-          _selectedMaxPrice == double.infinity || price <= _selectedMaxPrice;
+          selectedMaxPrice == double.infinity || price <= selectedMaxPrice;
       return passesMin && passesMax;
     }).toList();
   }
 
   List<dynamic> _filterByCategory(List<dynamic> items) {
-    final selectedCategory = _selectedCategory;
-    if (selectedCategory == null) return items;
+    final categoryId = ref.read(filterProvider).categoryId;
+    if (categoryId == null) return items;
     return items.where((item) {
-      final category = item['category']?.toString() ?? '';
-      return category.isNotEmpty &&
-          category.toLowerCase() == selectedCategory.toLowerCase();
+      final m = _asMap(item);
+      final rawId = m['category_id'] ?? m['categoryId'];
+      final parsedId = rawId is int
+          ? rawId
+          : int.tryParse(rawId?.toString() ?? '');
+      if (parsedId == categoryId) return true;
+
+      Category? selectedCategory;
+      for (final c in _categories) {
+        if (c.id == categoryId) {
+          selectedCategory = c;
+          break;
+        }
+      }
+      if (selectedCategory == null) return false;
+      final itemCategory = m['category']?.toString().toLowerCase() ?? '';
+      return itemCategory.isNotEmpty &&
+          itemCategory == selectedCategory.name.toLowerCase();
     }).toList();
   }
 
   List<dynamic> _filterByRating(List<dynamic> items) {
-    if (_minRating <= 0) return items;
+    final minRating = ref.read(filterProvider).minRating ?? 0;
+    if (minRating <= 0) return items;
     return items.where((item) {
-      final raw = item['rating'];
+      final m = _asMap(item);
+      final raw = m['rating'];
       final rating = raw is num
           ? raw.toDouble()
           : double.tryParse(raw?.toString() ?? '0') ?? 0;
-      return rating >= _minRating;
+      return rating >= minRating;
     }).toList();
   }
 
@@ -668,37 +717,31 @@ class _HomeScreenState extends State<HomeScreen> {
 
   List<dynamic> _sortItems(List<dynamic> items) {
     final sorted = List<dynamic>.from(items);
-    switch (_sortBy) {
+    switch (_sortByString(ref.read(filterProvider).sortBy)) {
       case 'price_low':
         sorted.sort((a, b) {
-          final aPrice = (a['price'] is num)
-              ? (a['price'] as num).toDouble()
-              : double.tryParse(a['price']?.toString() ?? '0') ?? 0;
-          final bPrice = (b['price'] is num)
-              ? (b['price'] as num).toDouble()
-              : double.tryParse(b['price']?.toString() ?? '0') ?? 0;
+          final aPrice = CurrencyService.comparablePrice(_asMap(a), _currencySettings);
+          final bPrice = CurrencyService.comparablePrice(_asMap(b), _currencySettings);
           return aPrice.compareTo(bPrice);
         });
         break;
       case 'price_high':
         sorted.sort((a, b) {
-          final aPrice = (a['price'] is num)
-              ? (a['price'] as num).toDouble()
-              : double.tryParse(a['price']?.toString() ?? '0') ?? 0;
-          final bPrice = (b['price'] is num)
-              ? (b['price'] as num).toDouble()
-              : double.tryParse(b['price']?.toString() ?? '0') ?? 0;
+          final aPrice = CurrencyService.comparablePrice(_asMap(a), _currencySettings);
+          final bPrice = CurrencyService.comparablePrice(_asMap(b), _currencySettings);
           return bPrice.compareTo(aPrice);
         });
         break;
       case 'popular':
         sorted.sort((a, b) {
-          final aViews = (a['view_count'] is num)
-              ? (a['view_count'] as num).toInt()
-              : int.tryParse(a['view_count']?.toString() ?? '0') ?? 0;
-          final bViews = (b['view_count'] is num)
-              ? (b['view_count'] as num).toInt()
-              : int.tryParse(b['view_count']?.toString() ?? '0') ?? 0;
+          final am = _asMap(a);
+          final bm = _asMap(b);
+          final aViews = (am['view_count'] is num)
+              ? (am['view_count'] as num).toInt()
+              : int.tryParse(am['view_count']?.toString() ?? '0') ?? 0;
+          final bViews = (bm['view_count'] is num)
+              ? (bm['view_count'] as num).toInt()
+              : int.tryParse(bm['view_count']?.toString() ?? '0') ?? 0;
           return bViews.compareTo(aViews);
         });
         break;
@@ -709,54 +752,15 @@ class _HomeScreenState extends State<HomeScreen> {
     return sorted;
   }
 
-  Future<void> _loadUserName() async {
-    try {
-      final user = await AuthService.getCurrentUser();
-      if (mounted && user != null)
-        setState(() => _userName = user['full_name'] ?? '');
-    } catch (_) {}
-  }
-
-  Future<void> _loadProducts() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final cached = prefs.getString('cached_marketplace_feed');
-      if (cached != null && cached.isNotEmpty) {
-        final decoded = jsonDecode(cached) as List<dynamic>;
-        if (mounted) {
-          setState(() {
-            _products = decoded;
-            _productsLoading = false;
-            _updateRecommendedProducts();
-          });
-        }
-      }
-    } catch (_) {}
-
-    try {
-      final products = await MarketplaceService.fetchMarketplaceFeed();
-      if (mounted) {
-        setState(() {
-          _products = products;
-          _productsLoading = false;
-          _updateRecommendedProducts();
-        });
-      }
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('cached_marketplace_feed', jsonEncode(products));
-    } catch (_) {
-      if (mounted && _products.isEmpty) {
-        setState(() => _productsLoading = false);
-      }
-    }
-  }
 
   Future<void> _loadStores() async {
     try {
       final prefs = await SharedPreferences.getInstance();
       final cached = prefs.getString('cached_stores');
       if (cached != null && cached.isNotEmpty) {
-        final decoded = jsonDecode(cached) as List<dynamic>;
+        final decoded = (jsonDecode(cached) as List<dynamic>)
+            .map((e) => Store.fromJson(e as Map<String, dynamic>))
+            .toList();
         if (mounted) {
           setState(() {
             _stores = decoded;
@@ -775,7 +779,7 @@ class _HomeScreenState extends State<HomeScreen> {
           _storesLoading = false;
         });
         final prefs = await SharedPreferences.getInstance();
-        await prefs.setString('cached_stores', jsonEncode(stores));
+        await prefs.setString('cached_stores', jsonEncode(stores.map((s) => s.toJson()).toList()));
         if (_userPosition != null && _stores.isNotEmpty) {
           _inferUserLocationFromStores();
         }
@@ -787,34 +791,27 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Future<void> _loadTrending() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final cached = prefs.getString('cached_trending');
-      if (cached != null && cached.isNotEmpty) {
-        final decoded = jsonDecode(cached) as List<dynamic>;
-        if (mounted) {
-          setState(() {
-            _trendingProducts = decoded;
-            _trendingLoading = false;
-          });
-        }
-      }
-    } catch (_) {}
 
+  Future<void> _loadSponsoredProducts() async {
     try {
-      final trending = await MarketplaceService.fetchTrendingProducts();
+      final products = await MarketplaceService.fetchSponsoredProducts(
+        lat: _userPosition?.latitude,
+        lng: _userPosition?.longitude,
+        village: _userVillage,
+        city: _userCity,
+        country: _userCountry,
+        countryCode: _userCountryCode,
+        cityId: _userCityId,
+      );
       if (mounted) {
         setState(() {
-          _trendingProducts = trending.isNotEmpty ? trending : [];
-          _trendingLoading = false;
+          _sponsoredProducts = products;
+          _sponsoredProductsLoading = false;
         });
       }
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('cached_trending', jsonEncode(trending));
     } catch (_) {
-      if (mounted && _trendingProducts.isEmpty) {
-        setState(() => _trendingLoading = false);
+      if (mounted && _sponsoredProducts.isEmpty) {
+        setState(() => _sponsoredProductsLoading = false);
       }
     }
   }
@@ -824,7 +821,9 @@ class _HomeScreenState extends State<HomeScreen> {
       final prefs = await SharedPreferences.getInstance();
       final cached = prefs.getString('cached_sponsored');
       if (cached != null && cached.isNotEmpty) {
-        final decoded = jsonDecode(cached) as List<dynamic>;
+        final decoded = (jsonDecode(cached) as List<dynamic>)
+            .map((e) => Store.fromJson(e as Map<String, dynamic>))
+            .toList();
         if (mounted) {
           setState(() {
             _sponsoredStores = decoded;
@@ -843,7 +842,7 @@ class _HomeScreenState extends State<HomeScreen> {
         });
       }
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('cached_sponsored', jsonEncode(sponsored));
+      await prefs.setString('cached_sponsored', jsonEncode(sponsored.map((s) => s.toJson()).toList()));
     } catch (_) {
       if (mounted && _sponsoredStores.isEmpty) {
         setState(() => _sponsoredLoading = false);
@@ -851,102 +850,44 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Future<void> _loadRecommendations() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final cached = prefs.getString('cached_recommendations');
-      if (cached != null && cached.isNotEmpty) {
-        final decoded = jsonDecode(cached) as List<dynamic>;
-        if (mounted) {
-          setState(() {
-            _apiRecommendations = decoded;
-            _recommendationsLoading = false;
-            _updateRecommendedProducts();
-          });
-        }
-      }
-    } catch (_) {}
-
-    try {
-      final recs = await MarketplaceService.fetchRecommendations();
-      if (mounted) {
-        setState(() {
-          _apiRecommendations = recs;
-          _recommendationsLoading = false;
-          _updateRecommendedProducts();
-        });
-      }
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('cached_recommendations', jsonEncode(recs));
-    } catch (_) {
-      if (mounted && _apiRecommendations.isEmpty) {
-        setState(() => _recommendationsLoading = false);
-      }
-    }
-  }
-
   Future<void> _refreshAll() async {
     setState(() {
-      _productsLoading = true;
       _storesLoading = true;
-      _trendingLoading = true;
       _sponsoredLoading = true;
-      _recommendationsLoading = true;
+      _sponsoredProductsLoading = true;
     });
     await Future.wait([
-      _loadProducts(),
+      ref.read(productsProvider.notifier).loadAll(),
       _loadStores(),
-      _loadTrending(),
       _loadSponsored(),
-      _loadRecommendations(),
+      _loadSponsoredProducts(),
     ]);
-  }
-
-  void _updateRecommendedProducts() {
-    if (_apiRecommendations.isNotEmpty) {
-      final filtered = _applyAllFilters(_apiRecommendations);
-      _recommendedProducts = filtered.length > 6
-          ? filtered.sublist(0, 6)
-          : List<dynamic>.from(filtered);
-      return;
-    }
-
-    final pool = _applyAllFilters(_products);
-    if (pool.length <= 6) {
-      _recommendedProducts = List<dynamic>.from(pool);
-      return;
-    }
-    final random = Random();
-    final indices = <int>{};
-    while (indices.length < 6 && indices.length < pool.length) {
-      indices.add(random.nextInt(pool.length));
-    }
-    _recommendedProducts = indices.map((i) => pool[i]).toList();
-  }
-
-  List<dynamic> _getRecommendedProducts() {
-    return _recommendedProducts;
   }
 
   void _onProductTap(dynamic product) async {
     final canProceed = await guest.requireAuth(context);
     if (!canProceed) return;
-    _trackProductView(product);
+    final p = product is Product ? product : Product.fromJson(_asMap(product));
+    _trackProductView(p);
     Navigator.push(
       context,
-      MaterialPageRoute(builder: (_) => ProductDetailScreen(product: product)),
+      MaterialPageRoute(
+        builder: (_) => ProductDetailScreen(
+          product: productToDetailMap(p),
+        ),
+      ),
     );
   }
 
-  void _trackProductView(dynamic product) {
-    final productName = product['name']?.toString() ?? '';
+  void _trackProductView(Product product) {
+    final productName = product.name ?? '';
     if (productName.isEmpty) return;
     _pendingViews.remove(productName);
     _pendingViews.insert(0, productName);
     if (_pendingViews.length > 20) _pendingViews.removeLast();
     _viewFlushTimer?.cancel();
     _viewFlushTimer = Timer(const Duration(seconds: 2), _flushViews);
-    final productId = product['id'];
+    final productId = product.id;
     if (productId != null) {
       MarketplaceService.trackProductView(productId).catchError((_) {});
     }
@@ -967,8 +908,8 @@ class _HomeScreenState extends State<HomeScreen> {
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (_) => SearchBottomSheet(
-        products: _products,
-        stores: _stores,
+        products: ref.read(productsProvider).feed.map((p) => p.toJson()).toList(),
+        stores: _stores.map((s) => s.toJson()).toList(),
         onProductTap: (product) {
           Navigator.pop(context);
           _onProductTap(product);
@@ -989,12 +930,13 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _openFilterSheet() {
+    final fs = ref.read(filterProvider);
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (_) => HomeFilterSheet(
-        locationFilterMode: _locationFilterMode,
+        locationFilterMode: _locationModeString(fs.locationMode),
         userVillage: _userVillage,
         userCity: _userCity,
         userCountry: _userCountry,
@@ -1002,39 +944,35 @@ class _HomeScreenState extends State<HomeScreen> {
         userVillageId: _userVillageId,
         userCountryCode: _userCountryCode,
         hasPosition: _userPosition != null,
-        distanceFilterKm: _distanceFilterKm,
-        selectedMinPrice: _selectedMinPrice,
-        selectedMaxPrice: _selectedMaxPrice,
-        selectedCategory: _selectedCategory,
-        categories: _categories,
-        minRating: _minRating,
-        sortBy: _sortBy,
+        distanceFilterKm: fs.maxDistance,
+        selectedMinPrice: fs.minPrice ?? 0,
+        selectedMaxPrice: fs.maxPrice ?? double.infinity,
+        selectedCategoryId: fs.categoryId,
+        categories: _filterCategoryOptions,
+        minRating: fs.minRating ?? 0,
+        sortBy: _sortByString(fs.sortBy),
         onApply: (filters) {
-          setState(() {
-            _locationFilterMode = filters['locationFilterMode'];
-            _distanceFilterKm = filters['distanceFilterKm'];
-            _selectedMinPrice = filters['minPrice'];
-            _selectedMaxPrice = filters['maxPrice'];
-            _selectedCategory = filters['category'];
-            _minRating = filters['minRating'];
-            _sortBy = filters['sortBy'];
-          });
-          _saveFilterPreferences();
-          _updateRecommendedProducts();
+          final notifier = ref.read(filterProvider.notifier);
+          notifier.setLocationMode(
+            _parseLocationMode(filters['locationFilterMode'] as String? ?? 'all'),
+          );
+          notifier.setMaxDistance(filters['distanceFilterKm'] as double?);
+          final minP = filters['minPrice'] as double?;
+          final maxP = filters['maxPrice'] as double?;
+          notifier.setPriceRange(
+            min: (minP == null || minP <= 0) ? null : minP,
+            max: (maxP == null || maxP == double.infinity) ? null : maxP,
+          );
+          notifier.setCategory(filters['categoryId'] as int?);
+          final mr = filters['minRating'] as double?;
+          notifier.setMinRating((mr == null || mr <= 0) ? null : mr);
+          notifier.setSortBy(
+            _parseSortBy(filters['sortBy'] as String? ?? 'newest'),
+          );
           Navigator.pop(context);
         },
         onReset: () {
-          setState(() {
-            _locationFilterMode = 'all';
-            _distanceFilterKm = null;
-            _selectedMinPrice = 0;
-            _selectedMaxPrice = double.infinity;
-            _selectedCategory = null;
-            _minRating = 0;
-            _sortBy = 'newest';
-          });
-          _saveFilterPreferences();
-          _updateRecommendedProducts();
+          ref.read(filterProvider.notifier).clearAll();
           Navigator.pop(context);
         },
         onRequestLocation: _initLocation,
@@ -1047,13 +985,15 @@ class _HomeScreenState extends State<HomeScreen> {
     required List<dynamic> items,
     required bool isStore,
   }) {
+    final mapped = items.map((i) => _asMap(i)).toList();
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (_) => SeeAllScreen(
           title: title,
-          items: items,
+          items: mapped,
           isStore: isStore,
+          currencySettings: _currencySettings,
           onProductTap: _onProductTap,
           onStoreTap: (store) async {
             final canProceed = await guest.requireAuth(context);
@@ -1070,22 +1010,49 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  int? _productId(dynamic product) {
-    final id = product['id'];
-    if (id == null) return null;
-    if (id is int) return id;
-    return int.tryParse(id.toString());
-  }
+  int? _productId(Product product) => product.intId;
 
   @override
   Widget build(BuildContext context) {
-    final filteredProducts = _sortItems(_applyAllFilters(_products));
-    final filteredTrending = _sortItems(_applyAllFilters(_trendingProducts));
+    final theme = Theme.of(context);
+    final productsState = ref.watch(productsProvider);
+    final filterState = ref.watch(filterProvider);
+
+    final productsLoading = productsState.isLoading;
+
+    final filteredProducts = _sortItems(_applyAllFilters(productsState.feed));
+    final filteredTrending = _sortItems(_applyAllFilters(productsState.trending));
     final filteredSponsored = _filterByLocation(_sponsoredStores);
     final filteredStores = _filterByLocation(_stores);
-    final filteredRecommended = _getRecommendedProducts();
 
-    final dist = _distanceFilterKm;
+    // Compute recommendations from provider data
+    List<Product> filteredRecommended;
+    final apiRecs = productsState.recommendations;
+    if (apiRecs.isNotEmpty) {
+      final filtered = _applyAllFilters(apiRecs);
+      filteredRecommended = (filtered.length > 6
+              ? filtered.sublist(0, 6)
+              : List<dynamic>.from(filtered))
+          .cast<Product>()
+          .toList();
+    } else {
+      final pool = _applyAllFilters(productsState.feed);
+      filteredRecommended = (pool.length > 6
+              ? pool.sublist(0, 6)
+              : List<dynamic>.from(pool))
+          .cast<Product>()
+          .toList();
+    }
+
+    // Derive filter display values from provider state
+    final _locationFilterMode = _locationModeString(filterState.locationMode);
+    final dist = filterState.maxDistance;
+    final _selectedMinPrice = filterState.minPrice ?? 0.0;
+    final _selectedMaxPrice = filterState.maxPrice ?? double.infinity;
+    final _selectedCategory = _categoryLabel(filterState.categoryId);
+    final _minRating = filterState.minRating ?? 0.0;
+    final _sortBy = _sortByString(filterState.sortBy);
+
     final village = _userVillage;
     final villageId = _userVillageId;
     final city = _userCity;
@@ -1094,15 +1061,12 @@ class _HomeScreenState extends State<HomeScreen> {
     final countryCode = _userCountryCode;
 
     final bool hasActiveFilters =
-        _locationFilterMode != 'all' ||
-        _distanceFilterKm != null ||
-        _selectedMinPrice > 0 ||
-        _selectedMaxPrice != double.infinity ||
-        _selectedCategory != null ||
-        _minRating > 0 ||
-        _sortBy != 'newest';
+        filterState.hasActiveFilters || dist != null;
 
     return Scaffold(
+      backgroundColor: theme.brightness == Brightness.dark
+          ? theme.scaffoldBackgroundColor
+          : const Color(0xFFF8F9FA),
       body: SafeArea(
         child: RefreshIndicator(
           onRefresh: _refreshAll,
@@ -1110,11 +1074,12 @@ class _HomeScreenState extends State<HomeScreen> {
             slivers: [
               SliverToBoxAdapter(
                 child: Padding(
-                  padding: const EdgeInsets.fromLTRB(12, 8, 8, 12),
+                  padding: const EdgeInsets.fromLTRB(20, 4, 20, 0),
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.end,
                     crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
+                      const CartIconButton(),
                       const ThemeToggle(),
                       const SizedBox(width: 2),
                       MouseRegion(
@@ -1139,227 +1104,161 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
               SliverToBoxAdapter(
                 child: Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-                  child: GestureDetector(
-                    onTap: _openSearch,
-                    child: Container(
-                      height: 52,
-                      decoration: BoxDecoration(
-                        color: Theme.of(context).colorScheme.surface,
-                        borderRadius: BorderRadius.circular(26),
-                        border: Border.all(
-                          color: Theme.of(
-                            context,
-                          ).colorScheme.outline.withOpacity(0.2),
-                        ),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withOpacity(0.04),
-                            blurRadius: 12,
-                            offset: const Offset(0, 4),
-                          ),
-                        ],
-                      ),
-                      child: Row(
-                        children: [
-                          const SizedBox(width: 16),
-                          Icon(
-                            Icons.search,
-                            color: Theme.of(
-                              context,
-                            ).colorScheme.onSurface.withOpacity(0.4),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Text(
-                              t('search') ?? 'Search',
-                              style: TextStyle(
-                                color: Theme.of(
-                                  context,
-                                ).colorScheme.onSurface.withOpacity(0.4),
-                                fontSize: 15,
-                              ),
-                            ),
-                          ),
-                          Stack(
-                            children: [
-                              Container(
-                                margin: const EdgeInsets.all(6),
-                                decoration: BoxDecoration(
-                                  color: hasActiveFilters
-                                      ? Theme.of(context).colorScheme.secondary
-                                      : Theme.of(context).colorScheme.primary,
-                                  borderRadius: BorderRadius.circular(20),
-                                ),
-                                child: Material(
-                                  color: Colors.transparent,
-                                  child: InkWell(
-                                    borderRadius: BorderRadius.circular(20),
-                                    onTap: _openFilterSheet,
-                                    child: Padding(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 14,
-                                        vertical: 8,
-                                      ),
-                                      child: Row(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          const Icon(
-                                            Icons.tune,
-                                            size: 18,
-                                            color: Colors.white,
-                                          ),
-                                          const SizedBox(width: 4),
-                                          Text(
-                                            t('filter') ?? 'Filter',
-                                            style: const TextStyle(
-                                              fontSize: 13,
-                                              fontWeight: FontWeight.w600,
-                                              color: Colors.white,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ),
-                              if (hasActiveFilters)
-                                Positioned(
-                                  top: 4,
-                                  right: 4,
-                                  child: Container(
-                                    width: 10,
-                                    height: 10,
-                                    decoration: BoxDecoration(
-                                      color: Colors.red,
-                                      shape: BoxShape.circle,
-                                      border: Border.all(
-                                        color: Theme.of(
-                                          context,
-                                        ).scaffoldBackgroundColor,
-                                        width: 2,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                            ],
-                          ),
-                          const SizedBox(width: 8),
-                        ],
-                      ),
-                    ),
+                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+                  child: HomeSearchBar(
+                    onSearchTap: _openSearch,
+                    onFilterTap: _openFilterSheet,
+                    hasActiveFilters: hasActiveFilters,
                   ),
                 ),
               ),
               if (hasActiveFilters)
                 SliverToBoxAdapter(
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                    child: SingleChildScrollView(
+                  child: SizedBox(
+                    height: 40,
+                    child: ListView(
                       scrollDirection: Axis.horizontal,
-                      child: Row(
-                        children: [
-                          if (_locationFilterMode != 'all')
-                            FilterChipWidget(
-                              label: () {
-                                switch (_locationFilterMode) {
-                                  case 'village':
-                                    if (village != null && village.isNotEmpty)
-                                      return village;
-                                    if (villageId != null &&
-                                        villageId.isNotEmpty)
-                                      return villageId;
-                                    return t('nearby') ?? 'Nearby';
-                                  case 'city':
-                                    if (city != null &&
-                                        city.isNotEmpty &&
-                                        city.toLowerCase() != 'null')
-                                      return city;
-                                    if (cityId != null && cityId.isNotEmpty)
-                                      return cityId;
-                                    return t('nearby') ?? 'Nearby';
-                                  case 'country':
-                                    if (country != null && country.isNotEmpty)
-                                      return country;
-                                    if (countryCode != null &&
-                                        countryCode.isNotEmpty)
-                                      return countryCode.toUpperCase();
-                                    return t('unknown_country') ??
-                                        'Unknown Country';
-                                  default:
-                                    return t('nearby') ?? 'Nearby';
-                                }
-                              }(),
-                              icon: Icons.location_on,
-                              onRemove: () {
-                                setState(() => _locationFilterMode = 'all');
-                                _saveFilterPreferences();
-                                _updateRecommendedProducts();
-                              },
-                            ),
-                          if (dist != null)
-                            FilterChipWidget(
-                              label: '${dist.round()} km',
-                              icon: Icons.straighten,
-                              onRemove: () {
-                                setState(() => _distanceFilterKm = null);
-                                _saveFilterPreferences();
-                                _updateRecommendedProducts();
-                              },
-                            ),
-                          if (_selectedMinPrice > 0 ||
-                              _selectedMaxPrice != double.infinity)
-                            FilterChipWidget(
-                              label: _selectedMaxPrice == double.infinity
-                                  ? '${_selectedMinPrice.toStringAsFixed(0)}+'
-                                  : '${_selectedMinPrice.toStringAsFixed(0)} - ${_selectedMaxPrice.toStringAsFixed(0)}',
-                              icon: Icons.attach_money,
-                              onRemove: () {
-                                setState(() {
-                                  _selectedMinPrice = 0;
-                                  _selectedMaxPrice = double.infinity;
-                                });
-                                _saveFilterPreferences();
-                                _updateRecommendedProducts();
-                              },
-                            ),
-                          if (_selectedCategory != null)
-                            FilterChipWidget(
-                              label: _selectedCategory!,
-                              icon: Icons.category,
-                              onRemove: () {
-                                setState(() => _selectedCategory = null);
-                                _saveFilterPreferences();
-                                _updateRecommendedProducts();
-                              },
-                            ),
-                          if (_minRating > 0)
-                            FilterChipWidget(
-                              label: '${_minRating.round()}+ ★',
-                              icon: Icons.star,
-                              onRemove: () {
-                                setState(() => _minRating = 0);
-                                _saveFilterPreferences();
-                                _updateRecommendedProducts();
-                              },
-                            ),
-                          if (_sortBy != 'newest')
-                            FilterChipWidget(
-                              label: _sortLabels[_sortBy] ?? _sortBy,
-                              icon: Icons.sort,
-                              onRemove: () {
-                                setState(() => _sortBy = 'newest');
-                                _saveFilterPreferences();
-                              },
-                            ),
-                        ],
-                      ),
+                      padding: const EdgeInsets.symmetric(horizontal: 20),
+                      children: [
+                        if (_locationFilterMode != 'all')
+                          FilterChipWidget(
+                            label: () {
+                              switch (_locationFilterMode) {
+                                case 'village':
+                                  if (village != null && village.isNotEmpty) {
+                                    return village;
+                                  }
+                                  if (villageId != null && villageId.isNotEmpty) {
+                                    return villageId;
+                                  }
+                                  return t('nearby') ?? 'Nearby';
+                                case 'city':
+                                  if (city != null &&
+                                      city.isNotEmpty &&
+                                      city.toLowerCase() != 'null') {
+                                    return city;
+                                  }
+                                  if (cityId != null && cityId.isNotEmpty) {
+                                    return cityId;
+                                  }
+                                  return t('nearby') ?? 'Nearby';
+                                case 'country':
+                                  if (country != null && country.isNotEmpty) {
+                                    return country;
+                                  }
+                                  if (countryCode != null &&
+                                      countryCode.isNotEmpty) {
+                                    return countryCode.toUpperCase();
+                                  }
+                                  return t('unknown_country') ??
+                                      'Unknown Country';
+                                default:
+                                  return t('nearby') ?? 'Nearby';
+                              }
+                            }(),
+                            icon: Icons.location_on_outlined,
+                            onRemove: () {
+                              ref
+                                  .read(filterProvider.notifier)
+                                  .setLocationMode(LocationFilterMode.none);
+                            },
+                          ),
+                        if (dist != null)
+                          FilterChipWidget(
+                            label: '${dist.round()} km',
+                            icon: Icons.straighten,
+                            onRemove: () {
+                              ref
+                                  .read(filterProvider.notifier)
+                                  .setMaxDistance(null);
+                            },
+                          ),
+                        if (_selectedMinPrice > 0 ||
+                            _selectedMaxPrice != double.infinity)
+                          FilterChipWidget(
+                            label: _selectedMaxPrice == double.infinity
+                                ? '${_selectedMinPrice.toStringAsFixed(0)}+'
+                                : '${_selectedMinPrice.toStringAsFixed(0)} - ${_selectedMaxPrice.toStringAsFixed(0)}',
+                            icon: Icons.attach_money,
+                            onRemove: () {
+                              ref.read(filterProvider.notifier).setPriceRange(
+                                    min: null,
+                                    max: null,
+                                  );
+                            },
+                          ),
+                        if (_selectedCategory != null)
+                          FilterChipWidget(
+                            label: _selectedCategory!,
+                            icon: Icons.category_outlined,
+                            onRemove: () {
+                              ref
+                                  .read(filterProvider.notifier)
+                                  .setCategory(null);
+                            },
+                          ),
+                        if (_minRating > 0)
+                          FilterChipWidget(
+                            label: '${_minRating.round()}+ ★',
+                            icon: Icons.star_outline,
+                            onRemove: () {
+                              ref
+                                  .read(filterProvider.notifier)
+                                  .setMinRating(null);
+                            },
+                          ),
+                        if (_sortBy != 'newest')
+                          FilterChipWidget(
+                            label: _sortLabels[_sortBy] ?? _sortBy,
+                            icon: Icons.sort,
+                            onRemove: () {
+                              ref
+                                  .read(filterProvider.notifier)
+                                  .setSortBy(SortBy.newest);
+                            },
+                          ),
+                      ],
                     ),
                   ),
                 ),
-              if (!_recommendationsLoading &&
-                  !_productsLoading &&
+              if (!_sponsoredProductsLoading && _sponsoredProducts.isNotEmpty) ...[
+                SectionHeader(
+                  title: t('sponsored_products') ?? 'Sponsored Products',
+                  onSeeAll: () => _openSeeAll(
+                    title: t('sponsored_products') ?? 'Sponsored Products',
+                    items: _sponsoredProducts,
+                    isStore: false,
+                  ),
+                ),
+                SliverToBoxAdapter(
+                  child: SizedBox(
+                    height: 252,
+                    child: ListView.builder(
+                      scrollDirection: Axis.horizontal,
+                      padding: const EdgeInsetsDirectional.only(start: 20),
+                      itemCount: _sponsoredProducts.length,
+                      itemBuilder: (context, i) {
+                        final product = _sponsoredProducts[i];
+                        final pid = _productId(product);
+                        return ProductCard(
+                          product: product.toJson(),
+                          compact: true,
+                          onTap: () => _onProductTap(product),
+                          showFavorite: pid != null,
+                          isFavorite: pid != null && _favoriteIds.contains(pid),
+                          onFavoriteToggle: pid != null
+                              ? () => _toggleFavorite(pid, product)
+                              : null,
+                          currencySettings: _currencySettings,
+                          isSponsored: true,
+                          sponsoredLabel: t('sponsored') ?? 'SPONSORED',
+                        );
+                      },
+                    ),
+                  ),
+                ),
+              ],
+              if (!productsLoading &&
                   filteredRecommended.isNotEmpty) ...[
                 SectionHeader(
                   title: t('recommended_for_you') ?? 'Recommended for You',
@@ -1371,22 +1270,24 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
                 SliverToBoxAdapter(
                   child: SizedBox(
-                    height: 220,
+                    height: 252,
                     child: ListView.builder(
                       scrollDirection: Axis.horizontal,
-                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      padding: const EdgeInsetsDirectional.only(start: 20),
                       itemCount: filteredRecommended.length,
                       itemBuilder: (context, i) {
                         final product = filteredRecommended[i];
                         final pid = _productId(product);
                         return ProductCard(
-                          product: product,
+                          product: product.toJson(),
+                          compact: true,
                           onTap: () => _onProductTap(product),
                           showFavorite: pid != null,
                           isFavorite: pid != null && _favoriteIds.contains(pid),
                           onFavoriteToggle: pid != null
                               ? () => _toggleFavorite(pid, product)
                               : null,
+                          currencySettings: _currencySettings,
                         );
                       },
                     ),
@@ -1404,21 +1305,22 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
                 SliverToBoxAdapter(
                   child: SizedBox(
-                    height: 140,
+                    height: 148,
                     child: ListView.builder(
                       scrollDirection: Axis.horizontal,
-                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      padding: const EdgeInsetsDirectional.only(start: 20),
                       itemCount: filteredSponsored.length,
                       itemBuilder: (context, i) {
-                        final store = filteredSponsored[i];
+                        final store = filteredSponsored[i] as Store;
                         final sid = _storeId(store);
+                        final storeMap = store.toJson();
                         return StoreCard(
-                          store: store,
+                          store: storeMap,
                           onTap: () => Navigator.push(
                             context,
                             MaterialPageRoute(
                               builder: (_) =>
-                                  StoreProductsScreen(storeId: store['id']),
+                                  StoreProductsScreen(storeId: store.id),
                             ),
                           ),
                           isSponsored: true,
@@ -1435,7 +1337,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                 ),
               ],
-              if (!_trendingLoading && filteredTrending.isNotEmpty) ...[
+              if (!productsLoading && filteredTrending.isNotEmpty) ...[
                 SectionHeader(
                   title: t('hot_trending') ?? 'Hot & Trending',
                   onSeeAll: () => _openSeeAll(
@@ -1446,16 +1348,17 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
                 SliverToBoxAdapter(
                   child: SizedBox(
-                    height: 220,
+                    height: 252,
                     child: ListView.builder(
                       scrollDirection: Axis.horizontal,
-                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      padding: const EdgeInsetsDirectional.only(start: 20),
                       itemCount: filteredTrending.length,
                       itemBuilder: (context, i) {
-                        final product = filteredTrending[i];
+                        final product = filteredTrending[i] as Product;
                         final pid = _productId(product);
                         return ProductCard(
-                          product: product,
+                          product: product.toJson(),
+                          compact: true,
                           onTap: () => _onProductTap(product),
                           isTrending: true,
                           trendingLabel: t('hot') ?? 'HOT',
@@ -1464,6 +1367,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           onFavoriteToggle: pid != null
                               ? () => _toggleFavorite(pid, product)
                               : null,
+                          currencySettings: _currencySettings,
                         );
                       },
                     ),
@@ -1481,21 +1385,22 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
                 SliverToBoxAdapter(
                   child: SizedBox(
-                    height: 140,
+                    height: 148,
                     child: ListView.builder(
                       scrollDirection: Axis.horizontal,
-                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      padding: const EdgeInsetsDirectional.only(start: 20),
                       itemCount: filteredStores.length,
                       itemBuilder: (context, i) {
-                        final store = filteredStores[i];
+                        final store = filteredStores[i] as Store;
                         final sid = _storeId(store);
+                        final storeMap = store.toJson();
                         return StoreCard(
-                          store: store,
+                          store: storeMap,
                           onTap: () => Navigator.push(
                             context,
                             MaterialPageRoute(
                               builder: (_) =>
-                                  StoreProductsScreen(storeId: store['id']),
+                                  StoreProductsScreen(storeId: store.id),
                             ),
                           ),
                           showFavorite: sid != null,
@@ -1511,18 +1416,19 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
               ],
               SliverPadding(
-                padding: const EdgeInsets.fromLTRB(16, 24, 16, 8),
+                padding: const EdgeInsets.fromLTRB(20, 24, 20, 8),
                 sliver: SliverToBoxAdapter(
                   child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
-                      Text(
-                        t('latest_products') ?? 'Latest Products',
-                        style: const TextStyle(
-                          fontSize: 17,
-                          fontWeight: FontWeight.bold,
+                      Expanded(
+                        child: Text(
+                          t('latest_products') ?? 'Latest Products',
+                          style: theme.textTheme.titleMedium?.copyWith(
+                            fontWeight: FontWeight.w700,
+                          ),
                         ),
                       ),
-                      const Spacer(),
                       IconButton(
                         icon: Icon(
                           _isGridView ? Icons.view_list : Icons.grid_view,
@@ -1539,13 +1445,26 @@ class _HomeScreenState extends State<HomeScreen> {
                           items: filteredProducts,
                           isStore: false,
                         ),
-                        child: Text(t('see_all') ?? 'See All'),
+                        style: TextButton.styleFrom(
+                          foregroundColor: theme.colorScheme.primary,
+                          padding: const EdgeInsets.symmetric(horizontal: 8),
+                          minimumSize: const Size(0, 32),
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        ),
+                        child: Text(
+                          t('see_all') ?? 'See All',
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            color: theme.colorScheme.primary,
+                          ),
+                        ),
                       ),
                     ],
                   ),
                 ),
               ),
-              if (_productsLoading)
+              if (productsLoading)
                 const ProductGridSkeleton()
               else if (filteredProducts.isEmpty)
                 SliverToBoxAdapter(
@@ -1575,17 +1494,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           const SizedBox(height: 8),
                           TextButton(
                             onPressed: () {
-                              setState(() {
-                                _locationFilterMode = 'all';
-                                _distanceFilterKm = null;
-                                _selectedMinPrice = 0;
-                                _selectedMaxPrice = double.infinity;
-                                _selectedCategory = null;
-                                _minRating = 0;
-                                _sortBy = 'newest';
-                              });
-                              _saveFilterPreferences();
-                              _updateRecommendedProducts();
+                              ref.read(filterProvider.notifier).clearAll();
                             },
                             child: Text(
                               t('clear_all_filters') ?? 'Clear all filters',
@@ -1613,21 +1522,23 @@ class _HomeScreenState extends State<HomeScreen> {
     final displayProducts = products.take(displayCount).toList();
     return SliverToBoxAdapter(
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12),
+        padding: const EdgeInsets.symmetric(horizontal: 20),
         child: Wrap(
           spacing: 10,
           runSpacing: 10,
           alignment: WrapAlignment.start,
-          children: displayProducts.map((product) {
+          children: displayProducts.map((item) {
+            final product = item as Product;
             final pid = _productId(product);
             return ProductCard(
-              product: product,
+              product: product.toJson(),
               onTap: () => _onProductTap(product),
               showFavorite: pid != null,
               isFavorite: pid != null && _favoriteIds.contains(pid),
               onFavoriteToggle: pid != null
                   ? () => _toggleFavorite(pid, product)
                   : null,
+              currencySettings: _currencySettings,
             );
           }).toList(),
         ),
@@ -1638,21 +1549,22 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget _buildProductList(List<dynamic> products) {
     final displayCount = products.length > 30 ? 30 : products.length;
     return SliverPadding(
-      padding: const EdgeInsets.symmetric(horizontal: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 20),
       sliver: SliverList(
         delegate: SliverChildBuilderDelegate((context, i) {
-          final product = products[i];
+          final product = products[i] as Product;
           final pid = _productId(product);
           return Padding(
             padding: const EdgeInsets.only(bottom: 10),
             child: ProductListTile(
-              product: product,
+              product: product.toJson(),
               onTap: () => _onProductTap(product),
               showFavorite: pid != null,
               isFavorite: pid != null && _favoriteIds.contains(pid),
               onFavoriteToggle: pid != null
                   ? () => _toggleFavorite(pid, product)
                   : null,
+              currencySettings: _currencySettings,
             ),
           );
         }, childCount: displayCount),

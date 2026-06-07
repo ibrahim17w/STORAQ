@@ -1,6 +1,7 @@
 //forgot_password_screen.dart
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../services/api_service.dart';
 import '../widgets/gradient_button.dart';
 import '../widgets/theme_toggle.dart';
@@ -11,14 +12,14 @@ import '../utils/error_mapper.dart';
 import 'login_screen.dart';
 import '../services/auth_service.dart';
 
-class ForgotPasswordScreen extends StatefulWidget {
+class ForgotPasswordScreen extends ConsumerStatefulWidget {
   const ForgotPasswordScreen({super.key});
 
   @override
-  State<ForgotPasswordScreen> createState() => _ForgotPasswordScreenState();
+  ConsumerState<ForgotPasswordScreen> createState() => _ForgotPasswordScreenState();
 }
 
-class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
+class _ForgotPasswordScreenState extends ConsumerState<ForgotPasswordScreen> {
   final _formKey = GlobalKey<FormState>();
   final _emailCtrl = TextEditingController();
   final _codeCtrl = TextEditingController();
@@ -52,63 +53,14 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
     });
   }
 
-  /// Converts backend OTP/reset errors into human-friendly text.
-  String _getFriendlyError(dynamic error) {
-    final raw = error.toString();
-    final isAr = localeNotifier.value.languageCode == 'ar';
-
-    String msg(String en, String ar) => isAr ? ar : en;
-
-    final jsonMatch = RegExp(r'"error"\s*:\s*"([^"]+)"').firstMatch(raw);
-    final serverMsg = jsonMatch?.group(1)?.toLowerCase() ?? raw.toLowerCase();
-
-    if (serverMsg.contains('too many failed attempts') ||
-        serverMsg.contains('locked')) {
-      return msg(
-        'Too many failed attempts. This code has been locked for your security. Please request a new reset code.',
-        'لقد تجاوزت الحد المسموح من المحاولات. تم إلغاء هذا الرمز لحماية حسابك. يرجى طلب رمز جديد.',
-      );
-    }
-
-    if (serverMsg.contains('expired') ||
-        serverMsg.contains('no longer valid')) {
-      return msg(
-        'This code has expired or is no longer valid. Please request a new one.',
-        'انتهت صلاحية هذا الرمز أو لم يعد صالحاً. يرجى طلب رمز جديد.',
-      );
-    }
-
-    if (serverMsg.contains('incorrect') ||
-        serverMsg.contains('invalid') ||
-        serverMsg.contains('wrong')) {
-      return msg(
-        'Incorrect code. Please try again.',
-        'الرمز غير صحيح. يرجى المحاولة مرة أخرى.',
-      );
-    }
-
-    if (serverMsg.contains('wait')) {
-      final waitMatch = RegExp(r'Please wait [^.]+').firstMatch(raw);
-      if (waitMatch != null) {
-        return waitMatch.group(0)!;
-      }
-      return msg(
-        'Please wait a moment before trying again.',
-        'يرجى الانتظار لحظة قبل المحاولة مرة أخرى.',
-      );
-    }
-
-    return mapBackendError(raw);
-  }
-
   /// Live checklist that shows exactly which rules are met.
   Widget _buildPasswordChecklist(String pwd) {
     final requirements = [
-      ('At least 8 characters', pwd.length >= 8),
-      ('Uppercase letter (A-Z)', pwd.contains(RegExp(r'[A-Z]'))),
-      ('Lowercase letter (a-z)', pwd.contains(RegExp(r'[a-z]'))),
-      ('Number (0-9)', pwd.contains(RegExp(r'[0-9]'))),
-      ('Special character (!@#\$%^&*)', pwd.contains(RegExp(r'[^A-Za-z0-9]'))),
+      (t('pwd_req_min_length'), pwd.length >= 8),
+      (t('pwd_req_uppercase'), pwd.contains(RegExp(r'[A-Z]'))),
+      (t('pwd_req_lowercase'), pwd.contains(RegExp(r'[a-z]'))),
+      (t('pwd_req_number'), pwd.contains(RegExp(r'[0-9]'))),
+      (t('pwd_req_special'), pwd.contains(RegExp(r'[^A-Za-z0-9]'))),
     ];
 
     return Padding(
@@ -169,7 +121,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
     } catch (e) {
       showAppNotification(
         context,
-        message: _getFriendlyError(e),
+        message: mapBackendError(e.toString()),
         isError: true,
       );
     } finally {
@@ -214,7 +166,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
     } catch (e) {
       showAppNotification(
         context,
-        message: _getFriendlyError(e),
+        message: mapBackendError(e.toString()),
         isError: true,
       );
     } finally {
@@ -263,7 +215,9 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
                         ),
                         child: ConstrainedBox(
                           constraints: const BoxConstraints(maxWidth: 480),
-                          child: Column(
+                          child: ValueListenableBuilder<Locale>(
+                            valueListenable: localeNotifier,
+                            builder: (context, locale, _) => Column(
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: [
                               Icon(
@@ -272,9 +226,9 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
                                 color: Theme.of(context).colorScheme.primary,
                               ),
                               const SizedBox(height: 12),
-                              const Text(
-                                'Market Bridge',
-                                style: TextStyle(
+                              Text(
+                                t('app_name'),
+                                style: const TextStyle(
                                   fontSize: 28,
                                   fontWeight: FontWeight.bold,
                                 ),
@@ -432,6 +386,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
                                 ),
                               ),
                             ],
+                          ),
                           ),
                         ),
                       ),

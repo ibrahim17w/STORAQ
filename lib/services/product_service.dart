@@ -5,17 +5,24 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:http/http.dart' as http;
+import '../models/models.dart';
 import 'api_service.dart';
+import 'marketplace_service.dart';
 import 'offline_service.dart';
 import 'order_service.dart';
 import 'store_catalog_service.dart';
+import 'subscription_service.dart';
 
 class ProductService {
   // ============================================================
   // FETCH (auto-caches when online, falls back to cache when offline)
   // ============================================================
 
-  static Future<List<dynamic>> fetchProducts(
+  static List<Product> _mapsToProducts(List<Map<String, dynamic>> maps) {
+    return maps.map((m) => Product.fromJson(m)).toList();
+  }
+
+  static Future<List<Product>> fetchProducts(
     int storeId, {
     bool useCache = true,
     bool fallbackToCache = true,
@@ -39,7 +46,7 @@ class ProductService {
         }
         await OfflineService.cacheProducts(storeId, products);
         await OfflineService.setLastSync(storeId);
-        return OfflineService.getMergedProducts(storeId);
+        return _mapsToProducts(await OfflineService.getMergedProducts(storeId));
       }
     } catch (e) {
       if (!fallbackToCache) rethrow;
@@ -52,16 +59,45 @@ class ProductService {
     throw Exception('Failed to load products');
   }
 
-  /// Local catalog: synced server products + pending offline creates/updates.
-  static Future<List<dynamic>> loadStoreCatalogOffline(int storeId) async {
+  static Future<List<Product>> loadStoreCatalogOffline(int storeId) async {
     final merged = await OfflineService.getMergedProducts(storeId);
-    if (merged.isNotEmpty) return merged;
+    if (merged.isNotEmpty) return _mapsToProducts(merged);
     final cached = await OfflineService.getCachedProducts(storeId: storeId);
-    return cached;
+    return _mapsToProducts(cached);
   }
 
-  /// Fetches from server when possible, always returns merged local catalog.
-  static Future<List<dynamic>> loadStoreCatalog(
+  static Future<List<Product>> fetchMyStoreProducts({
+    bool useCache = true,
+    bool fallbackToCache = true,
+  }) async {
+    try {
+      final response = await ApiService.authGet('/my-store/products');
+      if (response.statusCode == 200) {
+        final products = jsonDecode(response.body) as List<dynamic>;
+        final storeId = await ApiService.getMyStoreId();
+        if (storeId != null) {
+          await OfflineService.cacheProducts(storeId, products);
+          await OfflineService.setLastSync(storeId);
+        }
+        if (storeId != null) {
+          return _mapsToProducts(
+            await OfflineService.getMergedProducts(storeId),
+          );
+        }
+        return products
+            .whereType<Map<String, dynamic>>()
+            .map((m) => Product.fromJson(m))
+            .toList();
+      }
+    } catch (e) {
+      if (!fallbackToCache) rethrow;
+    }
+    final storeId = await ApiService.getMyStoreId();
+    if (storeId != null) return loadStoreCatalogOffline(storeId);
+    throw Exception('Failed to load store products');
+  }
+
+  static Future<List<Product>> loadStoreCatalog(
     int storeId, {
     bool forceRefresh = false,
   }) async {
@@ -69,6 +105,13 @@ class ProductService {
       return loadStoreCatalogOffline(storeId);
     }
     try {
+      final hasStore = await ApiService.getStoreContext();
+      if (hasStore != null) {
+        return await fetchMyStoreProducts(
+          useCache: !forceRefresh,
+          fallbackToCache: true,
+        );
+      }
       return await fetchProducts(
         storeId,
         useCache: !forceRefresh,
@@ -79,7 +122,7 @@ class ProductService {
     }
   }
 
-  static Future<List<dynamic>> fetchProductsOffline(int storeId) async {
+  static Future<List<Product>> fetchProductsOffline(int storeId) async {
     return loadStoreCatalogOffline(storeId);
   }
 
@@ -91,7 +134,7 @@ class ProductService {
     return ApiService.isServerReachable();
   }
 
-  static Future<Map<String, dynamic>> createProductOfflineAware({
+  static Future<Product> createProductOfflineAware({
     required String name,
     required double price,
     required int quantity,
@@ -133,13 +176,20 @@ class ProductService {
     }, storeId);
 
     final tempId = DateTime.now().millisecondsSinceEpoch;
-    // Do NOT cache pending creates in cached_products — getMergedProducts()
-    // already surfaces them from pending_products. Caching here caused
-    // duplicate products after sync (temp 'pending_' ID vs real server ID).
-    return {'offline': true, 'pending': true, 'id': 'pending_$tempId'};
+    return Product(
+      id: 'pending_$tempId',
+      name: name,
+      price: price,
+      quantity: quantity,
+      description: description,
+      barcode: barcode,
+      categoryId: categoryId,
+      currency: currency ?? 'SYP',
+      pendingCreate: true,
+    );
   }
 
-  static Future<Map<String, dynamic>> updateProductOfflineAware({
+  static Future<Product> updateProductOfflineAware({
     required int id,
     required String name,
     required double price,
@@ -201,7 +251,17 @@ class ProductService {
       '_pendingUpdate': true,
     });
 
-    return {'offline': true, 'pending': true, 'id': id};
+    return Product(
+      id: id,
+      name: name,
+      price: price,
+      quantity: quantity,
+      description: description,
+      barcode: barcode,
+      categoryId: categoryId,
+      currency: currency ?? 'SYP',
+      pendingUpdate: true,
+    );
   }
 
   static Future<void> deleteProductOfflineAware(int id, int storeId) async {
@@ -315,8 +375,8 @@ class ProductService {
         final createResult = <String, dynamic>{
           'local_id': c['id'],
           'status': 'success',
-          'server_id': result['id'],
-          'product': result,
+          'server_id': result.id,
+          'product': result.toJson(),
         };
         (results['creates'] as List).add(createResult);
         await _applySuccessfulCreate(
@@ -751,7 +811,7 @@ class ProductService {
   // CREATE / UPDATE / DELETE
   // ============================================================
 
-  static Future<Map<String, dynamic>> createProduct({
+  static Future<Product> createProduct({
     required String name,
     required double price,
     required int quantity,
@@ -762,6 +822,7 @@ class ProductService {
     File? image,
     List<File>? extraImages,
     String? currency,
+    bool? listOnline,
   }) async {
     final request = http.MultipartRequest(
       'POST',
@@ -778,6 +839,7 @@ class ProductService {
     if (lowStockThreshold != null)
       request.fields['low_stock_threshold'] = lowStockThreshold.toString();
     if (currency != null) request.fields['currency'] = currency;
+    if (listOnline != null) request.fields['list_online'] = listOnline.toString();
     if (image != null) {
       request.files.add(await http.MultipartFile.fromPath('image', image.path));
     }
@@ -799,12 +861,14 @@ class ProductService {
       } else {
         StoreCatalogService.instance.notifyChanged();
       }
-      return data;
+      return Product.fromJson(data);
     }
-    throw Exception(data['error']?.toString() ?? 'Failed');
+    final limitErr = SubscriptionService.parseLimitError(response.statusCode, data);
+    if (limitErr != null) throw limitErr;
+    throw Exception(data['error']?.toString() ?? data['message']?.toString() ?? 'Failed');
   }
 
-  static Future<Map<String, dynamic>> updateProduct({
+  static Future<Product> updateProduct({
     required int id,
     required String name,
     required double price,
@@ -817,6 +881,7 @@ class ProductService {
     List<File>? extraImages,
     List<String>? existingImages,
     String? currency,
+    bool? listOnline,
   }) async {
     final request = http.MultipartRequest(
       'PUT',
@@ -835,6 +900,7 @@ class ProductService {
     if (currency != null) request.fields['currency'] = currency;
     if (existingImages != null)
       request.fields['existing_images'] = jsonEncode(existingImages);
+    if (listOnline != null) request.fields['list_online'] = listOnline.toString();
     if (image != null) {
       request.files.add(await http.MultipartFile.fromPath('image', image.path));
     }
@@ -851,9 +917,11 @@ class ProductService {
     final data = jsonDecode(response.body) as Map<String, dynamic>;
     if (response.statusCode == 200) {
       await OfflineService.updateCachedProduct(data);
-      return data;
+      return Product.fromJson(data);
     }
-    throw Exception(data['error']?.toString() ?? 'Failed');
+    final limitErr = SubscriptionService.parseLimitError(response.statusCode, data);
+    if (limitErr != null) throw limitErr;
+    throw Exception(data['error']?.toString() ?? data['message']?.toString() ?? 'Failed');
   }
 
   static Future<void> deleteProduct(int id) async {
@@ -885,6 +953,51 @@ class ProductService {
     return [];
   }
 
+  /// Merges local/cached paths, product.images, image_url, and product_images rows.
+  static Future<List<String>> resolveProductImages(
+    Map<String, dynamic> product,
+  ) async {
+    final seen = <String>{};
+    final merged = <String>[];
+
+    void addAll(Iterable<String> paths) {
+      for (final path in paths) {
+        final trimmed = path.trim();
+        if (trimmed.isEmpty || seen.contains(trimmed)) continue;
+        seen.add(trimmed);
+        merged.add(trimmed);
+      }
+    }
+
+    addAll(OfflineService.getProductImagePaths(product));
+
+    final id = product['id'];
+    final productId = id is int ? id : int.tryParse(id?.toString() ?? '');
+    if (productId == null || productId <= 0) return merged;
+
+    if (merged.length <= 1) {
+      try {
+        final detail = await MarketplaceService.fetchProductDetail(productId);
+        if (detail != null) {
+          addAll(OfflineService.getProductImagePaths(detail.toJson()));
+        }
+      } catch (_) {}
+    }
+
+    if (merged.length <= 1) {
+      try {
+        final rows = await fetchProductImages(productId);
+        final urls = rows
+            .whereType<Map>()
+            .map((row) => row['image_url']?.toString() ?? '')
+            .where((url) => url.isNotEmpty);
+        addAll(urls);
+      } catch (_) {}
+    }
+
+    return merged;
+  }
+
   static Future<void> uploadProductImage(int productId, File image) async {
     final request = http.MultipartRequest(
       'POST',
@@ -903,13 +1016,13 @@ class ProductService {
   // BARCODE
   // ============================================================
 
-  static Future<Map<String, dynamic>?> lookupBarcode(String barcode) async {
+  static Future<Product?> lookupBarcode(String barcode) async {
     final response = await ApiService.getWithTimeout(
       '${ApiService.baseUrl}/api/products/barcode/$barcode',
       headers: ApiService.publicHeaders,
     );
     if (response.statusCode == 200) {
-      return jsonDecode(response.body) as Map<String, dynamic>;
+      return Product.fromJson(jsonDecode(response.body) as Map<String, dynamic>);
     }
     if (response.statusCode == 404) return null;
     throw Exception('Barcode lookup failed');
@@ -944,7 +1057,7 @@ class ProductService {
     throw Exception('Barcode validation failed');
   }
 
-  static Future<Map<String, dynamic>> findProductByBarcode(
+  static Future<Product> findProductByBarcode(
     String barcode,
   ) async {
     final response = await ApiService.getWithTimeout(
@@ -952,7 +1065,7 @@ class ProductService {
       headers: ApiService.publicHeaders,
     );
     final data = jsonDecode(response.body) as Map<String, dynamic>;
-    if (response.statusCode == 200) return data;
+    if (response.statusCode == 200) return Product.fromJson(data);
     throw Exception(data['error']?.toString() ?? 'Product not found');
   }
 
@@ -960,7 +1073,7 @@ class ProductService {
   // PRODUCT SEARCH
   // ============================================================
 
-  static Future<List<dynamic>> searchStoreProducts({
+  static Future<List<Product>> searchStoreProducts({
     required String query,
     int? storeId,
     int limit = 20,
@@ -974,7 +1087,11 @@ class ProductService {
       timeout: const Duration(seconds: 5),
     );
     if (response.statusCode == 200) {
-      return jsonDecode(response.body) as List<dynamic>;
+      final list = jsonDecode(response.body) as List<dynamic>;
+      return list
+          .whereType<Map<String, dynamic>>()
+          .map((m) => Product.fromJson(m))
+          .toList();
     }
     return [];
   }

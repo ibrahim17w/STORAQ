@@ -1,5 +1,6 @@
 import 'dart:math';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
@@ -8,7 +9,7 @@ import '../lang/translations.dart';
 import '../widgets/cached_tile_provider.dart';
 import 'store_products_screen.dart';
 
-class StoreLocationView extends StatefulWidget {
+class StoreLocationView extends ConsumerStatefulWidget {
   final LatLng? target;
   final int? targetStoreId;
   final String? targetName;
@@ -25,10 +26,10 @@ class StoreLocationView extends StatefulWidget {
   });
 
   @override
-  State<StoreLocationView> createState() => _StoreLocationViewState();
+  ConsumerState<StoreLocationView> createState() => _StoreLocationViewState();
 }
 
-class _StoreLocationViewState extends State<StoreLocationView> {
+class _StoreLocationViewState extends ConsumerState<StoreLocationView> {
   final MapController _mapController = MapController();
   List<dynamic> _stores = [];
   LatLng? _userLocation;
@@ -235,17 +236,17 @@ class _StoreLocationViewState extends State<StoreLocationView> {
             else ...[
               IconButton(
                 icon: const Icon(Icons.add),
-                tooltip: 'Zoom in',
+                tooltip: t('zoom_in'),
                 onPressed: _zoomIn,
               ),
               IconButton(
                 icon: const Icon(Icons.remove),
-                tooltip: 'Zoom out',
+                tooltip: t('zoom_out'),
                 onPressed: _zoomOut,
               ),
               IconButton(
                 icon: const Icon(Icons.my_location),
-                tooltip: 'My location',
+                tooltip: t('my_location'),
                 onPressed: _goToUserLocation,
               ),
             ],

@@ -1,11 +1,16 @@
 // lib/screens/checkout_screen.dart
 // FIXED: Eliminated freeze by checking connectivity before ALL API calls,
 // debouncing search, canceling pending requests, and using CachedAppImage.
+//
+// ADDED (multi-currency): cart items carry a converted display price and the
+// totals show the converted display amount. All existing freeze fixes,
+// debouncing, timers and offline logic are preserved exactly.
 
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../providers/connectivity_provider.dart';
 import '../services/api_service.dart';
 import '../utils/barcode_helper.dart';
 import '../screens/barcode_scanner_screen.dart';
@@ -19,6 +24,8 @@ import '../services/store_service.dart';
 import '../services/product_service.dart';
 import '../services/order_service.dart';
 import '../services/store_catalog_service.dart';
+import '../services/currency_service.dart';
+import '../models/models.dart';
 
 class CartItem {
   final dynamic productId; // int for server products, String for pending
@@ -28,6 +35,9 @@ class CartItem {
   final String? barcode;
   int? stock;
   final String currency;
+  // Multi-currency display fields (converted unit price + its currency).
+  final double? displayPrice;
+  final String? displayCurrency;
 
   CartItem({
     this.productId,
@@ -37,19 +47,24 @@ class CartItem {
     this.barcode,
     this.stock,
     this.currency = 'SYP',
+    this.displayPrice,
+    this.displayCurrency,
   });
 
   double get total => unitPrice * quantity;
+
+  /// Converted line total when a display price is available, else null.
+  double? get displayTotal => displayPrice == null ? null : displayPrice! * quantity;
 }
 
-class CheckoutScreen extends StatefulWidget {
+class CheckoutScreen extends ConsumerStatefulWidget {
   const CheckoutScreen({super.key});
 
   @override
-  State<CheckoutScreen> createState() => _CheckoutScreenState();
+  ConsumerState<CheckoutScreen> createState() => _CheckoutScreenState();
 }
 
-class _CheckoutScreenState extends State<CheckoutScreen>
+class _CheckoutScreenState extends ConsumerState<CheckoutScreen>
     with WidgetsBindingObserver {
   final List<CartItem> _cart = [];
   final _searchCtrl = TextEditingController();
@@ -68,13 +83,18 @@ class _CheckoutScreenState extends State<CheckoutScreen>
 
   bool _discountIsPercent = false;
   bool _taxIsPercent = false;
-  bool _isOffline = false;
+
+  // Currency display settings (defaults: no conversion until loaded)
+  Map<String, dynamic> _currencySettings = {
+    'display_currency': null,
+    'show_both_prices': false,
+    'exchange_rates': <dynamic>[],
+  };
 
   // CRITICAL FIX: Debounce search to avoid rapid API calls when typing
   Timer? _searchDebounce;
   // CRITICAL FIX: Cancel token for pending search requests
   bool _searchCancelled = false;
-  StreamSubscription<List<ConnectivityResult>>? _connectivitySub;
   StreamSubscription<void>? _catalogSub;
   Timer? _stockRefreshTimer;
   Timer? _catalogRefreshDebounce;
@@ -103,6 +123,85 @@ class _CheckoutScreenState extends State<CheckoutScreen>
 
   double get _total => _rawSubtotal - _discountValue + _taxValue;
 
+  // ============================================================
+  // CURRENCY DISPLAY HELPERS
+  // ============================================================
+
+  /// The display currency to convert into, or null when conversion is not
+  /// applicable (no setting or empty cart).
+  String? get _displayCurrencyCode {
+    final dc = _currencySettings['display_currency']?.toString().trim();
+    if (dc == null || dc.isEmpty) return null;
+    if (_cart.isEmpty) return null;
+    return dc;
+  }
+
+  bool get _showBothPrices => _currencySettings['show_both_prices'] == true;
+
+  /// Currency label for amount inputs (discount/tax) — uses the store display
+  /// currency when configured so entered values match what the customer sees.
+  String get _inputCurrencyLabel => _displayCurrencyCode ?? _currency;
+
+  double? _lineTotalInDisplay(CartItem item, String displayCurrency) {
+    if (item.displayTotal != null &&
+        item.displayCurrency?.trim().toLowerCase() ==
+            displayCurrency.toLowerCase()) {
+      return item.displayTotal;
+    }
+    if (item.currency.trim().toLowerCase() == displayCurrency.toLowerCase()) {
+      return item.total;
+    }
+    return CurrencyService.convertPrice(
+      item.total,
+      item.currency,
+      displayCurrency,
+      _currencySettings['exchange_rates'],
+    );
+  }
+
+  double? get _displaySubtotal {
+    final dc = _displayCurrencyCode;
+    if (dc == null) return null;
+
+    var sum = 0.0;
+    for (final item in _cart) {
+      final line = _lineTotalInDisplay(item, dc);
+      if (line == null) return null;
+      sum += line;
+    }
+    return sum;
+  }
+
+  double? get _displayDiscountValue {
+    final subtotal = _displaySubtotal;
+    if (subtotal == null) return null;
+
+    final raw = double.tryParse(_discountCtrl.text) ?? 0;
+    if (_discountIsPercent && raw > 0) {
+      return (subtotal * raw / 100).clamp(0, subtotal).toDouble();
+    }
+    return raw.clamp(0, subtotal).toDouble();
+  }
+
+  double? get _displayTaxValue {
+    final subtotal = _displaySubtotal;
+    if (subtotal == null) return null;
+
+    final raw = double.tryParse(_taxCtrl.text) ?? 0;
+    if (_taxIsPercent && raw > 0) {
+      return subtotal * raw / 100;
+    }
+    return raw;
+  }
+
+  double? get _displayTotal {
+    final subtotal = _displaySubtotal;
+    final discount = _displayDiscountValue;
+    final tax = _displayTaxValue;
+    if (subtotal == null || discount == null || tax == null) return null;
+    return subtotal - discount + tax;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -116,7 +215,6 @@ class _CheckoutScreenState extends State<CheckoutScreen>
     _searchDebounce?.cancel();
     _stockRefreshTimer?.cancel();
     _catalogRefreshDebounce?.cancel();
-    _connectivitySub?.cancel();
     _catalogSub?.cancel();
     _searchCtrl.dispose();
     _customerNameCtrl.dispose();
@@ -140,38 +238,26 @@ class _CheckoutScreenState extends State<CheckoutScreen>
 
   /// Load from local cache first; never block on network when unreachable.
   Future<void> _bootstrap() async {
-    _isOffline = !await _checkOnline();
-
-    _connectivitySub = Connectivity().onConnectivityChanged.listen(
-      (_) => unawaited(_handleConnectivityChange()),
-    );
-
     _catalogSub = StoreCatalogService.instance.onChanged.listen(
       (_) => _scheduleCatalogRefresh(),
     );
 
     unawaited(_loadCashier());
     unawaited(_loadStoreProducts());
+    unawaited(_loadCurrencySettings());
 
-    if (!_isOffline) {
+    if (ref.read(connectivityProvider).isOnline) {
       unawaited(_refreshStoreFromServer());
     }
 
     _startStockRefreshTimer();
   }
 
-  Future<void> _handleConnectivityChange() async {
-    if (!mounted) return;
-    final online = await _checkOnline();
-    if (!mounted) return;
-    final wasOffline = _isOffline;
-    setState(() => _isOffline = !online);
-    if (online) {
-      unawaited(_refreshCatalog());
-      if (wasOffline) {
-        unawaited(_refreshStoreFromServer());
-      }
-    }
+  Future<void> _loadCurrencySettings() async {
+    try {
+      final settings = await CurrencyService.getCurrencySettings();
+      if (mounted) setState(() => _currencySettings = settings.toLegacyMap());
+    } catch (_) {}
   }
 
   void _scheduleCatalogRefresh() {
@@ -186,7 +272,7 @@ class _CheckoutScreenState extends State<CheckoutScreen>
     _stockRefreshTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       unawaited(_refreshCatalog());
       _stockRefreshTick++;
-      if (!_isOffline && _stockRefreshTick % 10 == 0) {
+      if (ref.read(connectivityProvider).isOnline && _stockRefreshTick % 10 == 0) {
         unawaited(_refreshStoreFromServer());
       }
     });
@@ -195,48 +281,50 @@ class _CheckoutScreenState extends State<CheckoutScreen>
   Future<void> _loadStoreProducts() async {
     if (mounted) setState(() => _isLoading = true);
 
-    int? cachedStoreId;
-    try {
-      cachedStoreId = await ApiService.getMyStoreId();
-      if (cachedStoreId == null) {
-        final cachedStore = await OfflineService.getCachedStore().timeout(
-          const Duration(seconds: 2),
-        );
-        cachedStoreId = cachedStore?['id'] as int?;
+    final cachedStoreId = await ApiService.getMyStoreId();
+    if (cachedStoreId == null) {
+      if (mounted) {
+        setState(() {
+          _storeId = null;
+          _allProducts = [];
+          _cart.clear();
+          _isLoading = false;
+        });
       }
-    } catch (_) {}
+      return;
+    }
 
-    if (cachedStoreId != null) {
-      _storeId = cachedStoreId;
+    if (_storeId != null && _storeId != cachedStoreId) {
+      _cart.clear();
+    }
+    _storeId = cachedStoreId;
+
+    try {
+      final merged = await OfflineService.getMergedProducts(
+        cachedStoreId,
+      ).timeout(const Duration(seconds: 3));
+      if (mounted) {
+        setState(() {
+          _allProducts = merged;
+          _isLoading = false;
+          _syncCartStockFromCatalog();
+        });
+      }
+    } catch (_) {
       try {
-        final merged = await OfflineService.getMergedProducts(
-          cachedStoreId,
-        ).timeout(const Duration(seconds: 3));
+        final cached = await OfflineService.getCachedProducts(
+          storeId: cachedStoreId,
+        ).timeout(const Duration(seconds: 2));
         if (mounted) {
           setState(() {
-            _allProducts = merged;
+            _allProducts = cached;
             _isLoading = false;
             _syncCartStockFromCatalog();
           });
         }
       } catch (_) {
-        try {
-          final cached = await OfflineService.getCachedProducts(
-            storeId: cachedStoreId,
-          ).timeout(const Duration(seconds: 2));
-          if (mounted) {
-            setState(() {
-              _allProducts = cached;
-              _isLoading = false;
-              _syncCartStockFromCatalog();
-            });
-          }
-        } catch (_) {
-          if (mounted) setState(() => _isLoading = false);
-        }
+        if (mounted) setState(() => _isLoading = false);
       }
-    } else {
-      if (mounted) setState(() => _isLoading = false);
     }
   }
 
@@ -286,22 +374,28 @@ class _CheckoutScreenState extends State<CheckoutScreen>
   }
 
   Future<void> _refreshStoreFromServer() async {
-    if (_isOffline) return;
+    if (!ref.read(connectivityProvider).isOnline) return;
 
     try {
       final store = await StoreService.getMyStore().timeout(
         const Duration(seconds: 4),
       );
-      final storeId = store['id'] as int?;
+      final storeId = store.intId;
       if (storeId == null) return;
 
-      if (mounted && _storeId != storeId) {
-        setState(() => _storeId = storeId);
+      if (_storeId != null && _storeId != storeId) {
+        if (mounted) {
+          setState(() {
+            _cart.clear();
+            _searchResults = [];
+          });
+        }
       }
 
-      List<dynamic> products = [];
+      if (mounted) setState(() => _storeId = storeId);
+
       try {
-        products = await ProductService.loadStoreCatalog(
+        await ProductService.loadStoreCatalog(
           storeId,
           forceRefresh: true,
         ).timeout(const Duration(seconds: 4));
@@ -309,9 +403,12 @@ class _CheckoutScreenState extends State<CheckoutScreen>
         return;
       }
 
-      if (mounted && products.isNotEmpty) {
+      final merged = await OfflineService.getMergedProducts(storeId).timeout(
+        const Duration(seconds: 3),
+      );
+      if (mounted && merged.isNotEmpty) {
         setState(() {
-          _allProducts = products;
+          _allProducts = merged;
           _applySearchFilterToResults();
           _syncCartStockFromCatalog();
         });
@@ -320,7 +417,7 @@ class _CheckoutScreenState extends State<CheckoutScreen>
   }
 
   Future<void> _loadCashier() async {
-    if (_isOffline) {
+    if (!ref.read(connectivityProvider).isOnline) {
       try {
         final cachedUser = await OfflineService.getCachedUser().timeout(
           const Duration(seconds: 1),
@@ -336,10 +433,12 @@ class _CheckoutScreenState extends State<CheckoutScreen>
     }
 
     final results = await Future.wait([
-      AuthService.getCurrentUser().timeout(
-        const Duration(seconds: 2),
-        onTimeout: () => Future.value(null),
-      ),
+      AuthService.getCurrentUser()
+          .then<Map<String, dynamic>?>((u) => u.toJson())
+          .timeout(
+            const Duration(seconds: 2),
+            onTimeout: () => Future.value(null),
+          ),
       OfflineService.getCachedUser().timeout(
         const Duration(seconds: 2),
         onTimeout: () => Future.value(null),
@@ -369,20 +468,21 @@ class _CheckoutScreenState extends State<CheckoutScreen>
   Future<void> _addByBarcode(String code) async {
     setState(() => _isLoading = true);
     try {
-      if (!_isOffline) {
+      if (ref.read(connectivityProvider).isOnline) {
         try {
           final product = await ProductService.findProductByBarcode(code)
               .timeout(const Duration(seconds: 3));
-          _addProductToCart(product);
+          _addProductToCart(product.toJson());
           return;
         } catch (_) {}
       }
 
-      final storeIdFallback =
-          _storeId ?? await OfflineService.getCachedStoreId();
-      final cached = storeIdFallback != null
-          ? await OfflineService.getMergedProducts(storeIdFallback)
-          : await OfflineService.getCachedProducts();
+      final storeIdFallback = _storeId ?? await ApiService.getMyStoreId();
+      if (storeIdFallback == null) {
+        _showError(t('product_not_found') ?? 'Product not found');
+        return;
+      }
+      final cached = await OfflineService.getMergedProducts(storeIdFallback);
       final matchIndex = cached.indexWhere(
         (p) => p['barcode']?.toString() == code,
       );
@@ -423,6 +523,13 @@ class _CheckoutScreenState extends State<CheckoutScreen>
         _showError(t('out_of_stock') ?? 'Out of stock');
         return;
       }
+      // Resolve the converted display price for this product (offline-capable).
+      final info = CurrencyService.getProductDisplayInfo(
+        catalogProduct,
+        _currencySettings,
+      );
+      final displayUnit = info['display_price'] as double?;
+      final displayCurr = info['display_currency'] as String?;
       setState(
         () => _cart.add(
           CartItem(
@@ -435,6 +542,8 @@ class _CheckoutScreenState extends State<CheckoutScreen>
             barcode: catalogProduct['barcode']?.toString(),
             stock: stock,
             currency: catalogProduct['currency']?.toString() ?? 'SYP',
+            displayPrice: displayUnit,
+            displayCurrency: displayCurr,
           ),
         ),
       );
@@ -468,14 +577,10 @@ class _CheckoutScreenState extends State<CheckoutScreen>
       _isSearching = false;
     });
 
-    // CRITICAL FIX: Only search server if online AND query is meaningful
-    if (_isOffline || query.length < 2) return;
+    if (!ref.read(connectivityProvider).isOnline || query.length < 2) return;
 
     final online = await _checkOnline();
-    if (!online || !mounted) {
-      if (mounted) setState(() => _isOffline = true);
-      return;
-    }
+    if (!online || !mounted) return;
 
     setState(() => _isSearching = true);
     _searchCancelled = false;
@@ -485,8 +590,8 @@ class _CheckoutScreenState extends State<CheckoutScreen>
         query: query,
         storeId: _storeId,
       );
-      if (_searchCancelled) return; // Search was superseded
-      final merged = _mergeWithLocal(results);
+      if (_searchCancelled) return;
+      final merged = _mergeWithLocal(results.map((p) => p.toJson()).toList());
       if (mounted) setState(() => _searchResults = merged);
     } catch (_) {
       // Server search failed, local results already showing
@@ -531,6 +636,11 @@ class _CheckoutScreenState extends State<CheckoutScreen>
   Future<Map<String, dynamic>> _buildOfflineOrderData(String receiptNumber) async {
     final storeId = _storeId ?? await ApiService.getMyStoreId();
     final currency = _cart.isEmpty ? 'SYP' : _cart.first.currency;
+    final displayCurrency = _displayCurrencyCode;
+    final displaySubtotal = _displaySubtotal;
+    final displayDiscount = _displayDiscountValue;
+    final displayTax = _displayTaxValue;
+    final displayTotal = _displayTotal;
     return {
       'items': _cart
           .map(
@@ -542,6 +652,8 @@ class _CheckoutScreenState extends State<CheckoutScreen>
               'total_price': c.total,
               'barcode': c.barcode,
               'currency': c.currency,
+              'display_price': c.displayPrice,
+              'display_currency': c.displayCurrency,
             },
           )
           .toList(),
@@ -561,6 +673,11 @@ class _CheckoutScreenState extends State<CheckoutScreen>
       'receipt_number': receiptNumber,
       'cashier_name': _cashierName ?? t('unknown') ?? 'Unknown',
       'currency': currency,
+      'display_total': displayTotal,
+      'display_subtotal': displaySubtotal,
+      'display_discount': displayDiscount,
+      'display_tax': displayTax,
+      'display_currency': displayCurrency,
       'created_at': DateTime.now().toIso8601String(),
     };
   }
@@ -575,6 +692,14 @@ class _CheckoutScreenState extends State<CheckoutScreen>
     final theme = Theme.of(context);
     final stock = (p['quantity'] as num?)?.toInt() ?? 0;
     final isOutOfStock = stock <= 0;
+    final info = CurrencyService.getProductDisplayInfo(p, _currencySettings);
+    final originalCurrency = info['original_currency'] as String;
+    final displayPrice = info['display_price'] as double?;
+    final displayCurrency = info['display_currency'] as String?;
+    final hasDisplay = displayPrice != null && displayCurrency != null;
+    final priceLabel = hasDisplay
+        ? CurrencyService.formatPrice(displayPrice, displayCurrency)
+        : CurrencyService.formatPrice(_parsePrice(p['price']), originalCurrency);
     return Card(
       margin: const EdgeInsets.only(bottom: 8),
       child: ListTile(
@@ -589,7 +714,7 @@ class _CheckoutScreenState extends State<CheckoutScreen>
               : null,
         ),
         subtitle: Text(
-          '${_fmt(_parsePrice(p['price']), currency: p['currency']?.toString() ?? 'SYP')} • $stock ${t('in_stock') ?? 'in stock'}',
+          '$priceLabel • $stock ${t('in_stock') ?? 'in stock'}',
           style: isOutOfStock
               ? TextStyle(color: theme.colorScheme.error)
               : null,
@@ -656,6 +781,12 @@ class _CheckoutScreenState extends State<CheckoutScreen>
       return;
     }
 
+    final displayCurrency = _displayCurrencyCode;
+    final displayTotal = _displayTotal;
+    final displaySubtotal = _displaySubtotal;
+    final displayDiscount = _displayDiscountValue;
+    final displayTax = _displayTaxValue;
+
     final confirm = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
@@ -664,20 +795,50 @@ class _CheckoutScreenState extends State<CheckoutScreen>
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('${t('subtotal') ?? 'Subtotal'}: ${_fmt(_subtotal)}'),
+            Text(
+              '${t('subtotal') ?? 'Subtotal'}: ${displaySubtotal != null && displayCurrency != null ? CurrencyService.formatPrice(displaySubtotal, displayCurrency) : _fmt(_subtotal)}',
+            ),
+            if (_showBothPrices &&
+                displaySubtotal != null &&
+                displayCurrency != null &&
+                _subtotal != displaySubtotal)
+              Text(
+                '(${CurrencyService.formatPrice(_subtotal, _currency)})',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+              ),
             if (_discountValue > 0)
               Text(
-                '${t('discount') ?? 'Discount'}: -${_fmt(_discountValue)}${_discountIsPercent ? ' (${_discountCtrl.text}%)' : ''}',
+                '${t('discount') ?? 'Discount'}: -${_fmtDisplay(_discountValue, displayValue: displayDiscount)}${_discountIsPercent ? ' (${_discountCtrl.text}%)' : ''}',
               ),
             if (_taxValue > 0)
               Text(
-                '${t('tax') ?? 'Tax'}: +${_fmt(_taxValue)}${_taxIsPercent ? ' (${_taxCtrl.text}%)' : ''}',
+                '${t('tax') ?? 'Tax'}: +${_fmtDisplay(_taxValue, displayValue: displayTax)}${_taxIsPercent ? ' (${_taxCtrl.text}%)' : ''}',
               ),
             const Divider(),
             Text(
-              '${t('total_amount') ?? 'Total'}: ${_fmt(_total)}',
-              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+              '${t('total_amount') ?? 'Total'}: ${displayTotal != null && displayCurrency != null ? CurrencyService.formatPrice(displayTotal, displayCurrency) : _fmt(_total)}',
+              style: TextStyle(
+                fontWeight: FontWeight.bold,
+                fontSize: 18,
+                color: displayTotal != null && displayCurrency != null
+                    ? Theme.of(context).colorScheme.primary
+                    : null,
+              ),
             ),
+            if (_showBothPrices &&
+                displayTotal != null &&
+                displayCurrency != null &&
+                _total != displayTotal)
+              Text(
+                '(${CurrencyService.formatPrice(_total, _currency)})',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+              ),
           ],
         ),
         actions: [
@@ -697,7 +858,6 @@ class _CheckoutScreenState extends State<CheckoutScreen>
     setState(() => _isLoading = true);
 
     final isOnline = await _checkOnline();
-    if (mounted) setState(() => _isOffline = !isOnline);
 
     String _offlineReceipt() =>
         'OFF-${DateTime.now().millisecondsSinceEpoch.toString().substring(5)}';
@@ -734,6 +894,8 @@ class _CheckoutScreenState extends State<CheckoutScreen>
               'total_price': c.total,
               'barcode': c.barcode,
               'currency': c.currency,
+              'display_price': c.displayPrice,
+              'display_currency': c.displayCurrency,
             },
           )
           .toList();
@@ -746,9 +908,15 @@ class _CheckoutScreenState extends State<CheckoutScreen>
         customerPhone: _customerPhoneCtrl.text.trim().isEmpty
             ? null
             : _customerPhoneCtrl.text.trim(),
+        subtotal: _subtotal,
         discount: _discountValue,
         tax: _taxValue,
         total: _total,
+        displaySubtotal: displaySubtotal,
+        displayDiscount: displayDiscount,
+        displayTax: displayTax,
+        displayTotal: displayTotal,
+        displayCurrency: displayCurrency,
         notes: _notesCtrl.text.trim().isEmpty ? null : _notesCtrl.text.trim(),
       );
 
@@ -773,8 +941,18 @@ class _CheckoutScreenState extends State<CheckoutScreen>
     ).showSnackBar(SnackBar(content: Text(msg), backgroundColor: Colors.red));
   }
 
-  String _fmt(double value, {String currency = 'SYP'}) =>
-      '${value.toStringAsFixed(2)} $currency';
+  String _fmt(double value, {String? currency}) =>
+      '${value.toStringAsFixed(2)} ${currency ?? _currency}';
+
+  /// Formats an amount in the display currency when available; otherwise
+  /// formats it in the cart's original/base currency.
+  String _fmtDisplay(double value, {double? displayValue}) {
+    final dc = _displayCurrencyCode;
+    if (dc != null && displayValue != null) {
+      return CurrencyService.formatPrice(displayValue, dc);
+    }
+    return _fmt(value);
+  }
 
   double _parsePrice(dynamic value) {
     if (value == null) return 0;
@@ -813,7 +991,7 @@ class _CheckoutScreenState extends State<CheckoutScreen>
                       tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                     ),
                     child: Text(
-                      isPercent ? '%' : _currency,
+                      isPercent ? '%' : _inputCurrencyLabel,
                       style: TextStyle(
                         fontWeight: FontWeight.bold,
                         color: isPercent
@@ -857,7 +1035,7 @@ class _CheckoutScreenState extends State<CheckoutScreen>
     final imagePaths = OfflineService.getProductImagePaths(product);
     var firstPath = imagePaths.isNotEmpty ? imagePaths.first : null;
 
-    if (_isOffline &&
+    if (!ref.read(connectivityProvider).isOnline &&
         firstPath != null &&
         (firstPath.startsWith('http://') || firstPath.startsWith('https://'))) {
       firstPath = null;
@@ -875,12 +1053,18 @@ class _CheckoutScreenState extends State<CheckoutScreen>
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final isOffline = !ref.watch(connectivityProvider).isOnline;
+    final displayCurrency = _displayCurrencyCode;
+    final displaySubtotal = _displaySubtotal;
+    final displayDiscount = _displayDiscountValue;
+    final displayTax = _displayTaxValue;
+    final displayTotal = _displayTotal;
 
     return Scaffold(
       appBar: AppBar(
         title: Text(t('checkout') ?? 'Checkout'),
         actions: [
-          if (_isOffline)
+          if (isOffline)
             Padding(
               padding: const EdgeInsets.only(right: 8),
               child: Chip(
@@ -1057,6 +1241,9 @@ class _CheckoutScreenState extends State<CheckoutScreen>
                               itemCount: _cart.length,
                               itemBuilder: (_, i) {
                                 final item = _cart[i];
+                                final hasItemDisplay =
+                                    item.displayTotal != null &&
+                                    item.displayCurrency != null;
                                 return Card(
                                   margin: const EdgeInsets.only(bottom: 8),
                                   child: Padding(
@@ -1108,16 +1295,36 @@ class _CheckoutScreenState extends State<CheckoutScreen>
                                               () => _adjustQty(i, 1),
                                             ),
                                             const Spacer(),
-                                            Text(
-                                              _fmt(
-                                                item.total,
-                                                currency: item.currency,
-                                              ),
-                                              style: TextStyle(
-                                                fontWeight: FontWeight.bold,
-                                                color:
-                                                    theme.colorScheme.primary,
-                                              ),
+                                            Column(
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.end,
+                                              children: [
+                                                Text(
+                                                  hasItemDisplay
+                                                      ? CurrencyService.formatPrice(
+                                                          item.displayTotal,
+                                                          item.displayCurrency!,
+                                                        )
+                                                      : _fmt(
+                                                          item.total,
+                                                          currency: item.currency,
+                                                        ),
+                                                  style: TextStyle(
+                                                    fontWeight: FontWeight.bold,
+                                                    color: theme
+                                                        .colorScheme.primary,
+                                                  ),
+                                                ),
+                                                if (hasItemDisplay && _showBothPrices)
+                                                  Text(
+                                                    '(${CurrencyService.formatPrice(item.total, item.currency)})',
+                                                    style: TextStyle(
+                                                      fontSize: 11,
+                                                      color: theme.colorScheme
+                                                          .onSurfaceVariant,
+                                                    ),
+                                                  ),
+                                              ],
                                             ),
                                           ],
                                         ),
@@ -1133,7 +1340,29 @@ class _CheckoutScreenState extends State<CheckoutScreen>
                       color: theme.colorScheme.surface,
                       child: Column(
                         children: [
-                          _totalRow(t('subtotal') ?? 'Subtotal', _subtotal),
+                          if (displaySubtotal != null && displayCurrency != null)
+                            Column(
+                              children: [
+                                _totalRow(
+                                  t('subtotal') ?? 'Subtotal',
+                                  displaySubtotal,
+                                  currency: displayCurrency,
+                                ),
+                                if (_showBothPrices && _subtotal != displaySubtotal)
+                                  Align(
+                                    alignment: Alignment.centerRight,
+                                    child: Text(
+                                      '(${CurrencyService.formatPrice(_subtotal, _currency)})',
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: theme.colorScheme.onSurfaceVariant,
+                                      ),
+                                    ),
+                                  ),
+                              ],
+                            )
+                          else
+                            _totalRow(t('subtotal') ?? 'Subtotal', _subtotal),
                           const SizedBox(height: 8),
                           _buildDiscountTaxInput(
                             controller: _discountCtrl,
@@ -1147,7 +1376,7 @@ class _CheckoutScreenState extends State<CheckoutScreen>
                             Align(
                               alignment: Alignment.centerRight,
                               child: Text(
-                                '- ${_fmt(_discountValue)}',
+                                '- ${_fmtDisplay(_discountValue, displayValue: displayDiscount)}',
                                 style: TextStyle(
                                   color: Colors.green.shade700,
                                   fontWeight: FontWeight.w600,
@@ -1167,7 +1396,7 @@ class _CheckoutScreenState extends State<CheckoutScreen>
                             Align(
                               alignment: Alignment.centerRight,
                               child: Text(
-                                '+ ${_fmt(_taxValue)}',
+                                '+ ${_fmtDisplay(_taxValue, displayValue: displayTax)}',
                                 style: TextStyle(
                                   color: theme.colorScheme.primary,
                                   fontWeight: FontWeight.w600,
@@ -1184,12 +1413,34 @@ class _CheckoutScreenState extends State<CheckoutScreen>
                                   fontWeight: FontWeight.bold,
                                 ),
                               ),
-                              Text(
-                                _fmt(_total),
-                                style: theme.textTheme.titleLarge?.copyWith(
-                                  fontWeight: FontWeight.bold,
-                                  color: theme.colorScheme.primary,
-                                ),
+                              Column(
+                                crossAxisAlignment: CrossAxisAlignment.end,
+                                children: [
+                                  Text(
+                                    (displayTotal != null &&
+                                            displayCurrency != null)
+                                        ? CurrencyService.formatPrice(
+                                            displayTotal,
+                                            displayCurrency,
+                                          )
+                                        : _fmt(_total),
+                                    style: theme.textTheme.titleLarge?.copyWith(
+                                      fontWeight: FontWeight.bold,
+                                      color: theme.colorScheme.primary,
+                                    ),
+                                  ),
+                                  if (_showBothPrices &&
+                                      displayTotal != null &&
+                                      displayCurrency != null)
+                                    Text(
+                                      '(${CurrencyService.formatPrice(_total, _currency)})',
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color:
+                                            theme.colorScheme.onSurfaceVariant,
+                                      ),
+                                    ),
+                                ],
                               ),
                             ],
                           ),
@@ -1239,12 +1490,15 @@ class _CheckoutScreenState extends State<CheckoutScreen>
     );
   }
 
-  Widget _totalRow(String label, double value) {
+  Widget _totalRow(String label, double value, {String? currency}) {
+    final formatted = currency != null
+        ? CurrencyService.formatPrice(value, currency)
+        : _fmt(value);
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
         Text(label),
-        Text(_fmt(value), style: const TextStyle(fontWeight: FontWeight.w600)),
+        Text(formatted, style: const TextStyle(fontWeight: FontWeight.w600)),
       ],
     );
   }

@@ -4,9 +4,10 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'api_service.dart';
 import 'offline_service.dart';
+import '../models/models.dart';
 
 class StoreService {
-  static Future<List<dynamic>> fetchStores() async {
+  static Future<List<Store>> fetchStores() async {
     final response = await ApiService.getWithTimeout(
       '${ApiService.baseUrl}/api/stores',
       headers: ApiService.publicHeaders,
@@ -14,30 +15,33 @@ class StoreService {
     );
     if (response.statusCode == 200) {
       final decoded = jsonDecode(response.body);
-      if (decoded is List) return decoded;
-      if (decoded is Map) {
-        if (decoded.containsKey('data')) {
-          return decoded['data'] as List<dynamic>;
-        }
-        return decoded as List<dynamic>? ?? [];
+      List<dynamic> items;
+      if (decoded is List) {
+        items = decoded;
+      } else if (decoded is Map && decoded.containsKey('data')) {
+        items = decoded['data'] as List<dynamic>;
+      } else {
+        items = [];
       }
-      return [];
+      return items
+          .map((e) => Store.fromJson(e as Map<String, dynamic>))
+          .toList();
     }
     throw Exception('Failed to load stores');
   }
 
-  static Future<Map<String, dynamic>> fetchStore(int id) async {
+  static Future<Store> fetchStore(int id) async {
     final response = await ApiService.getWithTimeout(
       '${ApiService.baseUrl}/api/stores/$id',
       headers: ApiService.publicHeaders,
     );
     if (response.statusCode == 200) {
-      return jsonDecode(response.body) as Map<String, dynamic>;
+      return Store.fromJson(jsonDecode(response.body) as Map<String, dynamic>);
     }
     throw Exception('Failed');
   }
 
-  static Future<Map<String, dynamic>> getMyStore() async {
+  static Future<Store> getMyStore() async {
     try {
       final response = await ApiService.getWithTimeout(
         '${ApiService.baseUrl}/api/my-store',
@@ -46,31 +50,34 @@ class StoreService {
       final data = jsonDecode(response.body) as Map<String, dynamic>;
       if (response.statusCode == 200) {
         await OfflineService.cacheStore(data);
-        return data;
+        return Store.fromJson(data);
       }
       throw Exception(data['error']?.toString() ?? 'Failed');
     } catch (e) {
       // Offline fallback: return cached store on ANY failure (network, server down, timeout)
-      final cached = await OfflineService.getCachedStore();
-      if (cached != null) return cached;
+      final storeId = await ApiService.getMyStoreId();
+      final cached = storeId != null
+          ? await OfflineService.getCachedStore(storeId: storeId)
+          : await OfflineService.getCachedStore();
+      if (cached != null) return Store.fromJson(cached);
       // Last resort: build minimal store from store context so UI doesn't crash
       final ctx = await ApiService.getStoreContext();
-      final storeId = await ApiService.getMyStoreId();
       if (storeId != null) {
-        return {
+        return Store.fromJson({
           'id': storeId,
           'name': ctx?['store_name'] ?? 'My Store',
           'role': ctx?['role'] ?? 'owner',
-        };
+        });
       }
       rethrow;
     }
   }
 
-  static Future<Map<String, dynamic>> updateMyStore({
+  static Future<Store> updateMyStore({
     String? name,
     String? city,
     String? village,
+    String? locationDescription,
     String? country,
     String? phone,
     double? lat,
@@ -88,6 +95,9 @@ class StoreService {
     if (name != null) request.fields['name'] = name;
     if (city != null) request.fields['city'] = city;
     if (village != null) request.fields['village'] = village;
+    if (locationDescription != null) {
+      request.fields['location_description'] = locationDescription;
+    }
     if (country != null) request.fields['country'] = country;
     if (phone != null) request.fields['phone'] = phone;
     if (lat != null) request.fields['lat'] = lat.toString();
@@ -103,8 +113,10 @@ class StoreService {
     final response = await http.Response.fromStream(streamed);
 
     if (response.statusCode == 200) {
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+      await OfflineService.cacheStore(data);
       try {
-        return jsonDecode(response.body) as Map<String, dynamic>;
+        return Store.fromJson(data);
       } catch (_) {
         throw Exception('Server returned invalid data');
       }

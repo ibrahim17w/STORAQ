@@ -1,26 +1,38 @@
 // lib/screens/profile_screen.dart
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/api_service.dart';
 import '../providers/locale_provider.dart';
+import '../providers/auth_provider.dart';
 import '../lang/translations.dart';
 import '../widgets/theme_toggle.dart';
 import '../widgets/guest_login_sheet.dart';
 import 'my_store_screen.dart';
 import 'main_nav_screen.dart';
 import 'checkout_screen.dart';
+import 'store_settings_screen.dart';
 import 'order_history_screen.dart';
 import 'store_invitations_screen.dart';
 import '../services/auth_service.dart';
 import '../services/store_service.dart';
+import '../models/models.dart';
+import 'admin_subscription_payments_screen.dart';
 import '../services/offline_service.dart';
+import '../widgets/cached_image.dart';
+import 'chat_conversations_screen.dart';
+import 'support_tickets_screen.dart';
+import '../providers/cart_provider.dart';
+import 'shopping_cart_screen.dart';
 
-class ProfileScreen extends StatelessWidget {
+class ProfileScreen extends ConsumerWidget {
   const ProfileScreen({super.key});
 
-  Future<void> _logout(BuildContext context) async {
-    await AuthService.logout();
+  Future<void> _logout(BuildContext context, WidgetRef ref) async {
+    await ref.read(authProvider.notifier).logout();
     if (context.mounted) {
       Navigator.pushAndRemoveUntil(
         context,
@@ -30,7 +42,7 @@ class ProfileScreen extends StatelessWidget {
     }
   }
 
-  Future<void> _confirmDeleteAccount(BuildContext context) async {
+  Future<void> _confirmDeleteAccount(BuildContext context, WidgetRef ref) async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
@@ -59,7 +71,7 @@ class ProfileScreen extends StatelessWidget {
 
     try {
       await AuthService.deleteAccount();
-      await AuthService.logout();
+      await ref.read(authProvider.notifier).logout();
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -83,13 +95,11 @@ class ProfileScreen extends StatelessWidget {
   }
 
   @override
-  Widget build(BuildContext context) {
-    return FutureBuilder<bool>(
-      future: ApiService.isLoggedIn(),
-      builder: (context, authSnap) {
-        final isLoggedIn = authSnap.data ?? false;
+  Widget build(BuildContext context, WidgetRef ref) {
+    final auth = ref.watch(authProvider);
+    final isLoggedIn = auth.isAuthenticated && !auth.isGuest;
 
-        if (!isLoggedIn) {
+    if (!isLoggedIn) {
           return Scaffold(
             body: SafeArea(
               child: Center(
@@ -129,12 +139,11 @@ class ProfileScreen extends StatelessWidget {
               ),
             ),
           );
-        }
+    }
 
-        return FutureBuilder<Map<String, dynamic>>(
-          future: _safeGetCurrentUser(),
-          builder: (context, userSnap) {
-            // Show skeleton while loading
+    return FutureBuilder<User>(
+      future: _safeGetCurrentUser(),
+      builder: (context, userSnap) {
             if (userSnap.connectionState == ConnectionState.waiting &&
                 !userSnap.hasData) {
               return _ProfileSkeleton();
@@ -143,9 +152,9 @@ class ProfileScreen extends StatelessWidget {
             final user = userSnap.data;
             final hasError = userSnap.hasError;
 
-            // FIXED: Check store context instead of role — works for both owner and worker
-            final hasStoreAccess = user?['store'] != null;
-            final isOwner = user?['store']?['role'] == 'owner';
+            final hasStoreAccess = user?.store != null;
+            final isOwner = user?.store?['role'] == 'owner';
+            final isAdmin = user?.role == 'admin';
 
             return FutureBuilder<List<dynamic>>(
               future: _safeFetchInvitations(),
@@ -171,38 +180,13 @@ class ProfileScreen extends StatelessWidget {
                               // ── Avatar & Name ──
                               if (hasError || user == null)
                                 _OfflineProfileHeader()
-                              else ...[
-                                CircleAvatar(
-                                  radius: 40,
-                                  backgroundColor: Theme.of(
-                                    context,
-                                  ).colorScheme.primaryContainer,
-                                  child: Text(
-                                    (user['full_name'] ?? '?')
-                                        .toString()
-                                        .substring(0, 1)
-                                        .toUpperCase(),
-                                    style: TextStyle(
-                                      fontSize: 32,
-                                      color: Theme.of(
-                                        context,
-                                      ).colorScheme.primary,
-                                    ),
-                                  ),
+                              else
+                                _ProfileAvatarHeader(
+                                  user: user,
+                                  onUpdated: () {
+                                    (context as Element).markNeedsBuild();
+                                  },
                                 ),
-                                const SizedBox(height: 12),
-                                Text(
-                                  user['full_name'] ?? '',
-                                  style: const TextStyle(
-                                    fontSize: 20,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                                Text(
-                                  user['email'] ?? '',
-                                  style: TextStyle(color: Colors.grey.shade600),
-                                ),
-                              ],
                               const SizedBox(height: 24),
 
                               // ── Offline warning banner ──
@@ -261,6 +245,49 @@ class ProfileScreen extends StatelessWidget {
                                     ),
                                   ),
                                 ),
+                                if (isOwner)
+                                  ListTile(
+                                    leading: const Icon(Icons.settings),
+                                    title: Text(
+                                      t('store_settings') ?? 'Store Settings',
+                                    ),
+                                    trailing: const Icon(
+                                      Icons.arrow_forward_ios,
+                                      size: 16,
+                                    ),
+                                    onTap: () => Navigator.push(
+                                      context,
+                                      MaterialPageRoute(
+                                        builder: (_) =>
+                                            const StoreSettingsScreen(),
+                                      ),
+                                    ),
+                                  ),
+                                const SizedBox(height: 8),
+                              ],
+
+                              if (isAdmin) ...[
+                                _sectionHeader(
+                                  context,
+                                  t('admin') ?? 'Admin',
+                                ),
+                                ListTile(
+                                  leading: const Icon(Icons.payments_outlined),
+                                  title: Text(
+                                    t('subscription_payments') ?? 'Subscription Payments',
+                                  ),
+                                  trailing: const Icon(
+                                    Icons.arrow_forward_ios,
+                                    size: 16,
+                                  ),
+                                  onTap: () => Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (_) =>
+                                          const AdminSubscriptionPaymentsScreen(),
+                                    ),
+                                  ),
+                                ),
                                 const SizedBox(height: 8),
                               ],
 
@@ -268,6 +295,94 @@ class ProfileScreen extends StatelessWidget {
                               _sectionHeader(
                                 context,
                                 t('general') ?? 'General',
+                              ),
+                              ListTile(
+                                leading: const Icon(Icons.shopping_cart_outlined),
+                                title: Text(t('cart') ?? 'Cart'),
+                                subtitle: Text(
+                                  t('cart_saved_hint') ??
+                                      'Products grouped by store — tap to visit',
+                                  style: const TextStyle(fontSize: 12),
+                                ),
+                                trailing: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    if (ref.watch(cartProvider).itemCount > 0)
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 8,
+                                          vertical: 2,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: Theme.of(context)
+                                              .colorScheme
+                                              .primary,
+                                          borderRadius: BorderRadius.circular(12),
+                                        ),
+                                        child: Text(
+                                          '${ref.watch(cartProvider).itemCount}',
+                                          style: TextStyle(
+                                            color: Theme.of(context)
+                                                .colorScheme
+                                                .onPrimary,
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w700,
+                                          ),
+                                        ),
+                                      ),
+                                    const SizedBox(width: 4),
+                                    const Icon(
+                                      Icons.arrow_forward_ios,
+                                      size: 16,
+                                    ),
+                                  ],
+                                ),
+                                onTap: () => Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) => const ShoppingCartScreen(),
+                                  ),
+                                ),
+                              ),
+                              ListTile(
+                                leading: const Icon(Icons.support_agent_outlined),
+                                title: Text(t('help_support') ?? 'Help & Support'),
+                                subtitle: Text(
+                                  t('support_ticket_hint_short') ??
+                                      'Contact STORAQ support team',
+                                  style: const TextStyle(fontSize: 12),
+                                ),
+                                trailing: const Icon(
+                                  Icons.arrow_forward_ios,
+                                  size: 16,
+                                ),
+                                onTap: () => Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) =>
+                                        const SupportTicketsScreen(),
+                                  ),
+                                ),
+                              ),
+                              ListTile(
+                                leading: const Icon(Icons.chat_bubble_outline),
+                                title: Text(t('store_messages') ?? 'Store Messages'),
+                                subtitle: Text(
+                                  t('store_messages_hint') ??
+                                      'Chat with shops you buy from',
+                                  style: const TextStyle(fontSize: 12),
+                                ),
+                                trailing: const Icon(
+                                  Icons.arrow_forward_ios,
+                                  size: 16,
+                                ),
+                                onTap: () => Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) =>
+                                        const ChatConversationsScreen(),
+                                  ),
+                                ),
                               ),
                               ListTile(
                                 leading: const Icon(Icons.receipt_long),
@@ -311,7 +426,7 @@ class ProfileScreen extends StatelessWidget {
                                   t('logout') ?? 'Logout',
                                   style: const TextStyle(color: Colors.red),
                                 ),
-                                onTap: () => _logout(context),
+                                onTap: () => _logout(context, ref),
                               ),
                               ListTile(
                                 leading: const Icon(
@@ -325,7 +440,7 @@ class ProfileScreen extends StatelessWidget {
                                     fontWeight: FontWeight.w600,
                                   ),
                                 ),
-                                onTap: () => _confirmDeleteAccount(context),
+                                onTap: () => _confirmDeleteAccount(context, ref),
                               ),
                             ],
                           ),
@@ -334,58 +449,48 @@ class ProfileScreen extends StatelessWidget {
                     ],
                   ),
                 );
-              },
-            );
-          },
-        );
+            },
+          );
       },
     );
   }
 
   /// Safely get current user with fallback to cached data.
   /// NEVER rethrows — always returns a Map so the profile UI renders offline.
-  Future<Map<String, dynamic>> _safeGetCurrentUser() async {
+  Future<User> _safeGetCurrentUser() async {
     try {
       final user = await AuthService.getCurrentUser();
-      // Cache successful response for next offline use
-      await OfflineService.cacheUser(user);
+      await OfflineService.cacheUser(user.toJson());
       return user;
     } catch (e) {
-      // Try OfflineService cache
       try {
         final cached = await OfflineService.getCachedUser();
-        if (cached != null) {
-          return cached;
-        }
+        if (cached != null) return User.fromJson(cached);
       } catch (_) {}
-      // Try SharedPreferences as last resort
       try {
         final prefs = await SharedPreferences.getInstance();
         final raw = prefs.getString('cached_user');
         if (raw != null) {
-          return jsonDecode(raw) as Map<String, dynamic>;
+          return User.fromJson(jsonDecode(raw) as Map<String, dynamic>);
         }
       } catch (_) {}
-      // Try token payload as absolute last resort
       try {
         final payload = await ApiService.decodeToken();
         if (payload != null) {
-          return {
+          return User.fromJson({
             'id': payload['userId'],
             'full_name': payload['full_name'] ?? payload['name'] ?? 'User',
             'email': payload['email'] ?? '',
             'role': payload['role'] ?? 'user',
             'store': payload['store'],
-          };
+          });
         }
       } catch (_) {}
-      // Absolute fallback — return minimal map so UI doesn't crash
-      return {
-        'full_name': t('offline_user') ?? 'Offline User',
-        'email': '',
-        'role': 'user',
-        'store': null,
-      };
+      return User(
+        fullName: t('offline_user') ?? 'Offline User',
+        email: '',
+        role: 'user',
+      );
     }
   }
 
@@ -738,6 +843,146 @@ class _InvitationsBanner extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+class _ProfileAvatarHeader extends StatefulWidget {
+  final User user;
+  final VoidCallback onUpdated;
+
+  const _ProfileAvatarHeader({
+    required this.user,
+    required this.onUpdated,
+  });
+
+  @override
+  State<_ProfileAvatarHeader> createState() => _ProfileAvatarHeaderState();
+}
+
+class _ProfileAvatarHeaderState extends State<_ProfileAvatarHeader> {
+  bool _uploading = false;
+  String? _avatarUrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _avatarUrl = widget.user.avatarUrl;
+  }
+
+  Future<void> _pickAvatar() async {
+    final picker = ImagePicker();
+    final picked = await picker.pickImage(
+      source: ImageSource.gallery,
+      maxWidth: 1024,
+      maxHeight: 1024,
+      imageQuality: 85,
+    );
+    if (picked == null) return;
+
+    setState(() => _uploading = true);
+    try {
+      final updated = await AuthService.uploadAvatar(File(picked.path));
+      if (!mounted) return;
+      setState(() {
+        _avatarUrl = updated.avatarUrl;
+        _uploading = false;
+      });
+      widget.onUpdated();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(t('profile_photo_updated') ?? 'Profile photo updated'),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _uploading = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.toString())),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final initial = (widget.user.fullName ?? '?').isNotEmpty
+        ? widget.user.fullName!.substring(0, 1).toUpperCase()
+        : '?';
+
+    return Column(
+      children: [
+        Stack(
+          alignment: Alignment.bottomRight,
+          children: [
+            CircleAvatar(
+              radius: 44,
+              backgroundColor: theme.colorScheme.primaryContainer,
+              child: _avatarUrl != null && _avatarUrl!.isNotEmpty
+                  ? ClipOval(
+                      child: CachedAppImage(
+                        imageUrl: _avatarUrl,
+                        width: 88,
+                        height: 88,
+                        fit: BoxFit.cover,
+                        memCacheWidth: 180,
+                      ),
+                    )
+                  : Text(
+                      initial,
+                      style: TextStyle(
+                        fontSize: 34,
+                        color: theme.colorScheme.primary,
+                      ),
+                    ),
+            ),
+            Material(
+              color: theme.colorScheme.primary,
+              shape: const CircleBorder(),
+              clipBehavior: Clip.antiAlias,
+              child: InkWell(
+                onTap: _uploading ? null : _pickAvatar,
+                child: Padding(
+                  padding: const EdgeInsets.all(8),
+                  child: _uploading
+                      ? SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: theme.colorScheme.onPrimary,
+                          ),
+                        )
+                      : Icon(
+                          Icons.camera_alt_rounded,
+                          size: 16,
+                          color: theme.colorScheme.onPrimary,
+                        ),
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Text(
+          widget.user.fullName ?? '',
+          style: const TextStyle(
+            fontSize: 20,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        Text(
+          widget.user.email ?? '',
+          style: TextStyle(color: Colors.grey.shade600),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          t('tap_to_change_photo') ?? 'Tap the camera icon to change photo',
+          style: theme.textTheme.labelSmall?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+        ),
+      ],
     );
   }
 }

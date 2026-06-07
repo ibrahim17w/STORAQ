@@ -1,0 +1,844 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Admin Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #0f1117;
+      --surface: #1a1d27;
+      --surface-hover: #22262f;
+      --border: #2a2e3a;
+      --text: #e4e4e7;
+      --text-muted: #8b8d97;
+      --primary: #6366f1;
+      --primary-hover: #4f46e5;
+      --success: #10b981;
+      --danger: #ef4444;
+      --warning: #f59e0b;
+      --sidebar-width: 240px;
+      --radius: 8px;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Inter', -apple-system, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+    #app { display: none; min-height: 100vh; }
+    #app.visible { display: flex; }
+
+    .sidebar { width: var(--sidebar-width); background: var(--surface); border-right: 1px solid var(--border); display: flex; flex-direction: column; position: fixed; top: 0; left: 0; height: 100vh; z-index: 100; }
+    .sidebar-header { padding: 24px 20px; border-bottom: 1px solid var(--border); }
+    .sidebar-header h1 { font-size: 18px; font-weight: 700; color: var(--primary); }
+    .sidebar-nav { flex: 1; padding: 12px; display: flex; flex-direction: column; gap: 4px; }
+    .nav-item { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-radius: var(--radius); color: var(--text-muted); text-decoration: none; font-size: 14px; font-weight: 500; transition: all 0.15s; }
+    .nav-item:hover { background: var(--surface-hover); color: var(--text); }
+    .nav-item.active { background: var(--primary); color: #fff; }
+    .nav-icon { font-size: 16px; width: 20px; text-align: center; }
+    .sidebar-footer { padding: 16px; border-top: 1px solid var(--border); }
+
+    .main-content { margin-left: var(--sidebar-width); flex: 1; padding: 32px; min-height: 100vh; }
+
+    .login-overlay { position: fixed; inset: 0; background: var(--bg); display: flex; align-items: center; justify-content: center; z-index: 1000; }
+    .login-overlay.hidden { display: none; }
+    .login-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 40px; width: 100%; max-width: 380px; }
+    .login-card h2 { margin-bottom: 24px; font-size: 22px; text-align: center; }
+
+    .form-group { margin-bottom: 16px; }
+    .form-group label { display: block; margin-bottom: 6px; font-size: 13px; font-weight: 500; color: var(--text-muted); }
+    .form-group input, .form-group textarea, .form-group select { width: 100%; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); color: var(--text); font-size: 14px; outline: none; transition: border-color 0.15s; }
+    .form-group input:focus, .form-group textarea:focus, .form-group select:focus { border-color: var(--primary); }
+    .error-msg { color: var(--danger); font-size: 13px; min-height: 20px; margin-bottom: 8px; }
+
+    .btn { padding: 9px 16px; border-radius: var(--radius); border: none; font-size: 13px; font-weight: 500; cursor: pointer; transition: all 0.15s; display: inline-flex; align-items: center; gap: 6px; }
+    .btn-primary { background: var(--primary); color: #fff; }
+    .btn-primary:hover { background: var(--primary-hover); }
+    .btn-success { background: var(--success); color: #fff; }
+    .btn-success:hover { opacity: 0.9; }
+    .btn-danger { background: var(--danger); color: #fff; }
+    .btn-danger:hover { opacity: 0.9; }
+    .btn-warning { background: var(--warning); color: #000; }
+    .btn-warning:hover { opacity: 0.9; }
+    .btn-ghost { background: transparent; color: var(--text-muted); border: 1px solid var(--border); }
+    .btn-ghost:hover { background: var(--surface-hover); color: var(--text); }
+    .btn-full { width: 100%; justify-content: center; }
+    .btn-sm { padding: 6px 10px; font-size: 12px; }
+
+    .page-header { margin-bottom: 24px; }
+    .page-header h2 { font-size: 22px; font-weight: 600; }
+    .page-header p { color: var(--text-muted); font-size: 14px; margin-top: 4px; }
+
+    .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; margin-bottom: 32px; }
+    .stat-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; }
+    .stat-card .stat-value { font-size: 28px; font-weight: 700; margin-bottom: 4px; }
+    .stat-card .stat-label { font-size: 13px; color: var(--text-muted); }
+
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; margin-bottom: 16px; }
+    .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+    .card-title { font-size: 15px; font-weight: 600; }
+    .card-meta { font-size: 12px; color: var(--text-muted); }
+    .card-body { font-size: 14px; color: var(--text-muted); }
+    .card-actions { display: flex; gap: 8px; margin-top: 12px; }
+
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border); font-size: 13px; }
+    th { font-weight: 600; color: var(--text-muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; }
+
+    .badge { display: inline-block; padding: 3px 8px; border-radius: 20px; font-size: 11px; font-weight: 600; }
+    .badge-success { background: rgba(16,185,129,0.15); color: var(--success); }
+    .badge-danger { background: rgba(239,68,68,0.15); color: var(--danger); }
+    .badge-warning { background: rgba(245,158,11,0.15); color: var(--warning); }
+    .badge-neutral { background: rgba(139,141,151,0.15); color: var(--text-muted); }
+
+    .empty-state { text-align: center; padding: 48px 20px; color: var(--text-muted); }
+    .hidden { display: none !important; }
+    .mt-2 { margin-top: 8px; }
+    .mb-4 { margin-bottom: 16px; }
+    .flex { display: flex; }
+    .gap-2 { gap: 8px; }
+    .items-center { align-items: center; }
+    .justify-between { justify-content: space-between; }
+
+    .product-img { width: 48px; height: 48px; border-radius: 6px; object-fit: cover; background: var(--bg); }
+    .inline-form { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; }
+    .inline-form .form-group { margin-bottom: 0; }
+
+    .support-layout { display: grid; grid-template-columns: 320px 1fr; gap: 16px; min-height: 520px; }
+    .support-list { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: auto; max-height: 70vh; }
+    .support-item { padding: 14px 16px; border-bottom: 1px solid var(--border); cursor: pointer; transition: background 0.15s; }
+    .support-item:hover, .support-item.active { background: var(--surface-hover); }
+    .support-item .title { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
+    .support-item .meta { font-size: 12px; color: var(--text-muted); }
+    .support-thread { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); display: flex; flex-direction: column; min-height: 520px; }
+    .support-thread-header { padding: 16px 20px; border-bottom: 1px solid var(--border); }
+    .support-messages { flex: 1; overflow: auto; padding: 16px 20px; display: flex; flex-direction: column; gap: 10px; }
+    .support-bubble { max-width: 78%; padding: 10px 14px; border-radius: 12px; font-size: 14px; line-height: 1.45; }
+    .support-bubble.user { align-self: flex-start; background: var(--bg); border: 1px solid var(--border); }
+    .support-bubble.admin { align-self: flex-end; background: rgba(99,102,241,0.18); border: 1px solid rgba(99,102,241,0.35); }
+    .support-bubble .who { font-size: 11px; font-weight: 600; color: var(--text-muted); margin-bottom: 4px; }
+    .support-compose { padding: 16px 20px; border-top: 1px solid var(--border); display: flex; gap: 10px; align-items: flex-end; }
+    .support-compose textarea { flex: 1; min-height: 72px; resize: vertical; }
+
+    @media (max-width: 768px) {
+      .sidebar { width: 60px; }
+      .sidebar .nav-item span:not(.nav-icon) { display: none; }
+      .sidebar-header h1 { font-size: 14px; }
+      .main-content { margin-left: 60px; padding: 16px; }
+      .stats-grid { grid-template-columns: 1fr 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <aside class="sidebar">
+      <div class="sidebar-header"><h1>MB Admin</h1></div>
+      <nav class="sidebar-nav">
+        <a href="#" class="nav-item active" data-page="dashboard"><span class="nav-icon">&#9632;</span> Dashboard</a>
+        <a href="#" class="nav-item" data-page="stores"><span class="nav-icon">&#127978;</span> Stores</a>
+        <a href="#" class="nav-item" data-page="products"><span class="nav-icon">&#9998;</span> Product Approvals</a>
+        <a href="#" class="nav-item" data-page="payments"><span class="nav-icon">&#36;</span> Payments</a>
+        <a href="#" class="nav-item" data-page="sponsored"><span class="nav-icon">&#9733;</span> Sponsored Products</a>
+        <a href="#" class="nav-item" data-page="promos"><span class="nav-icon">&#127991;</span> Promo Codes</a>
+        <a href="#" class="nav-item" data-page="flagged"><span class="nav-icon">&#9888;</span> Flagged Stores</a>
+        <a href="#" class="nav-item" data-page="support"><span class="nav-icon">&#128172;</span> Support Tickets</a>
+      </nav>
+      <div class="sidebar-footer"><button id="logout-btn" class="btn btn-ghost">Logout</button></div>
+    </aside>
+    <main class="main-content" id="main-content"></main>
+  </div>
+
+  <div id="login-overlay" class="login-overlay">
+    <div class="login-card">
+      <h2>Admin Login</h2>
+      <form id="login-form">
+        <div class="form-group"><label for="email">Email</label><input type="email" id="email" required autocomplete="email"></div>
+        <div class="form-group"><label for="password">Password</label><input type="password" id="password" required autocomplete="current-password"></div>
+        <p class="error-msg" id="login-error"></p>
+        <button type="submit" class="btn btn-primary btn-full">Sign In</button>
+      </form>
+    </div>
+  </div>
+
+<script>
+// ─── API Helper ─────────────────────────────────────────────────────────────
+const API_BASE = window.location.origin; // e.g. http://localhost:4400
+
+const API = {
+  async request(method, url, body) {
+    // If page was opened as file://, API calls won't work
+    if (window.location.protocol === 'file:') {
+      throw new Error('Open http://localhost:4400 in your browser (not the file directly)');
+    }
+    const fullUrl = API_BASE + url;
+    const opts = { method, headers: {}, credentials: 'same-origin' };
+    if (body) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body); }
+    let res;
+    try {
+      res = await fetch(fullUrl, opts);
+    } catch (err) {
+      console.error('Fetch failed:', err);
+      throw new Error('Cannot reach server at ' + fullUrl + ' — ' + (err.message || 'connection failed'));
+    }
+    let data;
+    const text = await res.text();
+    try { data = JSON.parse(text); } catch { throw new Error('Non-JSON response (' + res.status + '): ' + text.substring(0, 100)); }
+    if (res.status === 401) { showLogin(); throw new Error(data.error || 'Not authenticated'); }
+    if (!res.ok) throw new Error(data.error || 'Error ' + res.status);
+    return data;
+  },
+  get(u) { return this.request('GET', u); },
+  post(u, b) { return this.request('POST', u, b); },
+  patch(u, b) { return this.request('PATCH', u, b); },
+  del(u) { return this.request('DELETE', u); },
+};
+
+// ─── Auth ────────────────────────────────────────────────────────────────────
+function showLogin() { document.getElementById('login-overlay').classList.remove('hidden'); document.getElementById('app').classList.remove('visible'); }
+function hideLogin() { document.getElementById('login-overlay').classList.add('hidden'); document.getElementById('app').classList.add('visible'); }
+
+document.getElementById('login-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const err = document.getElementById('login-error');
+  const btn = e.target.querySelector('button[type="submit"]');
+  err.textContent = '';
+  if (btn) { btn.disabled = true; btn.textContent = 'Signing in...'; }
+  try {
+    await API.post('/api/auth/login', {
+      email: document.getElementById('email').value.trim(),
+      password: document.getElementById('password').value
+    });
+    hideLogin();
+    navigateTo('dashboard');
+  } catch (ex) {
+    err.textContent = ex.message;
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Sign In'; }
+  }
+});
+
+document.getElementById('logout-btn').addEventListener('click', async () => {
+  try { await API.post('/api/auth/logout'); } catch {}
+  showLogin();
+});
+
+// ─── Navigation ──────────────────────────────────────────────────────────────
+let currentPage = 'dashboard';
+document.querySelectorAll('.nav-item').forEach(item => {
+  item.addEventListener('click', (e) => { e.preventDefault(); navigateTo(item.dataset.page); });
+});
+
+function navigateTo(page) {
+  currentPage = page;
+  document.querySelectorAll('.nav-item').forEach(i => i.classList.toggle('active', i.dataset.page === page));
+  renderPage(page);
+}
+
+function renderPage(page) {
+  const c = document.getElementById('main-content');
+  switch(page) {
+    case 'dashboard': renderDashboard(c); break;
+    case 'stores': renderStores(c); break;
+    case 'products': renderProducts(c); break;
+    case 'payments': renderPayments(c); break;
+    case 'sponsored': renderSponsored(c); break;
+    case 'promos': renderPromos(c); break;
+    case 'flagged': renderFlagged(c); break;
+    case 'support': renderSupport(c); break;
+  }
+}
+
+let activeSupportTicketId = null;
+let supportPollTimer = null;
+
+function esc(s) { if (!s) return ''; const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+// ─── Dashboard ───────────────────────────────────────────────────────────────
+async function renderDashboard(c) {
+  c.innerHTML = '<div class="page-header"><h2>Dashboard</h2><p>Overview</p></div><div class="stats-grid" id="sg"></div>';
+  try {
+    const s = await API.get('/api/stats');
+    document.getElementById('sg').innerHTML = `
+      <div class="stat-card"><div class="stat-value">${s.pending_products}</div><div class="stat-label">Pending Products</div></div>
+      <div class="stat-card"><div class="stat-value">${s.pending_payments}</div><div class="stat-label">Pending Subscriptions</div></div>
+      <div class="stat-card"><div class="stat-value">${s.pending_sponsor_payments ?? 0}</div><div class="stat-label">Pending Sponsorships</div></div>
+      <div class="stat-card"><div class="stat-value">${s.active_sponsor_campaigns ?? 0}</div><div class="stat-label">Active Sponsored Products</div></div>
+      <div class="stat-card"><div class="stat-value">${s.active_promos}</div><div class="stat-label">Active Promos</div></div>
+      <div class="stat-card"><div class="stat-value">${s.flagged_stores}</div><div class="stat-label">Flagged Stores</div></div>
+      <div class="stat-card"><div class="stat-value">${s.total_stores}</div><div class="stat-label">Total Stores</div></div>
+      <div class="stat-card"><div class="stat-value">${s.deactivated_stores}</div><div class="stat-label">Deactivated Stores</div></div>
+      <div class="stat-card"><div class="stat-value">${s.total_users}</div><div class="stat-label">Total Users</div></div>
+      <div class="stat-card"><div class="stat-value">${s.open_support_tickets ?? 0}</div><div class="stat-label">Open Support Tickets</div></div>`;
+  } catch (e) { document.getElementById('sg').innerHTML = '<p class="error-msg">' + e.message + '</p>'; }
+}
+
+// ─── Stores ──────────────────────────────────────────────────────────────────
+let storesFilter = 'all';
+async function renderStores(c) {
+  c.innerHTML = `
+    <div class="page-header"><h2>Store Management</h2><p>View, deactivate, or reactivate stores</p></div>
+    <div class="card mb-4">
+      <div class="inline-form">
+        <div class="form-group"><label>Search</label><input type="text" id="store-search" placeholder="Store name, owner, email..." style="width:250px"></div>
+        <div class="form-group"><label>Status</label>
+          <select id="store-status" style="width:140px">
+            <option value="all">All</option>
+            <option value="active">Active</option>
+            <option value="deactivated">Deactivated</option>
+          </select>
+        </div>
+        <button class="btn btn-primary" id="store-search-btn">Search</button>
+      </div>
+    </div>
+    <div id="stores-list">Loading...</div>`;
+  document.getElementById('store-status').value = storesFilter;
+  document.getElementById('store-search-btn').addEventListener('click', () => { storesFilter = document.getElementById('store-status').value; loadStores(); });
+  document.getElementById('store-search').addEventListener('keydown', (e) => { if (e.key === 'Enter') { storesFilter = document.getElementById('store-status').value; loadStores(); } });
+  await loadStores();
+}
+
+async function loadStores() {
+  const el = document.getElementById('stores-list');
+  const search = document.getElementById('store-search')?.value || '';
+  const status = document.getElementById('store-status')?.value || 'all';
+  let url = '/api/stores?';
+  if (search) url += 'search=' + encodeURIComponent(search) + '&';
+  if (status !== 'all') url += 'status=' + status;
+  try {
+    const items = await API.get(url);
+    if (items.length === 0) { el.innerHTML = '<div class="empty-state"><p>No stores found</p></div>'; return; }
+    el.innerHTML = `<table><thead><tr><th>Store</th><th>Owner</th><th>City</th><th>Products</th><th>Created</th><th>Status</th><th>Actions</th></tr></thead><tbody>
+      ${items.map(s => {
+        const isActive = s.is_active !== false;
+        return `<tr id="st-${s.id}">
+          <td><strong>${esc(s.name)}</strong></td>
+          <td>${esc(s.owner_name)}<br><span style="font-size:11px;color:var(--text-muted)">${esc(s.owner_email)}</span></td>
+          <td>${esc(s.city||'')} ${esc(s.country||'')}</td>
+          <td><button class="btn btn-ghost btn-sm" onclick="toggleProducts(${s.id})">${s.product_count} &#9662;</button></td>
+          <td>${new Date(s.created_at).toLocaleDateString()}</td>
+          <td><span class="badge ${isActive?'badge-success':'badge-danger'}">${isActive?'Active':'Deactivated'}</span>
+            ${!isActive && s.deactivation_reason ? '<br><span style="font-size:11px;color:var(--text-muted)">'+esc(s.deactivation_reason)+'</span>' : ''}
+          </td>
+          <td>${isActive
+            ? '<button class="btn btn-danger btn-sm" onclick="showDeactivate('+s.id+')">Deactivate</button>'
+            : '<button class="btn btn-success btn-sm" onclick="reactivateStore('+s.id+')">Reactivate</button>'
+          }</td>
+        </tr>
+        <tr id="products-row-${s.id}" class="hidden"><td colspan="7" style="background:var(--bg);padding:12px">
+          <div id="products-list-${s.id}"><em style="color:var(--text-muted)">Loading products...</em></div>
+        </td></tr>
+        <tr id="deact-row-${s.id}" class="hidden"><td colspan="7" style="background:var(--bg);padding:12px">
+          <div class="inline-form">
+            <div class="form-group"><label>Reason for deactivation (required)</label><input type="text" id="deact-reason-${s.id}" placeholder="e.g. Terms of use violation — selling counterfeit goods" style="width:400px"></div>
+            <button class="btn btn-danger btn-sm" onclick="confirmDeactivate(${s.id})">Confirm Deactivate</button>
+            <button class="btn btn-ghost btn-sm" onclick="hideDeactivate(${s.id})">Cancel</button>
+          </div>
+        </td></tr>`;
+      }).join('')}
+    </tbody></table>`;
+  } catch (e) { el.innerHTML = '<p class="error-msg">'+e.message+'</p>'; }
+}
+
+async function toggleProducts(storeId) {
+  const row = document.getElementById('products-row-'+storeId);
+  if (!row.classList.contains('hidden')) { row.classList.add('hidden'); return; }
+  row.classList.remove('hidden');
+  await loadStoreProducts(storeId);
+}
+
+async function loadStoreProducts(storeId) {
+  const el = document.getElementById('products-list-'+storeId);
+  try {
+    const items = await API.get('/api/stores/'+storeId+'/products');
+    if (items.length === 0) { el.innerHTML = '<p style="color:var(--text-muted)">No products in this store</p>'; return; }
+    el.innerHTML = `<table style="margin:0"><thead><tr><th>Image</th><th>Name</th><th>Price</th><th>Qty</th><th>Online</th><th>Created</th><th>Action</th></tr></thead><tbody>
+      ${items.map(p => `<tr id="sp-${storeId}-${p.id}">
+        <td>${p.image_url ? '<img src="'+esc(p.image_url)+'" class="product-img">' : '<span style="color:var(--text-muted)">—</span>'}</td>
+        <td>${esc(p.name)}</td>
+        <td>${p.price} ${p.currency||'SYP'}</td>
+        <td>${p.quantity}</td>
+        <td><span class="badge ${p.is_online?'badge-success':'badge-neutral'}">${p.is_online?'Online':'Offline'}</span></td>
+        <td>${new Date(p.created_at).toLocaleDateString()}</td>
+        <td><button class="btn btn-danger btn-sm" onclick="deleteStoreProduct(${storeId},${p.id},'${esc(p.name).replace(/'/g,"\\'")}')">Remove</button></td>
+      </tr>`).join('')}
+    </tbody></table>`;
+  } catch (e) { el.innerHTML = '<p class="error-msg">'+e.message+'</p>'; }
+}
+
+async function deleteStoreProduct(storeId, productId, name) {
+  if (!confirm('Delete product "'+name+'"? This cannot be undone.')) return;
+  try {
+    await API.del('/api/stores/'+storeId+'/products/'+productId);
+    const row = document.getElementById('sp-'+storeId+'-'+productId);
+    if (row) row.remove();
+  } catch (e) { alert(e.message); }
+}
+
+function showDeactivate(id) {
+  document.getElementById('deact-row-'+id).classList.remove('hidden');
+}
+function hideDeactivate(id) {
+  document.getElementById('deact-row-'+id).classList.add('hidden');
+}
+async function confirmDeactivate(id) {
+  const reason = document.getElementById('deact-reason-'+id)?.value;
+  if (!reason || reason.trim().length < 3) { alert('Please provide a reason (at least 3 characters)'); return; }
+  if (!confirm('Deactivate this store? It will be hidden from the marketplace.')) return;
+  try {
+    await API.post('/api/stores/'+id+'/deactivate', { reason: reason.trim() });
+    await loadStores();
+  } catch (e) { alert(e.message); }
+}
+async function reactivateStore(id) {
+  if (!confirm('Reactivate this store?')) return;
+  try {
+    await API.post('/api/stores/'+id+'/reactivate');
+    await loadStores();
+  } catch (e) { alert(e.message); }
+}
+
+// ─── Products ────────────────────────────────────────────────────────────────
+async function renderProducts(c) {
+  c.innerHTML = '<div class="page-header"><h2>Pending Product Approvals</h2><p>First products from new stores</p></div><div id="pl">Loading...</div>';
+  try {
+    const items = await API.get('/api/products/pending');
+    const el = document.getElementById('pl');
+    if (items.length === 0) { el.innerHTML = '<div class="empty-state"><p>No pending products</p></div>'; return; }
+    el.innerHTML = items.map(p => `
+      <div class="card" id="p-${p.id}">
+        <div class="card-header">
+          <div class="flex items-center gap-2">
+            ${p.image_url ? '<img src="'+esc(p.image_url)+'" class="product-img">' : ''}
+            <div><div class="card-title">${esc(p.name)}</div><div class="card-meta">${esc(p.store_name)} - ${esc(p.owner_name)} (${esc(p.owner_email)})</div></div>
+          </div>
+          <div class="card-meta">${new Date(p.created_at).toLocaleDateString()}</div>
+        </div>
+        <div class="card-body">${p.price} ${p.currency||'SYP'}${p.description?' - '+esc(p.description.substring(0,120)):''}</div>
+        <div class="card-actions">
+          <button class="btn btn-success btn-sm" onclick="approveProduct(${p.id})">Approve</button>
+          <button class="btn btn-danger btn-sm" onclick="toggleReject(${p.id})">Reject</button>
+        </div>
+        <div id="rf-${p.id}" class="hidden mt-2">
+          <div class="inline-form">
+            <div class="form-group"><input type="text" id="rr-${p.id}" placeholder="Reason (optional)"></div>
+            <button class="btn btn-danger btn-sm" onclick="rejectProduct(${p.id})">Confirm</button>
+          </div>
+        </div>
+      </div>`).join('');
+  } catch (e) { document.getElementById('pl').innerHTML = '<p class="error-msg">'+e.message+'</p>'; }
+}
+async function approveProduct(id) { try { await API.post('/api/products/'+id+'/approve'); const e=document.getElementById('p-'+id); if(e)e.remove(); } catch(e){alert(e.message);} }
+function toggleReject(id) { document.getElementById('rf-'+id).classList.toggle('hidden'); }
+async function rejectProduct(id) { try { await API.post('/api/products/'+id+'/reject',{reason:document.getElementById('rr-'+id)?.value||''}); const e=document.getElementById('p-'+id); if(e)e.remove(); } catch(e){alert(e.message);} }
+
+// ─── Payments ────────────────────────────────────────────────────────────────
+async function renderPayments(c) {
+  c.innerHTML = '<div class="page-header"><h2>Pending Subscription Payments</h2><p>Agent/cash payments awaiting verification</p></div><div id="pyl">Loading...</div>';
+  try {
+    const items = await API.get('/api/payments/pending');
+    const el = document.getElementById('pyl');
+    if (items.length === 0) { el.innerHTML = '<div class="empty-state"><p>No pending payments</p></div>'; return; }
+    el.innerHTML = `<table><thead><tr><th>Store</th><th>Owner</th><th>Tier</th><th>Amount</th><th>Track</th><th>Ref</th><th>Date</th><th>Action</th></tr></thead><tbody>
+      ${items.map(p => `<tr id="py-${p.id}"><td>${esc(p.store_name)}</td><td>${esc(p.owner_name)}</td><td><span class="badge badge-neutral">${esc(p.tier_name)}</span></td><td>$${p.amount_usd}</td><td>${p.payment_track}</td><td><code>${p.reference_code||'-'}</code></td><td>${new Date(p.created_at).toLocaleDateString()}</td><td><button class="btn btn-success btn-sm" onclick="verifyPayment(${p.id})">Mark Paid</button></td></tr>`).join('')}
+    </tbody></table>`;
+  } catch (e) { document.getElementById('pyl').innerHTML = '<p class="error-msg">'+e.message+'</p>'; }
+}
+async function verifyPayment(id) { if(!confirm('Confirm payment & activate subscription?'))return; try { await API.post('/api/payments/'+id+'/verify'); const e=document.getElementById('py-'+id); if(e)e.remove(); } catch(e){alert(e.message);} }
+
+// ─── Sponsored Products ──────────────────────────────────────────────────────
+async function renderSponsored(c) {
+  c.innerHTML = `
+    <div class="page-header"><h2>Sponsored Products</h2><p>Verify payments, manage pricing, and view active campaigns</p></div>
+    <div class="card mb-4">
+      <div class="card-title" style="margin-bottom:12px">Pricing (USD per day)</div>
+      <div id="sp-pricing">Loading...</div>
+    </div>
+    <div class="page-header" style="margin-top:24px"><h3 style="font-size:18px">Pending Sponsorship Payments</h3></div>
+    <div id="sp-pending">Loading...</div>
+    <div class="page-header" style="margin-top:24px"><h3 style="font-size:18px">Active Campaigns</h3></div>
+    <div id="sp-active">Loading...</div>`;
+  await loadSponsorPricing();
+  await loadSponsorPending();
+  await loadSponsorActive();
+}
+
+async function loadSponsorPricing() {
+  try {
+    const items = await API.get('/api/sponsorship/pricing');
+    const el = document.getElementById('sp-pricing');
+    el.innerHTML = `<table><thead><tr><th>Scope</th><th>Label</th><th>$/day</th><th>Radius unit (km)</th><th>Action</th></tr></thead><tbody>
+      ${items.map(p => `<tr>
+        <td><code>${esc(p.scope_type)}</code></td>
+        <td><input type="text" id="spl-${p.scope_type}" value="${esc(p.label)}" style="width:140px"></td>
+        <td><input type="number" id="spp-${p.scope_type}" value="${p.price_usd_per_day}" min="0" step="0.01" style="width:90px"></td>
+        <td>${p.scope_type === 'radius' ? `<input type="number" id="spu-${p.scope_type}" value="${p.radius_unit_km || 5}" min="1" style="width:70px">` : '-'}</td>
+        <td><button class="btn btn-primary btn-sm" onclick="saveSponsorPricing('${p.scope_type}')">Save</button></td>
+      </tr>`).join('')}
+    </tbody></table>
+    <p class="card-meta" style="margin-top:8px">Radius price = ($/day) × (radius km ÷ unit km) × days. Village/city/country/world use flat daily rate.</p>`;
+  } catch (e) {
+    document.getElementById('sp-pricing').innerHTML = '<p class="error-msg">' + e.message + '</p>';
+  }
+}
+
+async function saveSponsorPricing(scopeType) {
+  try {
+    const price = document.getElementById('spp-' + scopeType)?.value;
+    const label = document.getElementById('spl-' + scopeType)?.value;
+    const unit = document.getElementById('spu-' + scopeType)?.value;
+    await API.request('PUT', '/api/sponsorship/pricing/' + scopeType, {
+      price_usd_per_day: price,
+      label,
+      radius_unit_km: unit != null ? unit : undefined,
+    });
+    alert('Pricing updated');
+  } catch (e) { alert(e.message); }
+}
+
+async function loadSponsorPending() {
+  try {
+    const items = await API.get('/api/sponsorship/payments/pending');
+    const el = document.getElementById('sp-pending');
+    if (items.length === 0) { el.innerHTML = '<div class="empty-state"><p>No pending sponsorship payments</p></div>'; return; }
+    el.innerHTML = `<table><thead><tr><th>Product</th><th>Store</th><th>Owner</th><th>Scope</th><th>Days</th><th>Amount</th><th>Ref</th><th>Date</th><th>Action</th></tr></thead><tbody>
+      ${items.map(p => `<tr id="sppy-${p.id}">
+        <td>${esc(p.product_name)}</td>
+        <td>${esc(p.store_name)}</td>
+        <td>${esc(p.owner_name)}</td>
+        <td><span class="badge badge-neutral">${esc(p.scope_type)}${p.radius_km ? ' ' + p.radius_km + 'km' : ''}</span></td>
+        <td>${p.duration_days}</td>
+        <td>$${p.amount_usd}</td>
+        <td><code>${p.reference_code || '-'}</code></td>
+        <td>${new Date(p.created_at).toLocaleDateString()}</td>
+        <td><button class="btn btn-success btn-sm" onclick="verifySponsorPayment(${p.id})">Mark Paid</button></td>
+      </tr>`).join('')}
+    </tbody></table>`;
+  } catch (e) {
+    document.getElementById('sp-pending').innerHTML = '<p class="error-msg">' + e.message + '</p>';
+  }
+}
+
+async function verifySponsorPayment(id) {
+  if (!confirm('Confirm payment and activate sponsored product campaign?')) return;
+  try {
+    await API.post('/api/sponsorship/payments/' + id + '/verify');
+    const row = document.getElementById('sppy-' + id);
+    if (row) row.remove();
+    await loadSponsorActive();
+  } catch (e) { alert(e.message); }
+}
+
+async function loadSponsorActive() {
+  try {
+    const items = await API.get('/api/sponsorship/campaigns');
+    const el = document.getElementById('sp-active');
+    if (items.length === 0) { el.innerHTML = '<div class="empty-state"><p>No active campaigns</p></div>'; return; }
+    el.innerHTML = `<table><thead><tr><th>Product</th><th>Store</th><th>Scope</th><th>Expires</th><th>Amount</th><th>Action</th></tr></thead><tbody>
+      ${items.map(c => `<tr id="spc-${c.id}">
+        <td>${esc(c.product_name)}</td>
+        <td>${esc(c.store_name)}</td>
+        <td><span class="badge badge-neutral">${esc(c.scope_type)}${c.radius_km ? ' ' + c.radius_km + 'km' : ''}</span></td>
+        <td>${new Date(c.expires_at).toLocaleDateString()}</td>
+        <td>$${c.amount_usd}</td>
+        <td><button class="btn btn-danger btn-sm" onclick="cancelSponsorCampaign(${c.id})">Cancel</button></td>
+      </tr>`).join('')}
+    </tbody></table>`;
+  } catch (e) {
+    document.getElementById('sp-active').innerHTML = '<p class="error-msg">' + e.message + '</p>';
+  }
+}
+
+async function cancelSponsorCampaign(id) {
+  if (!confirm('Cancel this sponsored campaign?')) return;
+  try {
+    await API.post('/api/sponsorship/campaigns/' + id + '/cancel');
+    const row = document.getElementById('spc-' + id);
+    if (row) row.remove();
+  } catch (e) { alert(e.message); }
+}
+
+// ─── Promos ──────────────────────────────────────────────────────────────────
+async function renderPromos(c) {
+  c.innerHTML = `
+    <div class="page-header"><h2>Promo Codes</h2><p>Create and manage promotional codes (tier grants &amp; discounts)</p></div>
+    <div class="card mb-4">
+      <div class="card-title" style="margin-bottom:12px">Create New Code</div>
+      <form id="pf">
+        <div class="inline-form" style="margin-bottom:12px">
+          <div class="form-group"><label>Code</label><input type="text" id="pc-code" required placeholder="FOUNDER30" style="width:130px"></div>
+          <div class="form-group"><label>Type</label>
+            <select id="pc-type" style="width:120px"><option value="tier_grant">Tier Grant</option><option value="discount">Discount</option></select>
+          </div>
+          <div class="form-group"><label>Tier</label>
+            <select id="pc-tier" style="width:150px"><option value="">Loading...</option></select>
+          </div>
+          <div class="form-group"><label>Days</label><input type="number" id="pc-days" min="1" value="90" style="width:70px"></div>
+          <div class="form-group"><label>Max Uses</label><input type="number" id="pc-max" min="1" value="30" style="width:80px"></div>
+          <div class="form-group"><label>Expires</label><input type="date" id="pc-exp" style="width:150px"></div>
+          <div class="form-group"><label>Min account age (days)</label><input type="number" id="pc-min-age" min="0" placeholder="Optional" style="width:110px" title="Account must be at least this many days old"></div>
+          <div class="form-group"><label>Max account age (days)</label><input type="number" id="pc-max-age" min="0" placeholder="Optional" style="width:110px" title="Only for accounts created within this many days"></div>
+          <button type="submit" class="btn btn-primary">Create</button>
+        </div>
+        <div class="inline-form hidden" id="discount-fields">
+          <div class="form-group"><label>Discount %</label><input type="number" id="pc-pct" min="0" max="100" value="0" style="width:80px"></div>
+          <div class="form-group"><label>Fixed $</label><input type="number" id="pc-fix" min="0" step="0.01" value="0" style="width:80px"></div>
+        </div>
+      </form>
+      <p class="error-msg mt-2" id="pc-err"></p>
+    </div>
+    <div id="pcl">Loading...</div>`;
+  document.getElementById('pc-type').addEventListener('change', (e) => {
+    document.getElementById('discount-fields').classList.toggle('hidden', e.target.value !== 'discount');
+  });
+  document.getElementById('pf').addEventListener('submit', createPromo);
+  await loadTierOptions();
+  await loadPromos();
+}
+
+async function loadTierOptions() {
+  const sel = document.getElementById('pc-tier');
+  try {
+    const tiers = await API.get('/api/tiers');
+    sel.innerHTML = '<option value="">— Select tier —</option>' + tiers.map(t =>
+      `<option value="${esc(t.slug)}">${esc(t.name)} (${t.online_slots} slots — $${t.price_usd_monthly}/mo)</option>`
+    ).join('');
+  } catch (e) {
+    sel.innerHTML = '<option value="starter">Starter</option><option value="business">Business</option><option value="pro">Pro</option><option value="enterprise">Enterprise</option>';
+  }
+}
+async function loadPromos() {
+  try {
+    const items = await API.get('/api/promos');
+    const el = document.getElementById('pcl');
+    if (items.length === 0) { el.innerHTML = '<div class="empty-state"><p>No promo codes yet</p></div>'; return; }
+    el.innerHTML = `<table><thead><tr><th>Code</th><th>Type</th><th>Details</th><th>Account age</th><th>Used / Max</th><th>Remaining</th><th>Expires</th><th>Status</th><th>Actions</th></tr></thead><tbody>
+      ${items.map(p => {
+        const remaining = p.max_redemptions ? (p.max_redemptions - p.times_used) : '&infin;';
+        const details = p.type === 'tier_grant' ? `${esc(p.tier_slug)} for ${p.grant_days}d` : `${p.discount_percent>0?p.discount_percent+'%':''} ${p.discount_fixed>0?'$'+p.discount_fixed:''}`;
+        const ageParts = [];
+        if (p.min_account_age_days) ageParts.push('min ' + p.min_account_age_days + 'd');
+        if (p.max_account_age_days) ageParts.push('max ' + p.max_account_age_days + 'd');
+        const ageRule = ageParts.length ? ageParts.join(', ') : '—';
+        return `<tr id="pc-${p.id}"><td><strong>${esc(p.code)}</strong></td><td><span class="badge ${p.type==='tier_grant'?'badge-success':'badge-neutral'}">${p.type==='tier_grant'?'Tier Grant':'Discount'}</span></td><td>${details}</td><td>${ageRule}</td><td>${p.times_used} / ${p.max_redemptions||'&infin;'}</td><td><strong>${remaining}</strong></td><td>${p.expires_at?new Date(p.expires_at).toLocaleDateString():'Never'}</td><td><span class="badge ${p.is_active?'badge-success':'badge-danger'}">${p.is_active?'Active':'Off'}</span></td><td><button class="btn btn-sm ${p.is_active?'btn-warning':'btn-success'}" onclick="togglePromo(${p.id},${!p.is_active})">${p.is_active?'Deactivate':'Activate'}</button> <button class="btn btn-sm btn-danger" onclick="deletePromo(${p.id})">Delete</button></td></tr>`;
+      }).join('')}
+    </tbody></table>`;
+  } catch (e) { document.getElementById('pcl').innerHTML = '<p class="error-msg">'+e.message+'</p>'; }
+}
+async function createPromo(e) {
+  e.preventDefault();
+  const err = document.getElementById('pc-err'); err.textContent = '';
+  const type = document.getElementById('pc-type').value;
+  const payload = {
+    code: document.getElementById('pc-code').value,
+    type,
+    tier_slug: document.getElementById('pc-tier').value || null,
+    grant_days: +document.getElementById('pc-days').value || 0,
+    discount_percent: +document.getElementById('pc-pct')?.value || 0,
+    discount_fixed: +document.getElementById('pc-fix')?.value || 0,
+    max_redemptions: document.getElementById('pc-max').value || null,
+    expires_at: document.getElementById('pc-exp').value || null,
+    min_account_age_days: document.getElementById('pc-min-age').value || null,
+    max_account_age_days: document.getElementById('pc-max-age').value || null,
+  };
+  try {
+    await API.post('/api/promos', payload);
+    document.getElementById('pf').reset();
+    await loadPromos();
+  } catch (ex) { err.textContent = ex.message; }
+}
+async function togglePromo(id, active) { try { await API.patch('/api/promos/'+id, {is_active:active}); await loadPromos(); } catch(e){alert(e.message);} }
+async function deletePromo(id) { if(!confirm('Delete?'))return; try { await API.del('/api/promos/'+id); const e=document.getElementById('pc-'+id); if(e)e.remove(); } catch(e){alert(e.message);} }
+
+// ─── Flagged ─────────────────────────────────────────────────────────────────
+async function renderFlagged(c) {
+  c.innerHTML = `<div class="page-header flex justify-between items-center"><div><h2>Flagged Stores</h2><p>Suspicious activity detection</p></div><button class="btn btn-primary" id="scan-btn">Run Scan</button></div><div id="fl">Loading...</div>`;
+  document.getElementById('scan-btn').addEventListener('click', runScan);
+  await loadFlagged();
+}
+async function loadFlagged() {
+  try {
+    const items = await API.get('/api/flagged');
+    const el = document.getElementById('fl');
+    if (items.length === 0) { el.innerHTML = '<div class="empty-state"><p>No flagged stores. Run a scan.</p></div>'; return; }
+    el.innerHTML = items.map(f => `
+      <div class="card" id="fl-${f.store_id}">
+        <div class="card-header"><div><div class="card-title">${esc(f.store_name)}</div><div class="card-meta">${esc(f.owner_name)} (${esc(f.owner_email)})</div></div><span class="badge badge-warning">${formatReason(f.reason)}</span></div>
+        <div class="card-body"><p>${formatDetails(f.reason,f.details)}</p><div class="card-meta mt-2">Flagged: ${new Date(f.flagged_at).toLocaleString()}</div></div>
+        <div class="card-actions"><button class="btn btn-danger btn-sm" onclick="revertManual(${f.store_id})">Revert to Manual Approval</button><button class="btn btn-ghost btn-sm" onclick="dismissFlag(${f.store_id})">Dismiss</button></div>
+      </div>`).join('');
+  } catch (e) { document.getElementById('fl').innerHTML = '<p class="error-msg">'+e.message+'</p>'; }
+}
+async function runScan() {
+  const btn = document.getElementById('scan-btn'); btn.disabled=true; btn.textContent='Scanning...';
+  try { const r = await API.post('/api/flagged/scan'); btn.textContent='Done ('+r.new_flags+' new)'; setTimeout(()=>{btn.textContent='Run Scan';btn.disabled=false;},2000); await loadFlagged(); }
+  catch(e) { btn.textContent='Run Scan'; btn.disabled=false; alert(e.message); }
+}
+async function revertManual(sid) { if(!confirm('Revert store to manual approval?'))return; try { await API.post('/api/flagged/'+sid+'/manual-approval'); const e=document.getElementById('fl-'+sid); if(e)e.remove(); } catch(e){alert(e.message);} }
+async function dismissFlag(sid) { try { await API.post('/api/flagged/'+sid+'/dismiss'); const e=document.getElementById('fl-'+sid); if(e)e.remove(); } catch(e){alert(e.message);} }
+
+function formatReason(r) { return {bulk_upload:'Bulk Upload',duplicate_images_cross_account:'Duplicate Images',high_return_rate:'High Returns'}[r]||r; }
+function formatDetails(r,d) { if(!d) return ''; if(r==='bulk_upload') return (d.product_count||'50+')+' products in 1 hour'; if(r==='high_return_rate') return d.returned+'/'+d.total+' orders returned'; return 'Cross-account duplicate images detected'; }
+
+// ─── Support Tickets ─────────────────────────────────────────────────────────
+let supportStatusFilter = 'open';
+async function renderSupport(c) {
+  if (supportPollTimer) { clearInterval(supportPollTimer); supportPollTimer = null; }
+  c.innerHTML = `
+    <div class="page-header flex justify-between items-center">
+      <div><h2>Support Tickets</h2><p>User help requests — reply here to assist customers</p></div>
+      <div class="inline-form">
+        <div class="form-group"><label>Status</label>
+          <select id="support-status-filter" style="width:160px">
+            <option value="all">All</option>
+            <option value="open">Open</option>
+            <option value="in_progress">In Progress</option>
+            <option value="closed">Closed</option>
+          </select>
+        </div>
+        <button class="btn btn-ghost" id="support-refresh-btn">Refresh</button>
+      </div>
+    </div>
+    <div class="support-layout">
+      <div class="support-list" id="support-list">Loading...</div>
+      <div class="support-thread" id="support-thread">
+        <div class="empty-state" style="padding:80px 20px"><p>Select a ticket to view the conversation</p></div>
+      </div>
+    </div>`;
+  document.getElementById('support-status-filter').value = supportStatusFilter;
+  document.getElementById('support-status-filter').addEventListener('change', (e) => {
+    supportStatusFilter = e.target.value;
+    loadSupportTickets();
+  });
+  document.getElementById('support-refresh-btn').addEventListener('click', () => {
+    loadSupportTickets();
+    if (activeSupportTicketId) loadSupportThread(activeSupportTicketId, true);
+  });
+  await loadSupportTickets();
+}
+
+async function loadSupportTickets() {
+  const el = document.getElementById('support-list');
+  if (!el) return;
+  let url = '/api/support/tickets';
+  if (supportStatusFilter && supportStatusFilter !== 'all') {
+    url += '?status=' + encodeURIComponent(supportStatusFilter);
+  }
+  try {
+    const items = await API.get(url);
+    if (items.length === 0) {
+      el.innerHTML = '<div class="empty-state"><p>No support tickets</p></div>';
+      return;
+    }
+    el.innerHTML = items.map(t => `
+      <div class="support-item ${activeSupportTicketId === t.id ? 'active' : ''}" onclick="openSupportTicket(${t.id})">
+        <div class="title">${esc(t.subject)} ${t.unread_count > 0 ? '<span class="badge badge-warning">'+t.unread_count+'</span>' : ''}</div>
+        <div class="meta">${esc(t.user_name)} · ${esc(t.user_email)}</div>
+        <div class="meta">${esc(t.category)} · <span class="badge ${supportStatusBadge(t.status)}">${t.status}</span></div>
+        <div class="meta" style="margin-top:4px">${t.last_message ? esc(t.last_message).substring(0,80) : ''}</div>
+      </div>`).join('');
+  } catch (e) {
+    el.innerHTML = '<p class="error-msg">'+e.message+'</p>';
+  }
+}
+
+function supportStatusBadge(status) {
+  if (status === 'closed') return 'badge-neutral';
+  if (status === 'in_progress') return 'badge-warning';
+  return 'badge-danger';
+}
+
+async function openSupportTicket(id) {
+  activeSupportTicketId = id;
+  await loadSupportTickets();
+  await loadSupportThread(id);
+  if (supportPollTimer) clearInterval(supportPollTimer);
+  supportPollTimer = setInterval(() => {
+    if (currentPage === 'support' && activeSupportTicketId) {
+      loadSupportThread(activeSupportTicketId, true);
+      loadSupportTickets();
+    }
+  }, 8000);
+}
+
+async function loadSupportThread(id, silent) {
+  const el = document.getElementById('support-thread');
+  if (!el) return;
+  if (!silent) {
+    el.innerHTML = '<div class="empty-state"><p>Loading conversation...</p></div>';
+  }
+  try {
+    const data = await API.get('/api/support/tickets/'+id+'/messages');
+    const t = data.ticket;
+    const msgs = data.messages || [];
+    el.innerHTML = `
+      <div class="support-thread-header">
+        <div class="flex justify-between items-center">
+          <div>
+            <div class="card-title">${esc(t.subject)}</div>
+            <div class="card-meta">${esc(t.user_name)} (${esc(t.user_email)}) · ${esc(t.category)} · <span class="badge ${supportStatusBadge(t.status)}">${t.status}</span></div>
+          </div>
+          <div class="flex gap-2">
+            ${t.status !== 'closed' ? `<button class="btn btn-warning btn-sm" onclick="setSupportStatus(${id}, 'in_progress')">In Progress</button>` : ''}
+            ${t.status !== 'closed' ? `<button class="btn btn-ghost btn-sm" onclick="setSupportStatus(${id}, 'closed')">Close</button>` : `<button class="btn btn-success btn-sm" onclick="setSupportStatus(${id}, 'open')">Reopen</button>`}
+          </div>
+        </div>
+      </div>
+      <div class="support-messages" id="support-messages">
+        ${msgs.map(m => `
+          <div class="support-bubble ${m.sender_role === 'admin' ? 'admin' : 'user'}">
+            <div class="who">${esc(m.sender_name || m.sender_role)} · ${new Date(m.created_at).toLocaleString()}</div>
+            ${esc(m.body)}
+          </div>`).join('')}
+      </div>
+      ${t.status === 'closed'
+        ? '<div class="support-compose"><p style="color:var(--text-muted);font-size:13px">Ticket is closed. Reopen to reply.</p></div>'
+        : `<div class="support-compose">
+            <textarea id="support-reply" placeholder="Type your reply to the user..."></textarea>
+            <button class="btn btn-primary" onclick="sendSupportReply(${id})">Send</button>
+          </div>`}
+    `;
+    const box = document.getElementById('support-messages');
+    if (box) box.scrollTop = box.scrollHeight;
+  } catch (e) {
+    el.innerHTML = '<p class="error-msg">'+e.message+'</p>';
+  }
+}
+
+async function sendSupportReply(id) {
+  const input = document.getElementById('support-reply');
+  const body = input ? input.value.trim() : '';
+  if (!body) return alert('Enter a reply');
+  try {
+    await API.post('/api/support/tickets/'+id+'/messages', { body });
+    if (input) input.value = '';
+    await loadSupportThread(id, true);
+    await loadSupportTickets();
+  } catch (e) { alert(e.message); }
+}
+
+async function setSupportStatus(id, status) {
+  try {
+    await API.patch('/api/support/tickets/'+id, { status });
+    await loadSupportThread(id, true);
+    await loadSupportTickets();
+  } catch (e) { alert(e.message); }
+}
+
+// ─── Init ────────────────────────────────────────────────────────────────────
+(async () => {
+  try {
+    await API.get('/api/auth/me');
+    hideLogin();
+    navigateTo('dashboard');
+  } catch (err) {
+    console.log('Auth check:', err.message);
+    showLogin();
+    // Show helpful message if it's a connection issue
+    if (err.message.includes('Cannot reach') || err.message.includes('file:')) {
+      document.getElementById('login-error').textContent = err.message;
+    }
+  }
+})();
+</script>
+</body>
+</html>

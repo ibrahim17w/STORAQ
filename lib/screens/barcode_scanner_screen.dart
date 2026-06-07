@@ -3,11 +3,12 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/services.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import '../lang/translations.dart';
 
-class BarcodeScannerScreen extends StatefulWidget {
+class BarcodeScannerScreen extends ConsumerStatefulWidget {
   final bool continuous;
   final String? expectedFormat;
   const BarcodeScannerScreen({
@@ -17,10 +18,10 @@ class BarcodeScannerScreen extends StatefulWidget {
   });
 
   @override
-  State<BarcodeScannerScreen> createState() => _BarcodeScannerScreenState();
+  ConsumerState<BarcodeScannerScreen> createState() => _BarcodeScannerScreenState();
 }
 
-class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
+class _BarcodeScannerScreenState extends ConsumerState<BarcodeScannerScreen> {
   MobileScannerController? _controller;
   bool _torchOn = false;
   bool _isScanning = true;

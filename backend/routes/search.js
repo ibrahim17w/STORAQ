@@ -51,7 +51,7 @@ router.post('/search/image-similarity', imageSearchLimiter, upload.single('image
       `SELECT p.*, s.name as shop_name, s.city, s.country, s.lat, s.lng, s.id as store_id
        FROM products p
        JOIN stores s ON p.store_id = s.id
-       WHERE p.id IN (${placeholders}) AND p.quantity > 0`,
+       WHERE p.id IN (${placeholders}) AND p.quantity > 0 AND p.is_online = TRUE`,
       productIds
     );
 
@@ -87,7 +87,9 @@ router.post('/search/image-similarity', imageSearchLimiter, upload.single('image
     res.json({ results });
   } catch (err) {
     console.error('Image similarity search error:', err);
-    res.status(500).json({ error: err.message || 'Image search failed' });
+    // Do not leak err.message — model-loading / file errors expose paths
+    // and library versions that aid fingerprinting.
+    res.status(500).json({ error: 'Image search failed' });
   } finally {
     if (req.file?.path) {
       fs.unlink(req.file.path, (unlinkErr) => {

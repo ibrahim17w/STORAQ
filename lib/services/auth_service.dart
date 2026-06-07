@@ -1,6 +1,8 @@
 // lib/services/auth_service.dart
 import 'dart:convert';
+import 'dart:io';
 import 'package:http/http.dart' as http;
+import '../models/models.dart';
 import 'api_service.dart';
 import 'offline_service.dart';
 import 'store_service.dart';
@@ -16,6 +18,7 @@ class AuthService {
     required String role,
     Map<String, dynamic>? store,
     String preferredLanguage = 'en',
+    String? turnstileToken,
   }) async {
     final body = <String, dynamic>{
       'full_name': fullName,
@@ -26,6 +29,7 @@ class AuthService {
       'preferred_language': preferredLanguage,
     };
     if (store != null) body['store'] = store;
+    if (turnstileToken != null) body['turnstile_token'] = turnstileToken;
 
     final response = await ApiService.postWithTimeout(
       '${ApiService.baseUrl}/api/auth/register',
@@ -58,6 +62,7 @@ class AuthService {
         );
       }
       await ApiService.setToken(token);
+      await ApiService.setGuest(false);
 
       final storeCtx = data['user']?['store'] as Map<String, dynamic>?;
       if (storeCtx != null) await ApiService.setStoreContext(storeCtx);
@@ -85,13 +90,17 @@ class AuthService {
     if (response.statusCode == 200) {
       final token = data['token']?.toString();
       if (token != null) await ApiService.setToken(token);
+      await ApiService.setGuest(true);
       await ApiService.clearStoreContext();
       return data;
     }
     throw Exception(data['error']?.toString() ?? 'Guest login failed');
   }
 
-  static Future<void> logout() async => ApiService.clearToken();
+  static Future<void> logout() async {
+    await ApiService.clearToken();
+    await OfflineService.clearSessionCache();
+  }
 
   static Future<void> resendVerification(String email) async {
     final response = await ApiService.postWithTimeout(
@@ -155,7 +164,7 @@ class AuthService {
   // USER PROFILE (moved from original ApiService)
   // ============================================================
 
-  static Future<Map<String, dynamic>> getCurrentUser() async {
+  static Future<User> getCurrentUser() async {
     final response = await ApiService.getWithTimeout(
       '${ApiService.baseUrl}/api/me',
       headers: await ApiService.authHeaders,
@@ -169,12 +178,32 @@ class AuthService {
       }
       // Cache user for offline
       await OfflineService.cacheUser(data);
-      return data;
+      return User.fromJson(data);
     }
     throw Exception(data['error']?.toString() ?? 'Failed');
   }
 
-  static Future<Map<String, dynamic>> updateProfile({
+  static Future<User> uploadAvatar(File image) async {
+    final request = http.MultipartRequest(
+      'POST',
+      Uri.parse('${ApiService.baseUrl}/api/me/avatar'),
+    );
+    request.headers.addAll(await ApiService.multipartAuthHeaders);
+    request.files.add(
+      await http.MultipartFile.fromPath('avatar', image.path),
+    );
+
+    final streamed = await request.send().timeout(const Duration(seconds: 20));
+    final response = await http.Response.fromStream(streamed);
+    final data = jsonDecode(response.body) as Map<String, dynamic>;
+    if (response.statusCode == 200) {
+      await OfflineService.cacheUser(data);
+      return User.fromJson(data);
+    }
+    throw Exception(data['error']?.toString() ?? 'Avatar upload failed');
+  }
+
+  static Future<User> updateProfile({
     required String fullName,
     required String phone,
   }) async {
@@ -186,7 +215,7 @@ class AuthService {
     final data = jsonDecode(response.body) as Map<String, dynamic>;
     if (response.statusCode == 200) {
       await OfflineService.cacheUser(data);
-      return data;
+      return User.fromJson(data);
     }
     throw Exception(data['error']?.toString() ?? 'Update failed');
   }
@@ -239,7 +268,7 @@ class AuthService {
   static Future<void> warmOfflineStoreData() async {
     try {
       final store = await StoreService.getMyStore();
-      final storeId = store['id'] as int?;
+      final storeId = store.intId;
       if (storeId == null) return;
       await ProductService.loadStoreCatalog(storeId, forceRefresh: true);
       await OrderService.loadReceiptSettings();

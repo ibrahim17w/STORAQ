@@ -2,10 +2,12 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../services/api_service.dart';
 import '../widgets/gradient_button.dart';
 import '../widgets/theme_toggle.dart';
 import '../providers/locale_provider.dart';
+import '../providers/auth_provider.dart';
 import '../lang/translations.dart';
 import 'forgot_password_screen.dart';
 import 'register_screen.dart';
@@ -14,26 +16,24 @@ import '../utils/error_mapper.dart';
 import 'main_nav_screen.dart';
 import '../services/auth_service.dart';
 
-class LoginScreen extends StatefulWidget {
+class LoginScreen extends ConsumerStatefulWidget {
   const LoginScreen({super.key});
 
   @override
-  State<LoginScreen> createState() => _LoginScreenState();
+  ConsumerState<LoginScreen> createState() => _LoginScreenState();
 }
 
-class _LoginScreenState extends State<LoginScreen> {
+class _LoginScreenState extends ConsumerState<LoginScreen> {
   final _formKey = GlobalKey<FormState>();
   final _emailCtrl = TextEditingController();
   final _passwordCtrl = TextEditingController();
-  bool _isLoading = false;
   bool _obscurePassword = true;
 
   Future<void> _login() async {
     if (!_formKey.currentState!.validate()) return;
 
-    setState(() => _isLoading = true);
     try {
-      await AuthService.login(
+      await ref.read(authProvider.notifier).login(
         email: _emailCtrl.text.trim(),
         password: _passwordCtrl.text,
       );
@@ -65,8 +65,6 @@ class _LoginScreenState extends State<LoginScreen> {
           showAppNotification(context, message: msg, isError: true);
         }
       }
-    } finally {
-      if (mounted) setState(() => _isLoading = false);
     }
   }
 
@@ -85,6 +83,9 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final auth = ref.watch(authProvider);
+    final _isLoading = auth.isLoading;
+
     return Scaffold(
       body: SafeArea(
         child: LayoutBuilder(
@@ -105,7 +106,9 @@ class _LoginScreenState extends State<LoginScreen> {
                         ),
                         child: ConstrainedBox(
                           constraints: const BoxConstraints(maxWidth: 480),
-                          child: Column(
+                          child: ValueListenableBuilder<Locale>(
+                            valueListenable: localeNotifier,
+                            builder: (context, locale, _) => Column(
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: [
                               Icon(
@@ -114,9 +117,9 @@ class _LoginScreenState extends State<LoginScreen> {
                                 color: Theme.of(context).colorScheme.primary,
                               ),
                               const SizedBox(height: 12),
-                              const Text(
-                                'Market Bridge',
-                                style: TextStyle(
+                              Text(
+                                t('app_name'),
+                                style: const TextStyle(
                                   fontSize: 28,
                                   fontWeight: FontWeight.bold,
                                 ),
@@ -243,7 +246,11 @@ class _LoginScreenState extends State<LoginScreen> {
                                           cursor: SystemMouseCursors.click,
                                           child: OutlinedButton.icon(
                                             onPressed: () async {
-                                              await ApiService.setGuest(true);
+                                              try {
+                                                await ref.read(authProvider.notifier).guestLogin();
+                                              } catch (_) {
+                                                await ApiService.setGuest(true);
+                                              }
                                               if (mounted) {
                                                 Navigator.pushAndRemoveUntil(
                                                   context,
@@ -274,6 +281,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                 ),
                               ),
                             ],
+                          ),
                           ),
                         ),
                       ),
@@ -403,10 +411,10 @@ class _LoginScreenState extends State<LoginScreen> {
                     letterSpacing: 8,
                     fontWeight: FontWeight.bold,
                   ),
-                  decoration: const InputDecoration(
+                  decoration: InputDecoration(
                     counterText: '',
-                    hintText: '000000',
-                    border: OutlineInputBorder(),
+                    hintText: t('verification_code_hint'),
+                    border: const OutlineInputBorder(),
                   ),
                   onChanged: (v) {
                     if (v.length == 6) verify();

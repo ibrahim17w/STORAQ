@@ -3,13 +3,16 @@ import 'dart:async';
 import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:latlong2/latlong.dart';
 import '../data/countries.dart';
 import '../services/api_service.dart';
 import '../widgets/gradient_button.dart';
 import '../widgets/theme_toggle.dart';
 import '../widgets/app_notification.dart';
+import '../widgets/turnstile_widget.dart';
 import '../providers/locale_provider.dart';
+import '../providers/auth_provider.dart';
 import '../lang/translations.dart';
 import 'login_screen.dart';
 import 'map_picker_screen.dart';
@@ -19,14 +22,14 @@ import '../services/location_service.dart';
 
 enum PasswordStrength { weak, medium, strong }
 
-class RegisterScreen extends StatefulWidget {
+class RegisterScreen extends ConsumerStatefulWidget {
   const RegisterScreen({super.key});
 
   @override
-  State<RegisterScreen> createState() => _RegisterScreenState();
+  ConsumerState<RegisterScreen> createState() => _RegisterScreenState();
 }
 
-class _RegisterScreenState extends State<RegisterScreen> {
+class _RegisterScreenState extends ConsumerState<RegisterScreen> {
   final _formKey = GlobalKey<FormState>();
   final _nameCtrl = TextEditingController();
   final _emailCtrl = TextEditingController();
@@ -54,6 +57,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
   PasswordStrength _strength = PasswordStrength.weak;
   String? _selectedRole;
   String? _selectedCountry;
+  String? _turnstileToken;
+  bool _agreedToTerms = false;
 
   Map<String, String> get _roleLabels => {
     'store_owner': t('shop_owner'),
@@ -319,11 +324,11 @@ class _RegisterScreenState extends State<RegisterScreen> {
   /// Live checklist that shows exactly which rules are met.
   Widget _buildPasswordChecklist(String pwd) {
     final requirements = [
-      ('At least 8 characters', pwd.length >= 8),
-      ('Uppercase letter (A-Z)', pwd.contains(RegExp(r'[A-Z]'))),
-      ('Lowercase letter (a-z)', pwd.contains(RegExp(r'[a-z]'))),
-      ('Number (0-9)', pwd.contains(RegExp(r'[0-9]'))),
-      ('Special character (!@#\$%^&*)', pwd.contains(RegExp(r'[^A-Za-z0-9]'))),
+      (t('pwd_req_min_length'), pwd.length >= 8),
+      (t('pwd_req_uppercase'), pwd.contains(RegExp(r'[A-Z]'))),
+      (t('pwd_req_lowercase'), pwd.contains(RegExp(r'[a-z]'))),
+      (t('pwd_req_number'), pwd.contains(RegExp(r'[0-9]'))),
+      (t('pwd_req_special'), pwd.contains(RegExp(r'[^A-Za-z0-9]'))),
     ];
 
     return Padding(
@@ -358,48 +363,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
     );
   }
 
-  /// Converts backend OTP/reset errors into human-friendly text.
-  String _getFriendlyError(dynamic error) {
-    final raw = error.toString();
-    final isAr = localeNotifier.value.languageCode == 'ar';
-    String msg(String en, String ar) => isAr ? ar : en;
-
-    final jsonMatch = RegExp(r'"error"\s*:\s*"([^"]+)"').firstMatch(raw);
-    final serverMsg = jsonMatch?.group(1)?.toLowerCase() ?? raw.toLowerCase();
-
-    if (serverMsg.contains('too many failed attempts') ||
-        serverMsg.contains('locked')) {
-      return msg(
-        'Too many failed attempts. This code has been locked for your security. Please request a new code.',
-        'لقد تجاوزت الحد المسموح من المحاولات. تم إلغاء هذا الرمز لحماية حسابك. يرجى طلب رمز جديد.',
-      );
-    }
-    if (serverMsg.contains('expired') ||
-        serverMsg.contains('no longer valid')) {
-      return msg(
-        'This code has expired or is no longer valid. Please request a new one.',
-        'انتهت صلاحية هذا الرمز أو لم يعد صالحاً. يرجى طلب رمز جديد.',
-      );
-    }
-    if (serverMsg.contains('incorrect') ||
-        serverMsg.contains('invalid') ||
-        serverMsg.contains('wrong')) {
-      return msg(
-        'Incorrect code. Please try again.',
-        'الرمز غير صحيح. يرجى المحاولة مرة أخرى.',
-      );
-    }
-    if (serverMsg.contains('wait')) {
-      final waitMatch = RegExp(r'Please wait [^.]+').firstMatch(raw);
-      if (waitMatch != null) return waitMatch.group(0)!;
-      return msg(
-        'Please wait a moment before trying again.',
-        'يرجى الانتظار لحظة قبل المحاولة مرة أخرى.',
-      );
-    }
-    return mapBackendError(raw);
-  }
-
   String? _validateEmail(String? value) {
     if (value == null || value.trim().isEmpty) return t('enter_email');
     final emailRegex = RegExp(r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$');
@@ -421,6 +384,15 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
   Future<void> _register() async {
     if (!_formKey.currentState!.validate()) return;
+
+    if (!_agreedToTerms) {
+      showAppNotification(
+        context,
+        message: t('must_agree_terms'),
+        isError: true,
+      );
+      return;
+    }
 
     if (_selectedRole == null) {
       showAppNotification(
@@ -482,7 +454,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
     setState(() => _isLoading = true);
     try {
-      await AuthService.register(
+      await ref.read(authProvider.notifier).register(
         fullName: _nameCtrl.text.trim(),
         email: _emailCtrl.text.trim(),
         phone: _phoneCtrl.text.trim(),
@@ -490,6 +462,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
         role: _selectedRole!,
         store: storeData,
         preferredLanguage: localeNotifier.value.languageCode,
+        turnstileToken: _turnstileToken,
       ).timeout(
         const Duration(seconds: 10),
         onTimeout: () => throw TimeoutException(t('request_timeout')),
@@ -509,7 +482,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
       if (mounted) {
         showAppNotification(
           context,
-          message: _getFriendlyError(e),
+          message: mapBackendError(e.toString()),
           isError: true,
         );
       }
@@ -557,7 +530,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
       } catch (e) {
         showAppNotification(
           context,
-          message: _getFriendlyError(e),
+          message: mapBackendError(e.toString()),
           isError: true,
         );
       }
@@ -602,7 +575,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
         if (mounted) {
           showAppNotification(
             context,
-            message: _getFriendlyError(e),
+            message: mapBackendError(e.toString()),
             isError: true,
           );
         }
@@ -633,10 +606,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
                     letterSpacing: 8,
                     fontWeight: FontWeight.bold,
                   ),
-                  decoration: const InputDecoration(
+                  decoration: InputDecoration(
                     counterText: '',
-                    hintText: '000000',
-                    border: OutlineInputBorder(),
+                    hintText: t('verification_code_hint'),
+                    border: const OutlineInputBorder(),
                   ),
                   onChanged: (v) {
                     if (v.length == 6) {
@@ -696,6 +669,30 @@ class _RegisterScreenState extends State<RegisterScreen> {
     );
   }
 
+  void _showTermsDialog() {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(t('terms_of_use_title')),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: SingleChildScrollView(
+            child: Text(
+              t('terms_of_use_content'),
+              style: const TextStyle(fontSize: 13, height: 1.6),
+            ),
+          ),
+        ),
+        actions: [
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text(t('done')),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -718,7 +715,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
                         ),
                         child: ConstrainedBox(
                           constraints: const BoxConstraints(maxWidth: 480),
-                          child: Column(
+                          child: ValueListenableBuilder<Locale>(
+                            valueListenable: localeNotifier,
+                            builder: (context, locale, _) => Column(
                             children: [
                               Icon(
                                 Icons.storefront,
@@ -726,9 +725,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
                                 color: Theme.of(context).colorScheme.primary,
                               ),
                               const SizedBox(height: 12),
-                              const Text(
-                                'Market Bridge',
-                                style: TextStyle(
+                              Text(
+                                t('app_name'),
+                                style: const TextStyle(
                                   fontSize: 28,
                                   fontWeight: FontWeight.bold,
                                 ),
@@ -1063,7 +1062,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                                             maxLines: 2,
                                             decoration: InputDecoration(
                                               labelText:
-                                                  '${t('location_description') ?? 'Location description'} (${t('optional') ?? 'optional'})',
+                                                  '${t('description') ?? 'Description'} (${t('optional') ?? 'optional'})',
                                               hintText:
                                                   t('location_hint') ??
                                                   'e.g. Next to Al-Fayhaa Market, Main Street',
@@ -1254,6 +1253,64 @@ class _RegisterScreenState extends State<RegisterScreen> {
                                           ),
                                         ),
                                         const SizedBox(height: 24),
+                                        TurnstileWidget(
+                                          onToken: (token) {
+                                            _turnstileToken = token;
+                                          },
+                                        ),
+                                        const SizedBox(height: 12),
+                                        Row(
+                                          crossAxisAlignment: CrossAxisAlignment.center,
+                                          children: [
+                                            SizedBox(
+                                              width: 24,
+                                              height: 24,
+                                              child: Checkbox(
+                                                value: _agreedToTerms,
+                                                onChanged: (v) => setState(
+                                                  () => _agreedToTerms = v ?? false,
+                                                ),
+                                              ),
+                                            ),
+                                            const SizedBox(width: 8),
+                                            Expanded(
+                                              child: GestureDetector(
+                                                onTap: () => setState(
+                                                  () => _agreedToTerms = !_agreedToTerms,
+                                                ),
+                                                child: Text.rich(
+                                                  TextSpan(
+                                                    text: '${t('i_agree_to')} ',
+                                                    style: TextStyle(
+                                                      fontSize: 13,
+                                                      color: Theme.of(context)
+                                                          .colorScheme
+                                                          .onSurface
+                                                          .withOpacity(0.8),
+                                                    ),
+                                                    children: [
+                                                      WidgetSpan(
+                                                        child: GestureDetector(
+                                                          onTap: () => _showTermsDialog(),
+                                                          child: Text(
+                                                            t('terms_of_use_link'),
+                                                            style: TextStyle(
+                                                              fontSize: 13,
+                                                              color: Theme.of(context).colorScheme.primary,
+                                                              decoration: TextDecoration.underline,
+                                                              decorationColor: Theme.of(context).colorScheme.primary,
+                                                            ),
+                                                          ),
+                                                        ),
+                                                      ),
+                                                    ],
+                                                  ),
+                                                ),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                        const SizedBox(height: 16),
                                         MouseRegion(
                                           cursor: SystemMouseCursors.click,
                                           child: GradientButton(
@@ -1293,6 +1350,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                                 ),
                               ),
                             ],
+                          ),
                           ),
                         ),
                       ),
@@ -1568,9 +1626,9 @@ class _SearchableCountryFieldState extends State<_SearchableCountryField> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   if (_controller.text.isNotEmpty && _filtered.isEmpty)
-                    const Padding(
-                      padding: EdgeInsets.all(12),
-                      child: Text('No countries found'),
+                    Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: Text(t('no_countries_found')),
                     ),
                   Flexible(
                     child: ListView.builder(

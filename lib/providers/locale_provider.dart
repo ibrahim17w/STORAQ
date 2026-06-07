@@ -17,7 +17,7 @@ final List<Locale> supportedLocales = [
   const Locale('zh'),
 ];
 
-late final ValueNotifier<Locale> localeNotifier;
+ValueNotifier<Locale> localeNotifier = ValueNotifier(const Locale('en'));
 
 Future<void> initializeLocale() async {
   final prefs = await SharedPreferences.getInstance();

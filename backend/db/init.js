@@ -44,12 +44,44 @@ async function runMigrations() {
         IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='notes') THEN
           ALTER TABLE orders ADD COLUMN notes TEXT;
         END IF;
+        -- CURRENCY DISPLAY: converted total snapshot
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='display_subtotal') THEN
+          ALTER TABLE orders ADD COLUMN display_subtotal DECIMAL(12,2);
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='display_discount') THEN
+          ALTER TABLE orders ADD COLUMN display_discount DECIMAL(12,2);
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='display_tax') THEN
+          ALTER TABLE orders ADD COLUMN display_tax DECIMAL(12,2);
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='display_total') THEN
+          ALTER TABLE orders ADD COLUMN display_total DECIMAL(12,2);
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='display_currency') THEN
+          ALTER TABLE orders ADD COLUMN display_currency VARCHAR(10);
+        END IF;
       END IF;
 
       -- ORDER_ITEMS: patch missing product_name
       IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'order_items') THEN
         IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='order_items' AND column_name='product_name') THEN
           ALTER TABLE order_items ADD COLUMN product_name VARCHAR(200);
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='order_items' AND column_name='currency') THEN
+          ALTER TABLE order_items ADD COLUMN currency VARCHAR(10);
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='order_items' AND column_name='display_price') THEN
+          ALTER TABLE order_items ADD COLUMN display_price DECIMAL(12,2);
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='order_items' AND column_name='display_currency') THEN
+          ALTER TABLE order_items ADD COLUMN display_currency VARCHAR(10);
+        END IF;
+      END IF;
+
+      -- USERS: profile avatar
+      IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'users') THEN
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='avatar_url') THEN
+          ALTER TABLE users ADD COLUMN avatar_url TEXT;
         END IF;
       END IF;
 
@@ -94,6 +126,16 @@ async function runMigrations() {
         IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='stores' AND column_name='phone') THEN
           ALTER TABLE stores ADD COLUMN phone VARCHAR(50);
         END IF;
+        -- CURRENCY DISPLAY: store-level conversion settings
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='stores' AND column_name='display_currency') THEN
+          ALTER TABLE stores ADD COLUMN display_currency VARCHAR(10);
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='stores' AND column_name='show_both_prices') THEN
+          ALTER TABLE stores ADD COLUMN show_both_prices BOOLEAN DEFAULT FALSE;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='stores' AND column_name='exchange_rates') THEN
+          ALTER TABLE stores ADD COLUMN exchange_rates JSONB DEFAULT '[]';
+        END IF;
       END IF;
 
       -- PRODUCTS: patch missing columns
@@ -103,6 +145,18 @@ async function runMigrations() {
         END IF;
         IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='products' AND column_name='embedding') THEN
           ALTER TABLE products ADD COLUMN embedding vector(512);
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='products' AND column_name='display_price') THEN
+          ALTER TABLE products ADD COLUMN display_price DECIMAL(12,2);
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='products' AND column_name='display_currency') THEN
+          ALTER TABLE products ADD COLUMN display_currency VARCHAR(10);
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='products' AND column_name='is_online') THEN
+          ALTER TABLE products ADD COLUMN is_online BOOLEAN DEFAULT FALSE;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='products' AND column_name='went_online_at') THEN
+          ALTER TABLE products ADD COLUMN went_online_at TIMESTAMP;
         END IF;
       END IF;
     END $$;
@@ -238,6 +292,15 @@ async function initInventoryTables() {
   `);
 
   await pool.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='customer_user_id') THEN
+        ALTER TABLE orders ADD COLUMN customer_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL;
+      END IF;
+    END $$;
+  `);
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS orders (
       id SERIAL PRIMARY KEY,
       store_id INTEGER REFERENCES stores(id) ON DELETE SET NULL,
@@ -250,6 +313,11 @@ async function initInventoryTables() {
       discount DECIMAL(12,2) NOT NULL DEFAULT 0,
       tax DECIMAL(12,2) NOT NULL DEFAULT 0,
       total DECIMAL(12,2) NOT NULL DEFAULT 0,
+      display_subtotal DECIMAL(12,2),
+      display_discount DECIMAL(12,2),
+      display_tax DECIMAL(12,2),
+      display_total DECIMAL(12,2),
+      display_currency VARCHAR(10),
       status VARCHAR(20) DEFAULT 'completed',
       payment_method VARCHAR(20) DEFAULT 'cash',
       notes TEXT,
@@ -266,7 +334,10 @@ async function initInventoryTables() {
       quantity INTEGER NOT NULL,
       unit_price DECIMAL(12,2) NOT NULL,
       total_price DECIMAL(12,2) NOT NULL,
-      barcode VARCHAR(50)
+      barcode VARCHAR(50),
+      currency VARCHAR(10),
+      display_price DECIMAL(12,2),
+      display_currency VARCHAR(10)
     );
   `);
 
@@ -399,6 +470,24 @@ async function initInventoryTables() {
 
 // ==================== AUTH TABLES ====================
 async function initAuthTables() {
+  // Token-revocation watermark. Stamped to NOW() on password change and
+  // password reset. authenticateToken rejects any JWT whose `iat` is
+  // older than this timestamp, so the user's primary defensive action
+  // (change/reset password) immediately revokes every existing session
+  // including ones held by an attacker who stole a token. Existing rows
+  // get NULL so legacy sessions still validate — the column only gates
+  // tokens issued before a password change that has actually happened.
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'users') THEN
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='password_changed_at') THEN
+          ALTER TABLE users ADD COLUMN password_changed_at TIMESTAMP;
+        END IF;
+      END IF;
+    END $$;
+  `);
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS failed_logins (
       email VARCHAR(255) PRIMARY KEY,
@@ -533,12 +622,456 @@ CREATE TABLE IF NOT EXISTS favorites (
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_store_staff_store ON store_staff(store_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_store_staff_status ON store_staff(status);`);
 
+  // ==================== PRODUCT IMAGE HASHES (anti-bot: duplicate detection) ====================
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS product_image_hashes (
+      id SERIAL PRIMARY KEY,
+      product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+      store_id INTEGER NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+      image_hash VARCHAR(64) NOT NULL,
+      created_at TIMESTAMP DEFAULT NOW(),
+      UNIQUE(store_id, image_hash)
+    );
+  `);
+
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_product_image_hashes_store ON product_image_hashes(store_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_product_image_hashes_hash ON product_image_hashes(store_id, image_hash);`);
+
+  // ==================== STORES: first_product_approved column ====================
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'stores') THEN
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='stores' AND column_name='first_product_approved') THEN
+          ALTER TABLE stores ADD COLUMN first_product_approved BOOLEAN DEFAULT FALSE;
+        END IF;
+      END IF;
+    END $$;
+  `);
+
+  // ==================== PRODUCTS: pending_approval column ====================
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'products') THEN
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='products' AND column_name='pending_approval') THEN
+          ALTER TABLE products ADD COLUMN pending_approval BOOLEAN DEFAULT FALSE;
+        END IF;
+      END IF;
+    END $$;
+  `);
+
+  // Mark existing stores with online products as approved
+  await pool.query(`
+    UPDATE stores SET first_product_approved = TRUE
+    WHERE first_product_approved IS NOT TRUE
+    AND id IN (SELECT DISTINCT store_id FROM products WHERE is_online = TRUE);
+  `);
+
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_products_is_online ON products(store_id, is_online);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_products_store_created ON products(store_id, created_at);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_products_pending_approval ON products(pending_approval) WHERE pending_approval = TRUE;`);
+
+  // ==================== MARKETPLACE HOT-PATH INDEXES ====================
+  // Every public marketplace listing query filters on
+  //   WHERE is_online = TRUE AND quantity > 0
+  // and sorts by either created_at DESC (new arrivals) or view_count DESC
+  // (trending). Without dedicated indexes the planner falls back to a
+  // sequential scan of `products` once the catalog grows past a few
+  // thousand rows, which is the single biggest read-path bottleneck this
+  // app will hit at scale.
+  //
+  // Partial indexes (`WHERE is_online = TRUE AND quantity > 0`) only
+  // index the rows that match the filter, so they stay small even as the
+  // overall product table grows (offline / out-of-stock products are
+  // excluded from the index). They also self-maintain — a product going
+  // offline is simply removed from the index by Postgres.
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_products_marketplace_recent
+    ON products (created_at DESC)
+    WHERE is_online = TRUE AND quantity > 0;
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_products_marketplace_trending
+    ON products (view_count DESC NULLS LAST, created_at DESC)
+    WHERE is_online = TRUE AND quantity > 0;
+  `);
+
+  // ==================== STORE VISITS (analytics) ====================
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS store_visits (
+      id SERIAL PRIMARY KEY,
+      store_id INTEGER NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+      user_id VARCHAR(100),
+      visited_at TIMESTAMP DEFAULT NOW()
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_store_visits_store_date ON store_visits(store_id, visited_at);`);
+
+  // ==================== EXPENSES ====================
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS expenses (
+      id SERIAL PRIMARY KEY,
+      store_id INTEGER NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+      category VARCHAR(100) NOT NULL DEFAULT 'General',
+      amount DECIMAL(12,2) NOT NULL DEFAULT 0,
+      description TEXT,
+      expense_date DATE DEFAULT CURRENT_DATE,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_expenses_store_date ON expenses(store_id, expense_date);`);
+
+  // ==================== CUSTOMER CREDITS ====================
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS customer_credits (
+      id SERIAL PRIMARY KEY,
+      store_id INTEGER NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+      customer_name VARCHAR(100) NOT NULL,
+      customer_phone VARCHAR(50),
+      amount DECIMAL(12,2) NOT NULL DEFAULT 0,
+      notes TEXT,
+      status VARCHAR(20) DEFAULT 'outstanding',
+      created_at TIMESTAMP DEFAULT NOW(),
+      settled_at TIMESTAMP
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_customer_credits_store ON customer_credits(store_id, status);`);
+
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_verification_codes_email_created ON verification_codes(email, created_at);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_product_views_user ON product_views(user_id, viewed_at);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_product_views_product_date ON product_views(product_id, viewed_at);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_search_queries_user ON search_queries(user_id, searched_at);`);
   
   await patchForeignKeyConstraints();
   console.log('✅ Auth & auxiliary tables initialized');
 }
 
-module.exports = { initInventoryTables, initAuthTables };
+// ==================== SUBSCRIPTION TABLES ====================
+async function initSubscriptionTables() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS subscription_tiers (
+      id SERIAL PRIMARY KEY,
+      name VARCHAR(50) NOT NULL,
+      slug VARCHAR(30) NOT NULL UNIQUE,
+      online_slots INTEGER NOT NULL,
+      price_usd_monthly DECIMAL(10,2) DEFAULT 0,
+      sort_order INTEGER DEFAULT 0,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS store_subscriptions (
+      id SERIAL PRIMARY KEY,
+      store_id INTEGER NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+      tier_id INTEGER NOT NULL REFERENCES subscription_tiers(id),
+      status VARCHAR(20) DEFAULT 'pending',
+      starts_at TIMESTAMP,
+      expires_at TIMESTAMP,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    );
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS subscription_payments (
+      id SERIAL PRIMARY KEY,
+      store_id INTEGER NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+      tier_id INTEGER NOT NULL REFERENCES subscription_tiers(id),
+      payment_track VARCHAR(20) NOT NULL,
+      reference_code VARCHAR(50) UNIQUE,
+      amount_usd DECIMAL(10,2),
+      status VARCHAR(20) DEFAULT 'pending',
+      stripe_session_id VARCHAR(255),
+      verified_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      verified_at TIMESTAMP,
+      notes TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+  `);
+
+  const tiers = [
+    { name: 'Free', slug: 'free', online_slots: 5, price_usd_monthly: 0, sort_order: 0 },
+    { name: 'Starter', slug: 'starter', online_slots: 25, price_usd_monthly: 4.99, sort_order: 1 },
+    { name: 'Business', slug: 'business', online_slots: 100, price_usd_monthly: 14.99, sort_order: 2 },
+    { name: 'Pro', slug: 'pro', online_slots: 500, price_usd_monthly: 39.99, sort_order: 3 },
+    { name: 'Enterprise', slug: 'enterprise', online_slots: 2000, price_usd_monthly: 99.99, sort_order: 4 },
+  ];
+
+  for (const tier of tiers) {
+    await pool.query(
+      `INSERT INTO subscription_tiers (name, slug, online_slots, price_usd_monthly, sort_order)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (slug) DO UPDATE SET
+         name = EXCLUDED.name,
+         online_slots = EXCLUDED.online_slots,
+         price_usd_monthly = EXCLUDED.price_usd_monthly,
+         sort_order = EXCLUDED.sort_order`,
+      [tier.name, tier.slug, tier.online_slots, tier.price_usd_monthly, tier.sort_order]
+    );
+  }
+
+  // One-time seed: stores with products but none online get first 5 marked online
+  await pool.query(`
+    WITH stores_needing_seed AS (
+      SELECT store_id FROM products GROUP BY store_id
+      HAVING SUM(CASE WHEN is_online THEN 1 ELSE 0 END) = 0
+    ),
+    ranked AS (
+      SELECT p.id, ROW_NUMBER() OVER (PARTITION BY p.store_id ORDER BY p.created_at ASC) as rn
+      FROM products p
+      JOIN stores_needing_seed s ON p.store_id = s.store_id
+    )
+    UPDATE products p SET is_online = TRUE, went_online_at = COALESCE(p.went_online_at, p.created_at)
+    FROM ranked r
+    WHERE p.id = r.id AND r.rn <= 5;
+  `);
+
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_store_subscriptions_store ON store_subscriptions(store_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_store_subscriptions_status ON store_subscriptions(status, expires_at);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_subscription_payments_store ON subscription_payments(store_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_subscription_payments_status ON subscription_payments(status);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_subscription_payments_ref ON subscription_payments(reference_code);`);
+
+  console.log('✅ Subscription tables initialized');
+}
+
+async function initChatTables() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS chat_conversations (
+      id SERIAL PRIMARY KEY,
+      customer_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      store_id INTEGER NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+      last_message_at TIMESTAMP DEFAULT NOW(),
+      created_at TIMESTAMP DEFAULT NOW(),
+      UNIQUE(customer_id, store_id)
+    );
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS chat_messages (
+      id SERIAL PRIMARY KEY,
+      conversation_id INTEGER NOT NULL REFERENCES chat_conversations(id) ON DELETE CASCADE,
+      sender_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      body TEXT NOT NULL,
+      created_at TIMESTAMP DEFAULT NOW(),
+      read_at TIMESTAMP
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_chat_conversations_customer ON chat_conversations(customer_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_chat_conversations_store ON chat_conversations(store_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_chat_messages_conversation ON chat_messages(conversation_id, created_at);`);
+  console.log('✅ Chat tables initialized');
+}
+
+async function initSupportTables() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS support_tickets (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      subject VARCHAR(200) NOT NULL,
+      category VARCHAR(50) DEFAULT 'general',
+      status VARCHAR(20) DEFAULT 'open',
+      priority VARCHAR(20) DEFAULT 'normal',
+      assigned_admin_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      last_message_at TIMESTAMP DEFAULT NOW(),
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    );
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS support_ticket_messages (
+      id SERIAL PRIMARY KEY,
+      ticket_id INTEGER NOT NULL REFERENCES support_tickets(id) ON DELETE CASCADE,
+      sender_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      sender_role VARCHAR(20) NOT NULL DEFAULT 'user',
+      body TEXT NOT NULL,
+      created_at TIMESTAMP DEFAULT NOW(),
+      read_at TIMESTAMP
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_support_tickets_user ON support_tickets(user_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_support_tickets_status ON support_tickets(status, last_message_at DESC);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_support_messages_ticket ON support_ticket_messages(ticket_id, created_at);`);
+  console.log('✅ Support ticket tables initialized');
+}
+
+async function initSponsoredProductTables() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS sponsorship_pricing (
+      id SERIAL PRIMARY KEY,
+      scope_type VARCHAR(20) NOT NULL UNIQUE,
+      label VARCHAR(80) NOT NULL,
+      price_usd_per_day DECIMAL(10,2) NOT NULL,
+      radius_unit_km INTEGER DEFAULT 5,
+      sort_order INTEGER DEFAULT 0,
+      updated_at TIMESTAMP DEFAULT NOW()
+    );
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS sponsored_product_payments (
+      id SERIAL PRIMARY KEY,
+      store_id INTEGER NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+      product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+      scope_type VARCHAR(20) NOT NULL,
+      radius_km INTEGER,
+      duration_days INTEGER NOT NULL,
+      target_village VARCHAR(100),
+      target_city VARCHAR(100),
+      target_country VARCHAR(100),
+      target_country_code VARCHAR(2),
+      target_city_id VARCHAR(100),
+      center_lat DECIMAL(10,7),
+      center_lng DECIMAL(10,7),
+      amount_usd DECIMAL(10,2) NOT NULL,
+      payment_track VARCHAR(20) NOT NULL DEFAULT 'syria_agent',
+      reference_code VARCHAR(50) UNIQUE,
+      status VARCHAR(20) DEFAULT 'pending',
+      verified_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      verified_at TIMESTAMP,
+      notes TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS sponsored_product_campaigns (
+      id SERIAL PRIMARY KEY,
+      payment_id INTEGER REFERENCES sponsored_product_payments(id) ON DELETE SET NULL,
+      store_id INTEGER NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+      product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+      scope_type VARCHAR(20) NOT NULL,
+      radius_km INTEGER,
+      duration_days INTEGER NOT NULL,
+      target_village VARCHAR(100),
+      target_city VARCHAR(100),
+      target_country VARCHAR(100),
+      target_country_code VARCHAR(2),
+      target_city_id VARCHAR(100),
+      center_lat DECIMAL(10,7),
+      center_lng DECIMAL(10,7),
+      amount_usd DECIMAL(10,2) NOT NULL,
+      status VARCHAR(20) DEFAULT 'active',
+      starts_at TIMESTAMP DEFAULT NOW(),
+      expires_at TIMESTAMP NOT NULL,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    );
+  `);
+
+  const pricing = [
+    { scope: 'radius', label: 'Nearby radius', price: 0.50, unit: 5, order: 0 },
+    { scope: 'village', label: 'Village', price: 0.80, unit: 5, order: 1 },
+    { scope: 'city', label: 'City', price: 2.00, unit: 5, order: 2 },
+    { scope: 'country', label: 'Country', price: 5.00, unit: 5, order: 3 },
+    { scope: 'world', label: 'Worldwide', price: 10.00, unit: 5, order: 4 },
+  ];
+
+  for (const p of pricing) {
+    await pool.query(
+      `INSERT INTO sponsorship_pricing (scope_type, label, price_usd_per_day, radius_unit_km, sort_order)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (scope_type) DO UPDATE SET
+         label = EXCLUDED.label,
+         price_usd_per_day = EXCLUDED.price_usd_per_day,
+         radius_unit_km = EXCLUDED.radius_unit_km,
+         sort_order = EXCLUDED.sort_order`,
+      [p.scope, p.label, p.price, p.unit, p.order]
+    );
+  }
+
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_sponsor_payments_store ON sponsored_product_payments(store_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_sponsor_payments_status ON sponsored_product_payments(status);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_sponsor_campaigns_store ON sponsored_product_campaigns(store_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_sponsor_campaigns_active ON sponsored_product_campaigns(status, expires_at);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_sponsor_campaigns_product ON sponsored_product_campaigns(product_id);`);
+
+  console.log('✅ Sponsored product tables initialized');
+}
+
+// Promo tables are also created by the admin-dashboard on startup, but the
+// backend reads/writes them directly in routes/subscriptions.js and
+// services/subscription.js (promo redemption + auto-expiry). Initializing
+// them here means the backend can boot cleanly even if the admin-dashboard
+// has not been deployed yet — previously, /api/subscription/promo/redeem
+// crashed with "relation does not exist" on a fresh database.
+//
+// Schema matches admin-dashboard/server.js exactly so both initializers
+// converge on the same shape regardless of which one runs first.
+async function initPromoTables() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS promo_codes (
+      id SERIAL PRIMARY KEY,
+      code VARCHAR(50) NOT NULL UNIQUE,
+      type VARCHAR(20) DEFAULT 'discount',
+      discount_percent INTEGER DEFAULT 0,
+      discount_fixed DECIMAL(10,2) DEFAULT 0,
+      tier_slug VARCHAR(30),
+      grant_days INTEGER DEFAULT 0,
+      max_redemptions INTEGER,
+      times_used INTEGER DEFAULT 0,
+      expires_at TIMESTAMP,
+      is_active BOOLEAN DEFAULT TRUE,
+      min_account_age_days INTEGER,
+      max_account_age_days INTEGER,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    );
+  `);
+
+  // Catch up legacy installs where the table exists from an older
+  // admin-dashboard but is missing the newer columns.
+  await pool.query(`
+    DO $$ BEGIN
+      IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'promo_codes') THEN
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='promo_codes' AND column_name='type') THEN
+          ALTER TABLE promo_codes ADD COLUMN type VARCHAR(20) DEFAULT 'discount';
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='promo_codes' AND column_name='tier_slug') THEN
+          ALTER TABLE promo_codes ADD COLUMN tier_slug VARCHAR(30);
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='promo_codes' AND column_name='grant_days') THEN
+          ALTER TABLE promo_codes ADD COLUMN grant_days INTEGER DEFAULT 0;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='promo_codes' AND column_name='min_account_age_days') THEN
+          ALTER TABLE promo_codes ADD COLUMN min_account_age_days INTEGER;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='promo_codes' AND column_name='max_account_age_days') THEN
+          ALTER TABLE promo_codes ADD COLUMN max_account_age_days INTEGER;
+        END IF;
+      END IF;
+    END $$;
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS promo_redemptions (
+      id SERIAL PRIMARY KEY,
+      promo_id INTEGER NOT NULL REFERENCES promo_codes(id) ON DELETE CASCADE,
+      store_id INTEGER NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      tier_id INTEGER REFERENCES subscription_tiers(id) ON DELETE SET NULL,
+      starts_at TIMESTAMP DEFAULT NOW(),
+      expires_at TIMESTAMP,
+      status VARCHAR(20) DEFAULT 'active',
+      created_at TIMESTAMP DEFAULT NOW(),
+      UNIQUE(promo_id, store_id)
+    );
+  `);
+
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_promo_redemptions_store ON promo_redemptions(store_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_promo_redemptions_status ON promo_redemptions(status, expires_at);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_promo_codes_active ON promo_codes(is_active, expires_at);`);
+
+  console.log('✅ Promo tables initialized');
+}
+
+module.exports = {
+  initInventoryTables,
+  initAuthTables,
+  initSubscriptionTables,
+  initChatTables,
+  initSupportTables,
+  initSponsoredProductTables,
+  initPromoTables,
+};

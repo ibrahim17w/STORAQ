@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../lang/translations.dart';
 import '../theme_provider.dart';
 
 class ThemeToggle extends StatelessWidget {
@@ -22,7 +23,7 @@ class ThemeToggle extends StatelessWidget {
         }
         return IconButton(
           icon: Icon(icon),
-          tooltip: 'Toggle theme',
+          tooltip: t('toggle_theme'),
           onPressed: () {
             ThemeMode next;
             switch (mode) {
