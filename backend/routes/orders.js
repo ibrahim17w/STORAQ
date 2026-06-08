@@ -5,7 +5,16 @@ const router = express.Router();
 const { pool } = require('../config/database');
 const { authenticateToken, optionalAuth, requireRealUser, attachStoreContext, requireStoreAccess, requireStoreOwner } = require('../middleware/auth');
 const { schemas, validate, validateQuery } = require('../middleware/validation');
-const { sanitizeString, getPagination, getBaseUrl } = require('../middleware/helpers');
+const { sanitizeString, getPagination, getBaseUrl, assertMoneyLimit } = require('../middleware/helpers');
+
+function redactOrderForStore(order) {
+  if (!order) return order;
+  const sanitized = { ...order };
+  if (sanitized.customer_user_id != null) {
+    sanitized.customer_phone = null;
+  }
+  return sanitized;
+}
 
 function generateReceiptNumber() {
   const now = new Date();
@@ -55,6 +64,8 @@ router.post('/checkout', authenticateToken, requireRealUser, attachStoreContext,
 
       const unitPrice = parseFloat(product.rows[0].price);
       const itemTotal = unitPrice * item.quantity;
+      assertMoneyLimit(unitPrice, 'Product price');
+      assertMoneyLimit(itemTotal, 'Line total');
       total += itemTotal;
 
       validatedItems.push({
@@ -65,6 +76,8 @@ router.post('/checkout', authenticateToken, requireRealUser, attachStoreContext,
         product_name: product.rows[0].name
       });
     }
+
+    assertMoneyLimit(total, 'Order total');
 
     // Get cashier name for receipt (survives account deletion)
     const cashierResult = await client.query(
@@ -182,7 +195,7 @@ router.get('/orders', authenticateToken, requireRealUser, attachStoreContext, re
     );
 
     res.json({
-      data: result.rows,
+      data: result.rows.map(redactOrderForStore),
       pagination: { page, limit, total, total_pages: Math.ceil(total / limit) }
     });
   } catch (err) {
@@ -211,7 +224,10 @@ router.get('/orders/:id', authenticateToken, requireRealUser, attachStoreContext
       [req.params.id]
     );
 
-    res.json({ order: orderResult.rows[0], items: itemsResult.rows });
+    res.json({
+      order: redactOrderForStore(orderResult.rows[0]),
+      items: itemsResult.rows,
+    });
   } catch (err) {
     res.status(500).json({ error: 'Failed to load order' });
   }
@@ -263,6 +279,8 @@ router.post('/orders', authenticateToken, requireRealUser, attachStoreContext, r
 
       const unitPrice = parseFloat(row.price) || 0;
       const lineTotal = unitPrice * qty;
+      assertMoneyLimit(unitPrice, 'Product price');
+      assertMoneyLimit(lineTotal, 'Line total');
       subtotal += lineTotal;
 
       // Display values are currency-conversion snapshots the client uses
@@ -300,6 +318,8 @@ router.post('/orders', authenticateToken, requireRealUser, attachStoreContext, r
     // Client-sent subtotal/total are ignored on purpose.
     const finalSubtotal = subtotal;
     const finalTotal = Math.max(0, finalSubtotal - discount + tax);
+    assertMoneyLimit(finalSubtotal, 'Order subtotal');
+    assertMoneyLimit(finalTotal, 'Order total');
 
     let receiptNumber = generateReceiptNumber();
     const requestedReceipt = req.validatedBody.receipt_number?.trim();
@@ -377,11 +397,13 @@ router.post('/orders', authenticateToken, requireRealUser, attachStoreContext, r
     }
 
     await client.query('COMMIT');
-    res.status(201).json(orderResult.rows[0]);
+    res.status(201).json(redactOrderForStore(orderResult.rows[0]));
   } catch (err) {
     await client.query('ROLLBACK');
     console.error('Checkout error:', err);
-    res.status(500).json({ error: 'Checkout failed. Please try again.' });
+    const message = err.message || 'Checkout failed. Please try again.';
+    const status = message.includes('too large') ? 400 : 500;
+    res.status(status).json({ error: message });
   } finally {
     client.release();
   }

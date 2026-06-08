@@ -10,6 +10,8 @@ class Store {
   final String? city;
   @JsonKey(name: 'city_id')
   final String? cityId;
+  @JsonKey(name: 'city_display_names')
+  final Map<String, dynamic>? cityDisplayNames;
   final String? village;
   @JsonKey(name: 'village_id')
   final String? villageId;
@@ -50,6 +52,7 @@ class Store {
     this.name,
     this.city,
     this.cityId,
+    this.cityDisplayNames,
     this.village,
     this.villageId,
     this.country,

@@ -2,6 +2,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import '../lang/translations.dart';
 import '../services/chat_service.dart';
+import '../widgets/cached_image.dart';
+import '../widgets/report_dialog.dart';
 
 class ChatScreen extends StatefulWidget {
   final Map<String, dynamic> conversation;
@@ -66,6 +68,18 @@ class _ChatScreenState extends State<ChatScreen> {
     } catch (_) {
       if (!silent && mounted) setState(() => _loading = false);
     }
+  }
+
+  Future<void> _reportConversation() async {
+    if (_conversationId <= 0) return;
+    final storeId = (widget.conversation['store_id'] as num?)?.toInt();
+    await showContentReportDialog(
+      context,
+      targetType: 'chat',
+      targetId: _conversationId,
+      storeId: storeId,
+      title: t('report_chat') ?? 'Report conversation',
+    );
   }
 
   Future<void> _confirmDeleteConversation() async {
@@ -141,6 +155,11 @@ class _ChatScreenState extends State<ChatScreen> {
         title: Text(_title),
         actions: [
           IconButton(
+            icon: const Icon(Icons.flag_outlined),
+            tooltip: t('report') ?? 'Report',
+            onPressed: _reportConversation,
+          ),
+          IconButton(
             icon: const Icon(Icons.delete_outline),
             tooltip: t('delete') ?? 'Delete',
             onPressed: _confirmDeleteConversation,
@@ -171,57 +190,93 @@ class _ChatScreenState extends State<ChatScreen> {
                           final isMine = m['is_mine'] == true;
                           final createdAt =
                               m['created_at']?.toString() ?? '';
+                          final avatarUrl = m['avatar_url']?.toString();
 
-                          return Align(
-                            alignment: isMine
-                                ? Alignment.centerRight
-                                : Alignment.centerLeft,
-                            child: Container(
-                              margin: const EdgeInsets.only(bottom: 10),
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 14,
-                                vertical: 10,
-                              ),
-                              constraints: BoxConstraints(
-                                maxWidth:
-                                    MediaQuery.sizeOf(context).width * 0.78,
-                              ),
-                              decoration: BoxDecoration(
-                                color: isMine
-                                    ? theme.colorScheme.primaryContainer
-                                        .withValues(alpha: 0.55)
-                                    : theme.colorScheme.surfaceContainerHighest,
-                                borderRadius: BorderRadius.circular(14),
-                              ),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  if (displayName.isNotEmpty && !isMine)
-                                    Text(
-                                      displayName,
+                          final bubble = Container(
+                            margin: const EdgeInsets.only(bottom: 10),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 14,
+                              vertical: 10,
+                            ),
+                            constraints: BoxConstraints(
+                              maxWidth:
+                                  MediaQuery.sizeOf(context).width * 0.65,
+                            ),
+                            decoration: BoxDecoration(
+                              color: isMine
+                                  ? theme.colorScheme.primaryContainer
+                                      .withValues(alpha: 0.55)
+                                  : theme.colorScheme.surfaceContainerHighest,
+                              borderRadius: BorderRadius.circular(14),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                if (displayName.isNotEmpty && !isMine)
+                                  Text(
+                                    displayName,
+                                    style: theme.textTheme.labelSmall
+                                        ?.copyWith(
+                                      fontWeight: FontWeight.w700,
+                                      color: theme.colorScheme.primary,
+                                    ),
+                                  ),
+                                Text(body),
+                                if (createdAt.isNotEmpty)
+                                  Padding(
+                                    padding: const EdgeInsets.only(top: 4),
+                                    child: Text(
+                                      createdAt.length > 16
+                                          ? createdAt.substring(0, 16)
+                                          : createdAt,
                                       style: theme.textTheme.labelSmall
                                           ?.copyWith(
-                                        fontWeight: FontWeight.w700,
-                                        color: theme.colorScheme.primary,
+                                        color: theme
+                                            .colorScheme.onSurfaceVariant,
                                       ),
                                     ),
-                                  Text(body),
-                                  if (createdAt.isNotEmpty)
-                                    Padding(
-                                      padding: const EdgeInsets.only(top: 4),
-                                      child: Text(
-                                        createdAt.length > 16
-                                            ? createdAt.substring(0, 16)
-                                            : createdAt,
-                                        style: theme.textTheme.labelSmall
-                                            ?.copyWith(
-                                          color: theme
-                                              .colorScheme.onSurfaceVariant,
-                                        ),
-                                      ),
+                                  ),
+                              ],
+                            ),
+                          );
+
+                          final avatar = CircleAvatar(
+                            radius: 16,
+                            backgroundColor:
+                                theme.colorScheme.primaryContainer,
+                            child: avatarUrl != null && avatarUrl.isNotEmpty
+                                ? ClipOval(
+                                    child: CachedAppImage(
+                                      imageUrl: avatarUrl,
+                                      width: 32,
+                                      height: 32,
+                                      fit: BoxFit.cover,
+                                      memCacheWidth: 64,
                                     ),
+                                  )
+                                : Icon(
+                                    Icons.person_outline,
+                                    size: 18,
+                                    color: theme.colorScheme.primary,
+                                  ),
+                          );
+
+                          return Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 2),
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisAlignment: isMine
+                                  ? MainAxisAlignment.end
+                                  : MainAxisAlignment.start,
+                              children: [
+                                if (!isMine) ...[
+                                  avatar,
+                                  const SizedBox(width: 8),
                                 ],
-                              ),
+                                Flexible(child: bubble),
+                                if (isMine) const SizedBox(width: 8),
+                                if (isMine) avatar,
+                              ],
                             ),
                           );
                         },

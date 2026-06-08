@@ -23,6 +23,8 @@ import '../services/offline_service.dart';
 import '../services/currency_service.dart';
 import '../utils/order_price_helper.dart';
 import '../utils/store_qr_helper.dart';
+import '../utils/location_display_helper.dart';
+import '../providers/locale_provider.dart';
 import '../models/models.dart';
 
 class ReceiptScreen extends ConsumerStatefulWidget {
@@ -39,6 +41,7 @@ class _ReceiptScreenState extends ConsumerState<ReceiptScreen> {
   Map<String, dynamic>? _store;
   Map<String, dynamic>? _settings;
   bool _loading = true;
+  String _displayStoreAddress = '';
 
   // Currency settings (display currency + exchange rates) for converting the
   // receipt into the store's display currency. Loaded in the background.
@@ -76,12 +79,40 @@ class _ReceiptScreenState extends ConsumerState<ReceiptScreen> {
   @override
   void initState() {
     super.initState();
+    localeNotifier.addListener(_onLocaleChanged);
     if (widget.offlineOrder != null) {
       _loadOffline();
     } else {
       _loadOnline();
     }
     _loadCurrencySettings();
+  }
+
+  @override
+  void dispose() {
+    localeNotifier.removeListener(_onLocaleChanged);
+    super.dispose();
+  }
+
+  void _onLocaleChanged() {
+    _resolveStoreAddress();
+  }
+
+  void _applyStore(Map<String, dynamic>? store) {
+    if (!mounted) return;
+    setState(() {
+      _store = store;
+      _displayStoreAddress = LocationDisplayHelper.localizedStoreCity(store);
+    });
+    _resolveStoreAddress();
+  }
+
+  Future<void> _resolveStoreAddress() async {
+    final store = _store;
+    if (store == null) return;
+    final resolved = await LocationDisplayHelper.resolveStoreAddress(store);
+    if (!mounted || store != _store || resolved.isEmpty) return;
+    setState(() => _displayStoreAddress = resolved);
   }
 
   Future<void> _loadCurrencySettings() async {
@@ -136,7 +167,7 @@ class _ReceiptScreenState extends ConsumerState<ReceiptScreen> {
       } catch (_) {}
 
       if (mounted && store != null) {
-        setState(() => _store = store);
+        _applyStore(store);
       }
       if (mounted && settings != null) {
         setState(() => _settings = settings);
@@ -164,7 +195,6 @@ class _ReceiptScreenState extends ConsumerState<ReceiptScreen> {
       if (mounted) {
         setState(() {
           _order = flattenedOrder;
-          _store = store ?? {'name': t('my_store') ?? 'My Store'};
           _settings =
               settings ??
               {
@@ -176,6 +206,7 @@ class _ReceiptScreenState extends ConsumerState<ReceiptScreen> {
               };
           _loading = false;
         });
+        _applyStore(store ?? {'name': t('my_store') ?? 'My Store'});
       }
     } catch (e) {
       // Server failed — try to find this order in offline orders
@@ -387,25 +418,6 @@ class _ReceiptScreenState extends ConsumerState<ReceiptScreen> {
     return computed;
   }
 
-  String _translatedAddress(String? raw) {
-    if (raw == null || raw.isEmpty) return '';
-    String result = raw;
-    final replacements = {
-      'Governorate': t('governorate') ?? 'Governorate',
-      'District': t('district') ?? 'District',
-      'Subdistrict': t('subdistrict') ?? 'Subdistrict',
-      'Syria': t('syria') ?? 'Syria',
-      'governorate': t('governorate') ?? 'governorate',
-      'district': t('district') ?? 'district',
-      'subdistrict': t('subdistrict') ?? 'subdistrict',
-      'syria': t('syria') ?? 'syria',
-    };
-    replacements.forEach((en, tr) {
-      result = result.replaceAll(en, tr);
-    });
-    return result;
-  }
-
   // ==================== PDF CAPTURE ====================
 
   Future<Uint8List> _captureReceiptImage() async {
@@ -554,6 +566,9 @@ class _ReceiptScreenState extends ConsumerState<ReceiptScreen> {
         _order?['cashier']?.toString() ??
         _order?['cashier_id']?.toString() ??
         t('unknown');
+    final storeAddress = _displayStoreAddress.isNotEmpty
+        ? _displayStoreAddress
+        : LocationDisplayHelper.localizedStoreCity(_store);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -582,10 +597,10 @@ class _ReceiptScreenState extends ConsumerState<ReceiptScreen> {
           textAlign: TextAlign.center,
         ),
 
-        // City / address (translated)
-        if (_store?['city'] != null)
+        // City / address (localized for viewer language)
+        if (storeAddress.isNotEmpty)
           Text(
-            _translatedAddress(_store!['city'].toString()),
+            storeAddress,
             style: theme.textTheme.bodySmall?.copyWith(
               color: theme.colorScheme.onSurfaceVariant,
             ),

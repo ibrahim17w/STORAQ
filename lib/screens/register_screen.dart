@@ -5,7 +5,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:latlong2/latlong.dart';
-import '../data/countries.dart';
+import '../data/country_iso_codes.dart';
+import '../data/country_localizations.dart';
 import '../services/api_service.dart';
 import '../widgets/gradient_button.dart';
 import '../widgets/theme_toggle.dart';
@@ -14,6 +15,7 @@ import '../widgets/turnstile_widget.dart';
 import '../providers/locale_provider.dart';
 import '../providers/auth_provider.dart';
 import '../lang/translations.dart';
+import '../lang/legal_policies.dart';
 import 'login_screen.dart';
 import 'map_picker_screen.dart';
 import '../utils/error_mapper.dart';
@@ -242,7 +244,7 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
           final parts = _selectedCityId?.split('-');
           if (parts != null && parts.isNotEmpty) {
             final cc = parts[0].toUpperCase();
-            if (countries.contains(cc)) {
+            if (countryIsoCodes.contains(cc)) {
               _selectedCountry = cc;
             }
           }
@@ -281,7 +283,7 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
       _storeLngCtrl.text = result['lng']?.toString() ?? '';
       _geocodeResults = [];
       final cc = result['country_code']?.toString().toUpperCase();
-      if (cc != null && countries.contains(cc)) {
+      if (cc != null && countryIsoCodes.contains(cc)) {
         _selectedCountry = cc;
       }
     });
@@ -434,21 +436,20 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
 
     Map<String, dynamic>? storeData;
     if (_selectedRole == 'store_owner') {
+      final countryCode = CountryLocalizations.resolveCode(_selectedCountry);
       storeData = {
         'name': _storeNameCtrl.text.trim(),
         'city': _storeCityCtrl.text.trim(),
         'location_description': _storeVillageCtrl.text.trim().isNotEmpty
             ? _storeVillageCtrl.text.trim()
             : null,
-        'country': _selectedCountry,
+        'country': countryCode ?? _selectedCountry,
         'phone': _storePhoneCtrl.text.trim(),
         'lat': double.tryParse(_storeLatCtrl.text.trim()),
         'lng': double.tryParse(_storeLngCtrl.text.trim()),
         // NEW: canonical IDs for multilingual matching
         'city_id': _selectedCityId,
-        'country_code': _selectedCountry != null
-            ? _selectedCountry!.toLowerCase()
-            : null,
+        'country_code': countryCode?.toLowerCase(),
       };
     }
 
@@ -669,17 +670,67 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
     );
   }
 
-  void _showTermsDialog() {
+  void _showPolicyDocument(String docKey) {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text(t('terms_of_use_title')),
+        title: Text(t('${docKey}_title')),
         content: SizedBox(
           width: double.maxFinite,
           child: SingleChildScrollView(
             child: Text(
-              t('terms_of_use_content'),
+              t('${docKey}_content'),
               style: const TextStyle(fontSize: 13, height: 1.6),
+            ),
+          ),
+        ),
+        actions: [
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text(t('done')),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showTermsDialog() {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(t('legal_documents_title')),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  t('terms_of_use_content'),
+                  style: const TextStyle(fontSize: 13, height: 1.6),
+                ),
+                const SizedBox(height: 16),
+                ...legalPolicyDocKeys.map(
+                  (key) => Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: InkWell(
+                      onTap: () {
+                        Navigator.pop(ctx);
+                        _showPolicyDocument(key);
+                      },
+                      child: Text(
+                        t('${key}_title'),
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: Theme.of(ctx).colorScheme.primary,
+                          decoration: TextDecoration.underline,
+                          decorationColor: Theme.of(ctx).colorScheme.primary,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
         ),
@@ -1431,80 +1482,31 @@ class _SearchableCountryFieldState extends State<_SearchableCountryField> {
   bool _isOpen = false;
   List<String> _filtered = [];
 
-  // Common names so users can type "syr" / "syria" and find SY
-  static const Map<String, String> _countryNames = {
-    'AF': 'Afghanistan',
-    'AL': 'Albania',
-    'DZ': 'Algeria',
-    'AR': 'Argentina',
-    'AU': 'Australia',
-    'AT': 'Austria',
-    'BD': 'Bangladesh',
-    'BE': 'Belgium',
-    'BR': 'Brazil',
-    'CA': 'Canada',
-    'CN': 'China',
-    'CO': 'Colombia',
-    'EG': 'Egypt',
-    'FR': 'France',
-    'DE': 'Germany',
-    'GR': 'Greece',
-    'IN': 'India',
-    'ID': 'Indonesia',
-    'IR': 'Iran',
-    'IQ': 'Iraq',
-    'IE': 'Ireland',
-    'IT': 'Italy',
-    'JP': 'Japan',
-    'JO': 'Jordan',
-    'KW': 'Kuwait',
-    'LB': 'Lebanon',
-    'LY': 'Libya',
-    'MY': 'Malaysia',
-    'MX': 'Mexico',
-    'MA': 'Morocco',
-    'NL': 'Netherlands',
-    'NZ': 'New Zealand',
-    'NG': 'Nigeria',
-    'PK': 'Pakistan',
-    'PS': 'Palestine',
-    'PE': 'Peru',
-    'PH': 'Philippines',
-    'PL': 'Poland',
-    'QA': 'Qatar',
-    'RU': 'Russia',
-    'SA': 'Saudi Arabia',
-    'SG': 'Singapore',
-    'ZA': 'South Africa',
-    'KR': 'South Korea',
-    'ES': 'Spain',
-    'SE': 'Sweden',
-    'CH': 'Switzerland',
-    'SY': 'Syria',
-    'TW': 'Taiwan',
-    'TH': 'Thailand',
-    'TN': 'Tunisia',
-    'TR': 'Turkey',
-    'UA': 'Ukraine',
-    'AE': 'United Arab Emirates',
-    'GB': 'United Kingdom',
-    'US': 'United States',
-    'YE': 'Yemen',
-  };
-
   @override
   void initState() {
     super.initState();
-    _filtered = countries;
-    if (widget.value != null) _controller.text = widget.value!;
+    _filtered = countryIsoCodes;
+    _syncControllerText();
     _focusNode.addListener(_onFocusChange);
+    localeNotifier.addListener(_onLocaleChanged);
+  }
+
+  void _onLocaleChanged() {
+    if (!mounted || _focusNode.hasFocus) return;
+    setState(_syncControllerText);
+  }
+
+  void _syncControllerText() {
+    if (widget.value != null) {
+      _controller.text = CountryLocalizations.name(widget.value);
+    }
   }
 
   void _onFocusChange() {
     if (_focusNode.hasFocus) {
       setState(() {
         _isOpen = true;
-        _filtered = countries;
+        _filtered = countryIsoCodes;
       });
     } else {
       // Slight delay so a tap on a dropdown item registers before closing
@@ -1521,7 +1523,8 @@ class _SearchableCountryFieldState extends State<_SearchableCountryField> {
     super.didUpdateWidget(oldWidget);
     if (widget.value != oldWidget.value) {
       if (widget.value != null) {
-        if (_controller.text != widget.value) _controller.text = widget.value!;
+        final display = CountryLocalizations.name(widget.value);
+        if (_controller.text != display) _controller.text = display;
       } else {
         _controller.clear();
       }
@@ -1531,20 +1534,18 @@ class _SearchableCountryFieldState extends State<_SearchableCountryField> {
   void _filter(String query) {
     setState(() {
       if (query.isEmpty) {
-        _filtered = countries;
+        _filtered = countryIsoCodes;
       } else {
-        final q = query.toLowerCase();
-        _filtered = countries.where((c) {
-          final name = _countryNames[c.toUpperCase()]?.toLowerCase() ?? '';
-          return c.toLowerCase().contains(q) || name.contains(q);
-        }).toList();
+        _filtered = countryIsoCodes
+            .where((code) => CountryLocalizations.matchesQuery(code, query))
+            .toList();
       }
       _isOpen = true;
     });
   }
 
   void _select(String country) {
-    _controller.text = country;
+    _controller.text = CountryLocalizations.name(country);
     widget.onChanged(country);
     setState(() => _isOpen = false);
     _focusNode.unfocus();
@@ -1561,6 +1562,7 @@ class _SearchableCountryFieldState extends State<_SearchableCountryField> {
 
   @override
   void dispose() {
+    localeNotifier.removeListener(_onLocaleChanged);
     _controller.dispose();
     _focusNode.removeListener(_onFocusChange);
     _focusNode.dispose();
@@ -1645,7 +1647,7 @@ class _SearchableCountryFieldState extends State<_SearchableCountryField> {
                             style: const TextStyle(fontSize: 20),
                           ),
                           title: Text(
-                            '${_countryNames[country.toUpperCase()] ?? country} ($country)',
+                            '${CountryLocalizations.name(country)} ($country)',
                             style: TextStyle(
                               fontWeight: isSelected
                                   ? FontWeight.bold

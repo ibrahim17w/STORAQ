@@ -95,11 +95,24 @@ function campaignMatchesViewer(campaign, viewer) {
     }
     if (stringsMatch(viewer.city, campaign.target_city)) return true;
     if (stringsMatch(viewer.city, campaign.store_city)) return true;
+    // Fall back to country alignment so a city campaign still shows to
+    // viewers in the same country until we know their exact city.
+    if (!viewer.city && !viewer.city_id) {
+      if (countryCodesMatch(viewer.country_code, campaign.target_country_code))
+        return true;
+      if (stringsMatch(viewer.country, campaign.target_country)) return true;
+      if (stringsMatch(viewer.country, campaign.store_country)) return true;
+    }
     return false;
   }
 
   if (scope === 'village') {
-    return stringsMatch(viewer.village, campaign.target_village);
+    if (stringsMatch(viewer.village, campaign.target_village)) return true;
+    if (!viewer.village) {
+      if (stringsMatch(viewer.city, campaign.target_city)) return true;
+      if (stringsMatch(viewer.city, campaign.store_city)) return true;
+    }
+    return false;
   }
 
   if (scope === 'radius') {

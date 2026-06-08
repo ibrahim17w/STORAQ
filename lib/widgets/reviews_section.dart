@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../lang/translations.dart';
+import '../utils/error_mapper.dart';
 import '../providers/auth_provider.dart';
 import '../services/review_service.dart';
 import '../services/support_service.dart';
@@ -297,9 +298,22 @@ class _ReviewsSectionState extends ConsumerState<ReviewsSection> {
                 ),
               )
             else if (_error != null)
-              Text(
-                _error!,
-                style: TextStyle(color: theme.colorScheme.error, fontSize: 13),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    mapBackendError(_error!),
+                    style: TextStyle(
+                      color: theme.colorScheme.error,
+                      fontSize: 13,
+                    ),
+                  ),
+                  TextButton.icon(
+                    onPressed: _load,
+                    icon: const Icon(Icons.refresh, size: 16),
+                    label: Text(t('refresh') ?? 'Refresh'),
+                  ),
+                ],
               )
             else ...[
               if (_data!.reviews.isEmpty)

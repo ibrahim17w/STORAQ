@@ -22,7 +22,9 @@ class _SponsorProductScreenState extends ConsumerState<SponsorProductScreen> {
   Map<String, dynamic>? _pricingData;
   Map<String, dynamic>? _quote;
   Map<String, dynamic>? _paymentRates;
+  Map<String, dynamic>? _sponsorshipStatus;
   bool _loading = true;
+  bool _statusLoading = true;
   bool _quoting = false;
   bool _requesting = false;
   String? _error;
@@ -49,6 +51,7 @@ class _SponsorProductScreenState extends ConsumerState<SponsorProductScreen> {
           _pricingData = data;
           _paymentRates = data['payment_rates'] as Map<String, dynamic>?;
         });
+        await _loadSponsorshipStatus();
         await _refreshQuote();
       }
     } catch (e) {
@@ -59,6 +62,54 @@ class _SponsorProductScreenState extends ConsumerState<SponsorProductScreen> {
   }
 
   int get _productId => widget.product['id'] as int;
+
+  Future<void> _loadSponsorshipStatus() async {
+    if (mounted) setState(() => _statusLoading = true);
+    try {
+      final data = await SponsoredProductsService.getMyCampaigns();
+      final campaigns = (data['campaigns'] as List<dynamic>? ?? [])
+          .cast<Map<String, dynamic>>();
+      final pending = (data['pending_payments'] as List<dynamic>? ?? [])
+          .cast<Map<String, dynamic>>();
+
+      final activeForProduct = campaigns.where((c) {
+        final pid = c['product_id'];
+        if (pid != _productId) return false;
+        if ((c['status']?.toString() ?? '') != 'active') return false;
+        final expiresAt =
+            DateTime.tryParse(c['expires_at']?.toString() ?? '');
+        return expiresAt != null && expiresAt.isAfter(DateTime.now());
+      }).toList();
+      final pendingForProduct = pending.where((p) {
+        final pid = p['product_id'];
+        return pid == _productId;
+      }).toList();
+
+      activeForProduct.sort(
+        (a, b) => (b['expires_at']?.toString() ?? '')
+            .compareTo(a['expires_at']?.toString() ?? ''),
+      );
+      pendingForProduct.sort(
+        (a, b) => (b['created_at']?.toString() ?? '')
+            .compareTo(a['created_at']?.toString() ?? ''),
+      );
+
+      if (!mounted) return;
+      setState(() {
+        _sponsorshipStatus = {
+          'active': activeForProduct.isNotEmpty ? activeForProduct.first : null,
+          'pending': pendingForProduct.isNotEmpty ? pendingForProduct.first : null,
+        };
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _sponsorshipStatus = null;
+      });
+    } finally {
+      if (mounted) setState(() => _statusLoading = false);
+    }
+  }
 
   Future<void> _refreshQuote() async {
     setState(() => _quoting = true);
@@ -91,7 +142,23 @@ class _SponsorProductScreenState extends ConsumerState<SponsorProductScreen> {
         durationDays: _durationDays,
         radiusKm: _scopeType == 'radius' ? _radiusKm : null,
       );
-      if (mounted) _showPaymentDialog(result);
+      if (mounted) {
+        final payment = result['payment'] as Map<String, dynamic>? ?? {};
+        setState(() {
+          _sponsorshipStatus = {
+            'active': _sponsorshipStatus?['active'],
+            'pending': payment,
+          };
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(t('sponsorship_pending')),
+            backgroundColor: Colors.orange.shade700,
+          ),
+        );
+        _showPaymentDialog(result);
+      }
+      await _loadSponsorshipStatus();
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -212,16 +279,78 @@ class _SponsorProductScreenState extends ConsumerState<SponsorProductScreen> {
     }
   }
 
+  Widget _buildSponsorshipStatusCard(ThemeData theme) {
+    if (_statusLoading) {
+      return const Card(
+        child: Padding(
+          padding: EdgeInsets.all(12),
+          child: SizedBox(
+            height: 18,
+            width: 18,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+        ),
+      );
+    }
+    final active = _sponsorshipStatus?['active'] as Map<String, dynamic>?;
+    final pending = _sponsorshipStatus?['pending'] as Map<String, dynamic>?;
+    if (active == null && pending == null) return const SizedBox.shrink();
+
+    if (active != null) {
+      final scope = active['scope_type']?.toString() ?? '';
+      final expires = active['expires_at']?.toString() ?? '';
+      return Card(
+        color: Colors.green.withValues(alpha: 0.08),
+        child: ListTile(
+          leading: const Icon(Icons.verified_rounded, color: Colors.green),
+          title: Text(t('sponsorship_approved')),
+          subtitle: Text(
+            '${t('sponsored_scope')}: ${_scopeLabel(scope)}'
+            '${expires.isNotEmpty ? ' • ${t('expires')}: ${expires.substring(0, expires.length >= 10 ? 10 : expires.length)}' : ''}',
+          ),
+        ),
+      );
+    }
+
+    final scope = pending?['scope_type']?.toString() ?? '';
+    final refCode = pending?['reference_code']?.toString() ?? '';
+    return Card(
+      color: Colors.amber.withValues(alpha: 0.12),
+      child: ListTile(
+        leading: Icon(Icons.hourglass_top_rounded, color: Colors.amber.shade800),
+        title: Text(t('sponsorship_pending')),
+        subtitle: Text(
+          '${t('sponsored_scope')}: ${_scopeLabel(scope)}'
+          '${refCode.isNotEmpty ? ' • ${t('reference_code')}: $refCode' : ''}',
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final productName = widget.product['name']?.toString() ?? '';
     final pricing = (_pricingData?['pricing'] as List<dynamic>?) ?? [];
     final amount = _quote?['amount_usd'];
+    final hasActive = _sponsorshipStatus?['active'] != null;
+    final hasPending = _sponsorshipStatus?['pending'] != null;
 
     return Scaffold(
       appBar: AppBar(
         title: Text(t('sponsor_product') ?? 'Sponsor Product'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            tooltip: t('refresh') ?? 'Refresh',
+            onPressed: _loading
+                ? null
+                : () async {
+                    await _loadSponsorshipStatus();
+                    await _refreshQuote();
+                  },
+          ),
+        ],
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
@@ -248,6 +377,8 @@ class _SponsorProductScreenState extends ConsumerState<SponsorProductScreen> {
                         ),
                       ),
                     ),
+                    const SizedBox(height: 8),
+                    _buildSponsorshipStatusCard(theme),
                     const SizedBox(height: 16),
                     Text(
                       t('sponsor_audience') ?? 'Who should see this?',
@@ -379,15 +510,33 @@ class _SponsorProductScreenState extends ConsumerState<SponsorProductScreen> {
                     ),
                     const SizedBox(height: 16),
                     FilledButton.icon(
-                      onPressed: (_requesting || _quoting || amount == null) ? null : _requestPayment,
+                      onPressed: (_requesting ||
+                              _quoting ||
+                              amount == null ||
+                              hasActive ||
+                              hasPending)
+                          ? null
+                          : _requestPayment,
                       icon: _requesting
                           ? const SizedBox(
                               width: 18,
                               height: 18,
                               child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
                             )
-                          : const Icon(Icons.campaign_outlined),
-                      label: Text(t('request_sponsorship') ?? 'Request Sponsorship'),
+                          : Icon(
+                              hasActive
+                                  ? Icons.verified_rounded
+                                  : hasPending
+                                      ? Icons.hourglass_top_rounded
+                                      : Icons.campaign_outlined,
+                            ),
+                      label: Text(
+                        hasActive
+                            ? t('sponsorship_approved')
+                            : hasPending
+                                ? t('sponsorship_pending')
+                                : (t('request_sponsorship') ?? 'Request Sponsorship'),
+                      ),
                     ),
                   ],
                 ),

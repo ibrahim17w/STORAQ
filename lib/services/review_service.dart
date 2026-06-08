@@ -102,7 +102,16 @@ class ReviewService {
       headers: await _authHeaders(),
     );
     if (response.statusCode != 200) {
-      throw Exception('Failed to load reviews');
+      String message = 'Failed to load reviews';
+      try {
+        final data = jsonDecode(response.body) as Map<String, dynamic>;
+        message = data['error']?.toString() ?? message;
+      } catch (_) {
+        if (response.statusCode == 404) {
+          message = 'Reviews endpoint not found';
+        }
+      }
+      throw Exception(message);
     }
     return ReviewsPayload.fromJson(
       type,

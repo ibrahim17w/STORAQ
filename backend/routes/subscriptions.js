@@ -14,6 +14,7 @@ const {
   getOnlineCount,
   enrichTiersWithPaymentPrices,
   invalidateActiveSubscription,
+  validateSubscriptionTierRequest,
 } = require('../services/subscription');
 
 // GET subscription status for current store
@@ -44,14 +45,21 @@ router.post('/my-store/subscription/request', authenticateToken, requireRealUser
     const storeId = req.storeContext.store_id;
     const { tier_id, payment_track } = req.validatedBody;
 
-    const tierResult = await pool.query(
-      `SELECT * FROM subscription_tiers WHERE id = $1 AND slug != 'free'`,
-      [tier_id]
-    );
-    if (tierResult.rows.length === 0) {
-      return res.status(400).json({ error: 'Invalid subscription tier' });
+    let tierRow;
+    try {
+      tierRow = await validateSubscriptionTierRequest(storeId, tier_id);
+    } catch (err) {
+      if (err.code) {
+        return res.status(err.status || 400).json({
+          error: err.code,
+          message: err.message,
+          pending_payment: err.pending_payment || undefined,
+          current_tier: err.current_tier || undefined,
+        });
+      }
+      throw err;
     }
-    const [tier] = await enrichTiersWithPaymentPrices(tierResult.rows);
+    const [tier] = await enrichTiersWithPaymentPrices([tierRow]);
 
     if (payment_track === 'syria_agent') {
       const referenceCode = generateReferenceCode(storeId);
@@ -115,7 +123,15 @@ router.get('/my-store/products/online-status', authenticateToken, requireRealUse
               c.radius_km AS sponsorship_radius_km,
               c.target_country AS sponsorship_target_country,
               c.target_city AS sponsorship_target_city,
-              c.target_village AS sponsorship_target_village
+              c.target_village AS sponsorship_target_village,
+              pay.id AS sponsorship_pending_id,
+              pay.scope_type AS sponsorship_pending_scope,
+              pay.radius_km AS sponsorship_pending_radius_km,
+              pay.target_country AS sponsorship_pending_target_country,
+              pay.target_city AS sponsorship_pending_target_city,
+              pay.target_village AS sponsorship_pending_target_village,
+              pay.reference_code AS sponsorship_pending_reference_code,
+              pay.created_at AS sponsorship_pending_created_at
        FROM products p
        LEFT JOIN LATERAL (
          SELECT id, scope_type, expires_at, radius_km,
@@ -127,6 +143,16 @@ router.get('/my-store/products/online-status', authenticateToken, requireRealUse
          ORDER BY expires_at DESC
          LIMIT 1
        ) c ON TRUE
+       LEFT JOIN LATERAL (
+         SELECT id, scope_type, radius_km,
+                target_country, target_city, target_village,
+                reference_code, created_at
+         FROM sponsored_product_payments
+         WHERE product_id = p.id
+           AND status = 'pending'
+         ORDER BY created_at DESC
+         LIMIT 1
+       ) pay ON TRUE
        WHERE p.store_id = $1
        ORDER BY p.is_online DESC, p.name ASC`,
       [storeId]
@@ -134,6 +160,13 @@ router.get('/my-store/products/online-status', authenticateToken, requireRealUse
     const rows = products.rows.map((row) => ({
       ...row,
       is_sponsored: row.sponsorship_id != null,
+      has_pending_sponsorship: row.sponsorship_pending_id != null,
+      sponsorship_state:
+        row.sponsorship_id != null
+          ? 'active'
+          : row.sponsorship_pending_id != null
+            ? 'pending'
+            : 'none',
     }));
     res.json({ ...status, products: rows });
   } catch (err) {

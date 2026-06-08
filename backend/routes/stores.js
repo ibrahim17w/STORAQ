@@ -255,7 +255,7 @@ router.get('/stores/:id', async (req, res) => {
 router.get('/my-store/staff', authenticateToken, requireRealUser, attachStoreContext, requireStoreOwner, async (req, res) => {
   try {
     const result = await pool.query(`
-      SELECT ss.id, ss.user_id, ss.can_manage_inventory, ss.status, ss.invited_at, ss.responded_at, u.full_name, u.email, u.phone
+      SELECT ss.id, ss.user_id, ss.can_manage_inventory, ss.status, ss.invited_at, ss.responded_at, u.full_name, u.email
       FROM store_staff ss
       JOIN users u ON ss.user_id = u.id
       WHERE ss.store_id = $1

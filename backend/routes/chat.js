@@ -9,16 +9,10 @@ const {
 } = require('../middleware/auth');
 const { sanitizeString } = require('../middleware/helpers');
 
-function maskCustomerLabel(fullName, customerId) {
-  if (!fullName || !String(fullName).trim()) {
-    return `Customer #${customerId}`;
-  }
-  const parts = String(fullName).trim().split(/\s+/);
-  const first = parts[0];
-  if (parts.length === 1) {
-    return first.length <= 1 ? 'Customer' : `${first.charAt(0)}***`;
-  }
-  return `${first} ${parts[parts.length - 1].charAt(0)}.`;
+function customerLabel(fullName, customerId) {
+  const trimmed = (fullName || '').toString().trim();
+  if (trimmed.length > 0) return trimmed;
+  return `Customer #${customerId}`;
 }
 
 function sanitizeConversation(row, viewer) {
@@ -41,22 +35,26 @@ function sanitizeConversation(row, viewer) {
 
   return {
     ...base,
-    customer_label: maskCustomerLabel(row.customer_full_name, row.customer_id),
+    customer_id: row.customer_id,
+    customer_label: customerLabel(row.customer_full_name, row.customer_id),
+    customer_avatar_url: row.customer_avatar_url || null,
   };
 }
 
 function sanitizeMessage(row, viewer, storeName) {
   const isMine = row.sender_id === viewer.userId;
-  let displayName = 'User';
+  let displayName;
+  let avatarUrl = null;
 
   if (isMine) {
     displayName = viewer.isCustomer ? 'You' : 'Your store';
   } else if (viewer.isCustomer) {
     displayName = storeName || 'Store';
-  } else if (row.sender_role === 'customer' || row.customer_id === row.sender_id) {
-    displayName = maskCustomerLabel(row.sender_full_name, row.customer_id);
+    avatarUrl = row.store_image_url || null;
   } else {
-    displayName = storeName || 'Store';
+    // Store side sees the real customer name + avatar — no masking.
+    displayName = customerLabel(row.sender_full_name, row.customer_id);
+    avatarUrl = row.sender_avatar_url || null;
   }
 
   return {
@@ -67,6 +65,8 @@ function sanitizeMessage(row, viewer, storeName) {
     read_at: row.read_at,
     is_mine: isMine,
     display_name: displayName,
+    avatar_url: avatarUrl,
+    sender_id: row.sender_id,
   };
 }
 
@@ -80,6 +80,7 @@ router.get('/chat/conversations', authenticateToken, requireRealUser, attachStor
       result = await pool.query(
         `SELECT c.id, c.store_id, c.customer_id, c.last_message_at, c.created_at,
                 u.full_name AS customer_full_name,
+                u.avatar_url AS customer_avatar_url,
                 s.name AS store_name,
                 (
                   SELECT body FROM chat_messages m
@@ -222,10 +223,13 @@ router.get('/chat/conversations/:id/messages', authenticateToken, requireRealUse
     let query = `
       SELECT m.*,
              u.full_name AS sender_full_name,
-             c.customer_id
+             u.avatar_url AS sender_avatar_url,
+             c.customer_id,
+             s.image_url AS store_image_url
       FROM chat_messages m
       JOIN users u ON u.id = m.sender_id
       JOIN chat_conversations c ON c.id = m.conversation_id
+      JOIN stores s ON s.id = c.store_id
       WHERE m.conversation_id = $1
     `;
     const params = [conversationId];

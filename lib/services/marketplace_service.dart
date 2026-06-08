@@ -10,13 +10,16 @@ class MarketplaceService {
       useCache: true,
     );
     if (response.statusCode == 200) {
-      final body = jsonDecode(response.body) as Map<String, dynamic>;
-      final items = body.containsKey('data')
-          ? body['data'] as List<dynamic>
-          : body as List<dynamic>? ?? [];
-      return items
-          .map((e) => Product.fromJson(e as Map<String, dynamic>))
-          .toList();
+      final decoded = jsonDecode(response.body);
+      final List<dynamic> items;
+      if (decoded is Map<String, dynamic>) {
+        items = decoded['data'] is List ? decoded['data'] as List<dynamic> : [];
+      } else if (decoded is List) {
+        items = decoded;
+      } else {
+        items = const [];
+      }
+      return _parseProducts(items);
     }
     throw Exception('Failed to load marketplace feed');
   }
@@ -94,6 +97,19 @@ class MarketplaceService {
     return [];
   }
 
+  static List<Product> _parseProducts(List<dynamic> items) {
+    final products = <Product>[];
+    for (final item in items) {
+      if (item is! Map) continue;
+      try {
+        products.add(
+          Product.fromJson(_normalizeProductJson(item)),
+        );
+      } catch (_) {}
+    }
+    return products;
+  }
+
   static Map<String, dynamic> _normalizeProductJson(dynamic raw) {
     final map = Map<String, dynamic>.from(raw as Map<String, dynamic>);
     final images = map['images'];
@@ -102,10 +118,14 @@ class MarketplaceService {
         final decoded = jsonDecode(images);
         if (decoded is List) {
           map['images'] = decoded.map((e) => e.toString()).toList();
+        } else {
+          map.remove('images');
         }
       } catch (_) {
         map.remove('images');
       }
+    } else if (images is List) {
+      map['images'] = images.map((e) => e.toString()).toList();
     }
     return map;
   }

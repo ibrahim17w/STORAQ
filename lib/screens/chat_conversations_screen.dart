@@ -163,18 +163,18 @@ class _ChatConversationsScreenState extends State<ChatConversationsScreen> {
                           final subtitle =
                               c['last_message']?.toString() ?? '';
                           final unread = (c['unread_count'] as num?)?.toInt() ?? 0;
-                          final imageUrl = c['store_image_url']?.toString();
                           final isStoreChat = c['store_name'] != null &&
                               c['customer_label'] == null;
+                          final imageUrl = isStoreChat
+                              ? c['store_image_url']?.toString()
+                              : c['customer_avatar_url']?.toString();
 
                           return ListTile(
                             onLongPress: () => _confirmDeleteConversation(c),
                             leading: CircleAvatar(
                               backgroundColor:
                                   theme.colorScheme.primaryContainer,
-                              child: isStoreChat &&
-                                      imageUrl != null &&
-                                      imageUrl.isNotEmpty
+                              child: imageUrl != null && imageUrl.isNotEmpty
                                   ? ClipOval(
                                       child: CachedAppImage(
                                         imageUrl: imageUrl,

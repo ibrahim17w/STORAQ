@@ -26,6 +26,7 @@ import '../services/order_service.dart';
 import '../services/store_catalog_service.dart';
 import '../services/currency_service.dart';
 import '../models/models.dart';
+import '../utils/cart_qr_helper.dart';
 
 class CartItem {
   final dynamic productId; // int for server products, String for pending
@@ -465,6 +466,154 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen>
     if (code != null) await _addByBarcode(code);
   }
 
+  Future<void> _scanCartQr() async {
+    final code = await Navigator.push<String>(
+      context,
+      MaterialPageRoute(builder: (_) => const BarcodeScannerScreen()),
+    );
+    if (code != null) await _importCartFromQr(code);
+  }
+
+  Map<String, dynamic>? _catalogProductForId(dynamic productId) {
+    for (final p in _allProducts) {
+      if (p is Map && p['id'] == productId) {
+        return Map<String, dynamic>.from(p);
+      }
+    }
+    return null;
+  }
+
+  String? _addProductToCartWithQuantity(
+    Map<String, dynamic> product,
+    int quantity, {
+    bool mergeExisting = true,
+  }) {
+    if (quantity < 1) return null;
+
+    final productId = product['id'];
+    final catalogProduct = _catalogProductForId(productId) ?? product;
+    final stock = (catalogProduct['quantity'] as num?)?.toInt() ?? 0;
+    final existing = _cart.indexWhere((c) => c.productId == productId);
+    final targetQty = mergeExisting && existing >= 0
+        ? _cart[existing].quantity + quantity
+        : quantity;
+
+    if (stock < 1) {
+      return '${catalogProduct['name'] ?? t('unknown_product')}: ${t('out_of_stock') ?? 'Out of stock'}';
+    }
+    if (targetQty > stock) {
+      return '${catalogProduct['name'] ?? t('unknown_product')}: ${t('insufficient_stock') ?? 'Insufficient stock'} ($stock ${t('in_stock') ?? 'in stock'})';
+    }
+
+    final info = CurrencyService.getProductDisplayInfo(
+      catalogProduct,
+      _currencySettings,
+    );
+    final displayUnit = info['display_price'] as double?;
+    final displayCurr = info['display_currency'] as String?;
+
+    if (existing >= 0) {
+      _cart.removeAt(existing);
+    }
+
+    _cart.add(
+      CartItem(
+        productId: productId,
+        name: catalogProduct['name']?.toString() ??
+            t('unknown_product') ??
+            'Unknown',
+        unitPrice: _parsePrice(catalogProduct['price']),
+        quantity: targetQty,
+        barcode: catalogProduct['barcode']?.toString(),
+        stock: stock,
+        currency: catalogProduct['currency']?.toString() ?? 'SYP',
+        displayPrice: displayUnit,
+        displayCurrency: displayCurr,
+      ),
+    );
+    return null;
+  }
+
+  Future<void> _importCartFromQr(String raw) async {
+    final payload = CartQrHelper.parse(raw);
+    if (payload == null) {
+      _showError(t('invalid_cart_qr') ?? 'Invalid cart QR code');
+      return;
+    }
+
+    if (_storeId == null) {
+      _showError(t('no_store_context') ?? 'No store context');
+      return;
+    }
+
+    if (payload.storeId != _storeId) {
+      _showError(
+        t('cart_qr_wrong_store') ??
+            'This cart belongs to another store and cannot be loaded here.',
+      );
+      return;
+    }
+
+    setState(() => _isLoading = true);
+    try {
+      if (ref.read(connectivityProvider).isOnline) {
+        await _refreshCatalog();
+      }
+
+      final errors = <String>[];
+      var imported = 0;
+
+      for (final line in payload.items) {
+        final product = _catalogProductForId(line.productId);
+        if (product == null) {
+          errors.add(
+            '${t('product_not_found') ?? 'Product not found'} (#${line.productId})',
+          );
+          continue;
+        }
+
+        final error = _addProductToCartWithQuantity(
+          product,
+          line.quantity,
+        );
+        if (error != null) {
+          errors.add(error);
+        } else {
+          imported += line.quantity;
+        }
+      }
+
+      if (!mounted) return;
+      setState(() {});
+
+      if (imported == 0) {
+        _showError(
+          errors.isNotEmpty
+              ? errors.join('\n')
+              : (t('cart_qr_import_failed') ?? 'Could not import cart items'),
+        );
+        return;
+      }
+
+      final message = errors.isEmpty
+          ? (t('cart_qr_imported') ??
+              'Imported $imported item(s) with current prices.')
+          : '${t('cart_qr_imported_partial') ?? 'Imported $imported item(s). Some items were skipped.'}\n${errors.take(3).join('\n')}';
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(message),
+          backgroundColor:
+              errors.isEmpty ? Colors.green.shade700 : Colors.orange.shade800,
+          duration: const Duration(seconds: 4),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
   Future<void> _addByBarcode(String code) async {
     setState(() => _isLoading = true);
     try {
@@ -499,55 +648,12 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen>
   }
 
   void _addProductToCart(Map<String, dynamic> product) {
-    final productId = product['id'];
-    Map<String, dynamic> catalogProduct = product;
-    for (final p in _allProducts) {
-      if (p is Map && p['id'] == productId) {
-        catalogProduct = Map<String, dynamic>.from(p);
-        break;
-      }
+    final error = _addProductToCartWithQuantity(product, 1);
+    if (error != null) {
+      _showError(error);
+      return;
     }
-    final stock = (catalogProduct['quantity'] as num?)?.toInt() ?? 0;
-
-    final existing = _cart.indexWhere((c) => c.productId == productId);
-
-    if (existing >= 0) {
-      final item = _cart[existing];
-      if (item.quantity + 1 > stock) {
-        _showError(t('insufficient_stock') ?? 'Insufficient stock');
-        return;
-      }
-      setState(() => item.quantity++);
-    } else {
-      if (stock < 1) {
-        _showError(t('out_of_stock') ?? 'Out of stock');
-        return;
-      }
-      // Resolve the converted display price for this product (offline-capable).
-      final info = CurrencyService.getProductDisplayInfo(
-        catalogProduct,
-        _currencySettings,
-      );
-      final displayUnit = info['display_price'] as double?;
-      final displayCurr = info['display_currency'] as String?;
-      setState(
-        () => _cart.add(
-          CartItem(
-            productId: productId,
-            name:
-                catalogProduct['name']?.toString() ??
-                t('unknown_product') ??
-                'Unknown',
-            unitPrice: _parsePrice(catalogProduct['price']),
-            barcode: catalogProduct['barcode']?.toString(),
-            stock: stock,
-            currency: catalogProduct['currency']?.toString() ?? 'SYP',
-            displayPrice: displayUnit,
-            displayCurrency: displayCurr,
-          ),
-        ),
-      );
-    }
+    setState(() {});
   }
 
   // CRITICAL FIX: Debounced search to prevent rapid API calls
@@ -702,7 +808,10 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen>
         : CurrencyService.formatPrice(_parsePrice(p['price']), originalCurrency);
     return Card(
       margin: const EdgeInsets.only(bottom: 8),
+      color: theme.colorScheme.surfaceContainerLow,
+      clipBehavior: Clip.antiAlias,
       child: ListTile(
+        tileColor: theme.colorScheme.surface,
         leading: _buildProductImage(p),
         title: Text(
           p['name']?.toString() ?? '',
@@ -976,7 +1085,8 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen>
         Expanded(
           child: TextField(
             controller: controller,
-            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            keyboardType: TextInputType.number,
+            inputFormatters: [FilteringTextInputFormatter.digitsOnly],
             decoration: InputDecoration(
               labelText: label,
               prefixIcon: Icon(icon),
@@ -1123,7 +1233,15 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen>
                         ),
                         const SizedBox(width: 8),
                         FloatingActionButton.small(
+                          heroTag: 'scanCartQrBtn',
+                          tooltip: t('scan_cart_qr') ?? 'Scan cart QR',
+                          onPressed: _scanCartQr,
+                          child: const Icon(Icons.shopping_cart_checkout_outlined),
+                        ),
+                        const SizedBox(width: 8),
+                        FloatingActionButton.small(
                           heroTag: 'scanBtn',
+                          tooltip: t('scan_barcode') ?? 'Scan barcode',
                           onPressed: _scanBarcode,
                           child: const Icon(Icons.qr_code_scanner),
                         ),
@@ -1340,6 +1458,42 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen>
                       color: theme.colorScheme.surface,
                       child: Column(
                         children: [
+                          TextField(
+                            controller: _customerNameCtrl,
+                            decoration: InputDecoration(
+                              labelText: t('customer') ?? 'Customer',
+                              prefixIcon: const Icon(Icons.person_outline),
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 8,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          TextField(
+                            controller: _customerPhoneCtrl,
+                            keyboardType: TextInputType.number,
+                            textDirection: TextDirection.ltr,
+                            textAlign: TextAlign.start,
+                            inputFormatters: [
+                              FilteringTextInputFormatter.digitsOnly,
+                            ],
+                            decoration: InputDecoration(
+                              labelText: t('phone') ?? 'Phone',
+                              prefixIcon: const Icon(Icons.phone_outlined),
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 8,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 12),
                           if (displaySubtotal != null && displayCurrency != null)
                             Column(
                               children: [
@@ -1557,6 +1711,7 @@ class _QtyInputState extends State<_QtyInput> {
         controller: _ctrl,
         textAlign: TextAlign.center,
         keyboardType: TextInputType.number,
+        inputFormatters: [FilteringTextInputFormatter.digitsOnly],
         decoration: InputDecoration(
           contentPadding: EdgeInsets.zero,
           border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),

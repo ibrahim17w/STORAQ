@@ -786,24 +786,32 @@ class _AddProductScreenState extends ConsumerState<AddProductScreen> {
                       Icons.public,
                       t('marketplace') ?? 'Marketplace',
                     ),
-                    Container(
-                      decoration: BoxDecoration(
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(16),
+                      child: Material(
                         color: theme.colorScheme.surface,
-                        borderRadius: BorderRadius.circular(16),
-                        border: Border.all(color: Colors.grey.shade200),
-                      ),
-                      child: SwitchListTile(
-                        value: _listOnline,
-                        onChanged: (v) => setState(() => _listOnline = v),
-                        title: Text(t('list_on_marketplace') ?? 'List on marketplace'),
-                        subtitle: Text(
-                          t('list_online_desc') ??
-                              'When off, product is saved in your store but hidden from the marketplace.',
-                          style: const TextStyle(fontSize: 12),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16),
+                          side: BorderSide(color: Colors.grey.shade200),
                         ),
-                        secondary: Icon(
-                          _listOnline ? Icons.storefront : Icons.inventory_2_outlined,
-                          color: theme.colorScheme.primary,
+                        child: SwitchListTile(
+                          tileColor: theme.colorScheme.surfaceContainerLow,
+                          value: _listOnline,
+                          onChanged: (v) => setState(() => _listOnline = v),
+                          title: Text(
+                            t('list_on_marketplace') ?? 'List on marketplace',
+                          ),
+                          subtitle: Text(
+                            t('list_online_desc') ??
+                                'When off, product is saved in your store but hidden from the marketplace.',
+                            style: const TextStyle(fontSize: 12),
+                          ),
+                          secondary: Icon(
+                            _listOnline
+                                ? Icons.storefront
+                                : Icons.inventory_2_outlined,
+                            color: theme.colorScheme.primary,
+                          ),
                         ),
                       ),
                     ),

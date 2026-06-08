@@ -30,6 +30,7 @@ import '../widgets/home_filter_sheet.dart';
 import '../widgets/guest_login_sheet.dart' as guest;
 import '../screens/see_all_screen.dart';
 import '../utils/tr.dart';
+import '../utils/location_display_helper.dart';
 import 'dart:convert';
 import '../models/models.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -198,6 +199,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     unawaited(_loadFavorites());
     unawaited(_loadFavoriteStores());
     unawaited(_loadCategories());
+    unawaited(_loadCachedViewerLocation());
 
     Future.delayed(const Duration(milliseconds: 350), () {
       if (!mounted) return;
@@ -434,9 +436,15 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
             if (countryName != null) _userCountry = countryName;
           }
         });
-        unawaited(ViewerLocationService.saveCountry(
+        unawaited(ViewerLocationService.saveLocation(
           countryCode: _userCountryCode,
           countryName: _userCountry,
+          city: _userCity,
+          cityId: _userCityId,
+          village: _userVillage,
+          villageId: _userVillageId,
+          lat: lat,
+          lng: lng,
         ));
         if (mounted) {
           ref.read(viewerLocationProvider.notifier).setCountry(
@@ -815,6 +823,52 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   }
 
 
+  Future<void> _loadCachedViewerLocation() async {
+    try {
+      final cached = await ViewerLocationService.getLocation();
+      if (!mounted) return;
+      final city = cached['city']?.toString();
+      final cityId = cached['city_id']?.toString();
+      final village = cached['village']?.toString();
+      final villageId = cached['village_id']?.toString();
+      final country = cached['country']?.toString();
+      final countryCode = cached['country_code']?.toString();
+      final lat = cached['lat'] as double?;
+      final lng = cached['lng'] as double?;
+      setState(() {
+        _userCity ??= city;
+        _userCityId ??= cityId;
+        _userVillage ??= village;
+        _userVillageId ??= villageId;
+        _userCountry ??= country;
+        _userCountryCode ??= countryCode;
+        if (_userPosition == null && lat != null && lng != null) {
+          _userPosition = Position(
+            latitude: lat,
+            longitude: lng,
+            timestamp: DateTime.now(),
+            accuracy: 0,
+            altitude: 0,
+            altitudeAccuracy: 0,
+            heading: 0,
+            headingAccuracy: 0,
+            speed: 0,
+            speedAccuracy: 0,
+          );
+        }
+      });
+      final hasGeo = (city != null && city.isNotEmpty) ||
+          (cityId != null && cityId.isNotEmpty) ||
+          (village != null && village.isNotEmpty) ||
+          (country != null && country.isNotEmpty) ||
+          (countryCode != null && countryCode.isNotEmpty) ||
+          (lat != null && lng != null);
+      if (hasGeo) {
+        unawaited(_loadSponsoredProducts(skipCache: true));
+      }
+    } catch (_) {}
+  }
+
   Map<String, String?> _sponsoredViewerParams() {
     final viewerLocation = ref.read(viewerLocationProvider);
     return {
@@ -878,10 +932,14 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
         });
       }
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setString(
-        cacheKey,
-        jsonEncode(products.map((p) => p.toJson()).toList()),
-      );
+      if (products.isNotEmpty) {
+        await prefs.setString(
+          cacheKey,
+          jsonEncode(products.map((p) => p.toJson()).toList()),
+        );
+      } else {
+        await prefs.remove(cacheKey);
+      }
     } catch (_) {
       if (mounted && _sponsoredProducts.isEmpty) {
         setState(() => _sponsoredProductsLoading = false);
@@ -1134,10 +1192,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     final country = _userCountry;
     final countryCode = _userCountryCode;
 
-    // Default geo (city + 5km) is the baseline — don't surface it as an
-    // "active filter" chip on first launch.
-    final bool hasActiveFilters = filterState.hasActiveFilters ||
-        (dist != null && dist != 5.0);
+    // hasActiveFilters mirrors the filterProvider exactly so the chip bar
+    // visibly confirms that geo is active on first launch.
+    final bool hasActiveFilters = filterState.hasActiveFilters;
 
     ref.listen<ViewerLocationState>(viewerLocationProvider, (prev, next) {
       if (prev?.countryCode != next.countryCode ||
@@ -1185,62 +1242,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
                   ),
                 ),
               ),
-              if (_sponsoredProductsLoading)
-                SliverToBoxAdapter(
-                  child: SizedBox(
-                    height: 252,
-                    child: ListView.builder(
-                      scrollDirection: Axis.horizontal,
-                      padding: const EdgeInsetsDirectional.only(start: 20),
-                      itemCount: 3,
-                      itemBuilder: (context, _) => Container(
-                        width: 160,
-                        margin: const EdgeInsetsDirectional.only(end: 12),
-                        decoration: BoxDecoration(
-                          color: theme.colorScheme.surfaceContainerHighest,
-                          borderRadius: BorderRadius.circular(14),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              if (!_sponsoredProductsLoading && _sponsoredProducts.isNotEmpty) ...[
-                SectionHeader(
-                  title: t('sponsored_products') ?? 'Sponsored Products',
-                  onSeeAll: () => _openSeeAll(
-                    title: t('sponsored_products') ?? 'Sponsored Products',
-                    items: _sponsoredProducts,
-                    isStore: false,
-                  ),
-                ),
-                SliverToBoxAdapter(
-                  child: SizedBox(
-                    height: 252,
-                    child: ListView.builder(
-                      scrollDirection: Axis.horizontal,
-                      padding: const EdgeInsetsDirectional.only(start: 20),
-                      itemCount: _sponsoredProducts.length,
-                      itemBuilder: (context, i) {
-                        final product = _sponsoredProducts[i];
-                        final pid = _productId(product);
-                        return ProductCard(
-                          product: product.toJson(),
-                          compact: true,
-                          onTap: () => _onProductTap(product),
-                          showFavorite: pid != null,
-                          isFavorite: pid != null && _favoriteIds.contains(pid),
-                          onFavoriteToggle: pid != null
-                              ? () => _toggleFavorite(pid, product)
-                              : null,
-                          currencySettings: _currencySettings,
-                          isSponsored: true,
-                          sponsoredLabel: t('sponsored') ?? 'SPONSORED',
-                        );
-                      },
-                    ),
-                  ),
-                ),
-              ],
               if (!_sponsoredLoading && filteredSponsored.isNotEmpty) ...[
                 SectionHeader(
                   title: t('top_shops') ?? 'Top Shops',
@@ -1294,6 +1295,132 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
                   ),
                 ),
               ),
+              // ─── Sponsored Products ────────────────────────────────────
+              // Always rendered so the surface is discoverable. Shows
+              // skeletons while loading, real cards once campaigns arrive,
+              // and an inline empty-state card otherwise.
+              SectionHeader(
+                title: t('sponsored_products'),
+                onSeeAll: _sponsoredProducts.isEmpty
+                    ? null
+                    : () => _openSeeAll(
+                          title: t('sponsored_products'),
+                          items: _sponsoredProducts,
+                          isStore: false,
+                        ),
+              ),
+              SliverToBoxAdapter(
+                child: SizedBox(
+                  height:
+                      _sponsoredProducts.isEmpty && !_sponsoredProductsLoading
+                          ? 96
+                          : 252,
+                  child: _sponsoredProductsLoading
+                      ? ListView.builder(
+                          scrollDirection: Axis.horizontal,
+                          padding:
+                              const EdgeInsetsDirectional.only(start: 20),
+                          itemCount: 3,
+                          itemBuilder: (context, _) => Container(
+                            width: 160,
+                            margin:
+                                const EdgeInsetsDirectional.only(end: 12),
+                            decoration: BoxDecoration(
+                              color: theme.colorScheme.surfaceContainerHighest,
+                              borderRadius: BorderRadius.circular(14),
+                            ),
+                          ),
+                        )
+                      : _sponsoredProducts.isEmpty
+                          ? Padding(
+                              padding: const EdgeInsetsDirectional.fromSTEB(
+                                  20, 0, 20, 12),
+                              child: Container(
+                                decoration: BoxDecoration(
+                                  color: theme
+                                      .colorScheme.surfaceContainerHighest
+                                      .withValues(alpha: 0.5),
+                                  borderRadius: BorderRadius.circular(14),
+                                  border: Border.all(
+                                    color: theme.colorScheme.outlineVariant
+                                        .withValues(alpha: 0.4),
+                                  ),
+                                ),
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 16, vertical: 14),
+                                child: Row(
+                                  children: [
+                                    Container(
+                                      width: 40,
+                                      height: 40,
+                                      decoration: BoxDecoration(
+                                        color: Colors.amber
+                                            .withValues(alpha: 0.15),
+                                        borderRadius:
+                                            BorderRadius.circular(10),
+                                      ),
+                                      child: const Icon(
+                                        Icons.campaign_outlined,
+                                        color: Colors.amber,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 12),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        mainAxisAlignment:
+                                            MainAxisAlignment.center,
+                                        children: [
+                                          Text(
+                                            t('no_sponsored_products_yet'),
+                                            style: theme.textTheme.titleSmall
+                                                ?.copyWith(
+                                              fontWeight: FontWeight.w600,
+                                            ),
+                                          ),
+                                          const SizedBox(height: 2),
+                                          Text(
+                                            t('sponsored_empty_hint'),
+                                            style: theme.textTheme.bodySmall
+                                                ?.copyWith(
+                                              color: theme.colorScheme
+                                                  .onSurfaceVariant,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            )
+                          : ListView.builder(
+                              scrollDirection: Axis.horizontal,
+                              padding:
+                                  const EdgeInsetsDirectional.only(start: 20),
+                              itemCount: _sponsoredProducts.length,
+                              itemBuilder: (context, i) {
+                                final product = _sponsoredProducts[i];
+                                final pid = _productId(product);
+                                return ProductCard(
+                                  product: product.toJson(),
+                                  compact: true,
+                                  onTap: () => _onProductTap(product),
+                                  showFavorite: pid != null,
+                                  isFavorite: pid != null &&
+                                      _favoriteIds.contains(pid),
+                                  onFavoriteToggle: pid != null
+                                      ? () => _toggleFavorite(pid, product)
+                                      : null,
+                                  currencySettings: _currencySettings,
+                                  isSponsored: true,
+                                  sponsoredLabel: t('sponsored'),
+                                );
+                              },
+                            ),
+                ),
+              ),
               if (hasActiveFilters)
                 SliverToBoxAdapter(
                   child: SizedBox(
@@ -1307,30 +1434,33 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
                             label: () {
                               switch (_locationFilterMode) {
                                 case 'village':
-                                  if (village != null && village.isNotEmpty) {
-                                    return village;
-                                  }
-                                  if (villageId != null && villageId.isNotEmpty) {
-                                    return villageId;
+                                  final localizedVillage =
+                                      LocationDisplayHelper.localizedVillageLabel(
+                                    village,
+                                    villageId: villageId,
+                                  );
+                                  if (localizedVillage.isNotEmpty) {
+                                    return localizedVillage;
                                   }
                                   return t('nearby') ?? 'Nearby';
                                 case 'city':
-                                  if (city != null &&
-                                      city.isNotEmpty &&
-                                      city.toLowerCase() != 'null') {
-                                    return city;
-                                  }
-                                  if (cityId != null && cityId.isNotEmpty) {
-                                    return cityId;
+                                  final localizedCity =
+                                      LocationDisplayHelper.localizedCityLabel(
+                                    city: city,
+                                    cityId: cityId,
+                                  );
+                                  if (localizedCity.isNotEmpty) {
+                                    return localizedCity;
                                   }
                                   return t('nearby') ?? 'Nearby';
                                 case 'country':
-                                  if (country != null && country.isNotEmpty) {
-                                    return country;
-                                  }
-                                  if (countryCode != null &&
-                                      countryCode.isNotEmpty) {
-                                    return countryCode.toUpperCase();
+                                  final localizedCountry =
+                                      LocationDisplayHelper.localizedCountryLabel(
+                                    country: country,
+                                    countryCode: countryCode,
+                                  );
+                                  if (localizedCountry.isNotEmpty) {
+                                    return localizedCountry;
                                   }
                                   return t('unknown_country') ??
                                       'Unknown Country';

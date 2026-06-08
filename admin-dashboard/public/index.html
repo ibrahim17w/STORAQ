@@ -294,7 +294,7 @@
         <a href="#" class="nav-item" data-page="promos"><span class="nav-icon">&#127991;</span> Promo Codes</a>
         <a href="#" class="nav-item" data-page="flagged"><span class="nav-icon">&#9888;</span> Flagged Stores</a>
         <a href="#" class="nav-item" data-page="support"><span class="nav-icon">&#128172;</span> Support Tickets</a>
-        <a href="#" class="nav-item" data-page="chats"><span class="nav-icon">&#128488;</span> Store Chats</a>
+        <a href="#" class="nav-item" data-page="reports"><span class="nav-icon">&#128681;</span> Reports</a>
       </nav>
       <div class="sidebar-footer"><button id="logout-btn" class="btn btn-ghost">Logout</button></div>
     </aside>
@@ -422,7 +422,7 @@ function renderPage(page) {
     case 'promos': renderPromos(c); break;
     case 'flagged': renderFlagged(c); break;
     case 'support': renderSupport(c); break;
-    case 'chats': renderChats(c); break;
+    case 'reports': renderReports(c); break;
   }
 }
 
@@ -526,6 +526,41 @@ function supportImageUrl(url) {
   // own /uploads is used as a fallback via the <img> onerror handler.
   if (MEDIA_BASE) return MEDIA_BASE + path;
   return API_BASE + path;
+}
+function uploadsPathFromUrl(url) {
+  if (!url) return '';
+  if (url.startsWith('http://') || url.startsWith('https://')) {
+    try {
+      const u = new URL(url);
+      if (u.pathname.startsWith('/uploads/')) return u.pathname;
+    } catch (_) {}
+    return '';
+  }
+  return url.startsWith('/') ? url : '/' + url;
+}
+function productImageFromRow(p) {
+  if (p.image_url) return p.image_url;
+  if (p.images) {
+    try {
+      const imgs = typeof p.images === 'string' ? JSON.parse(p.images) : p.images;
+      if (Array.isArray(imgs) && imgs.length) return imgs[0];
+    } catch (_) {}
+  }
+  return null;
+}
+function productImageHtml(url) {
+  if (!url) return '<span style="color:var(--text-muted)">—</span>';
+  const path = uploadsPathFromUrl(url);
+  if (!path.startsWith('/uploads/')) {
+    const primarySrc = supportImageUrl(url);
+    return '<img src="' + primarySrc + '" class="product-img" alt="" loading="lazy">';
+  }
+  const primarySrc = API_BASE + path;
+  const fallbackSrc = (MEDIA_BASE || API_BASE) + path;
+  const onerror =
+    'if(this.dataset.tried!==\'1\'&&this.src!==' + JSON.stringify(fallbackSrc) + '){this.dataset.tried=\'1\';this.src=' + JSON.stringify(fallbackSrc) + ';}' +
+    'else{this.style.display=\'none\';if(!this.parentElement.querySelector(\'.img-missing\')){this.parentElement.insertAdjacentHTML(\'beforeend\',\'<span class="img-missing" style="color:var(--text-muted)">—</span>\');}}';
+  return '<img src="' + primarySrc + '" class="product-img" alt="" loading="lazy" onerror="' + onerror.replace(/"/g, '&quot;') + '">';
 }
 function supportCategoryLabel(cat) {
   return SUPPORT_CATEGORIES[cat] || cat || 'General';
@@ -1041,7 +1076,8 @@ async function renderDashboard(c) {
       <div class="stat-card"><div class="stat-value">${s.total_stores}</div><div class="stat-label">Total Stores</div></div>
       <div class="stat-card"><div class="stat-value">${s.deactivated_stores}</div><div class="stat-label">Deactivated Stores</div></div>
       <div class="stat-card"><div class="stat-value">${s.total_users}</div><div class="stat-label">Total Users</div></div>
-      <div class="stat-card"><div class="stat-value">${s.open_support_tickets ?? 0}</div><div class="stat-label">Open Support Tickets</div></div>`;
+      <div class="stat-card"><div class="stat-value">${s.open_support_tickets ?? 0}</div><div class="stat-label">Open Support Tickets</div></div>
+      <div class="stat-card"><div class="stat-value">${s.open_reports ?? 0}</div><div class="stat-label">Open Reports</div></div>`;
   } catch (e) { document.getElementById('sg').innerHTML = '<p class="error-msg">' + e.message + '</p>'; }
 }
 
@@ -1126,7 +1162,7 @@ async function loadStoreProducts(storeId) {
     if (items.length === 0) { el.innerHTML = '<p style="color:var(--text-muted)">No products in this store</p>'; return; }
     el.innerHTML = `<table style="margin:0"><thead><tr><th>Image</th><th>Name</th><th>Price</th><th>Qty</th><th>Online</th><th>Created</th><th>Action</th></tr></thead><tbody>
       ${items.map(p => `<tr id="sp-${storeId}-${p.id}">
-        <td>${p.image_url ? '<img src="'+esc(p.image_url)+'" class="product-img">' : '<span style="color:var(--text-muted)">—</span>'}</td>
+        <td>${productImageHtml(productImageFromRow(p))}</td>
         <td>${esc(p.name)}</td>
         <td>${p.price} ${p.currency||'SYP'}</td>
         <td>${p.quantity}</td>
@@ -1181,7 +1217,7 @@ async function renderProducts(c) {
       <div class="card" id="p-${p.id}">
         <div class="card-header">
           <div class="flex items-center gap-2">
-            ${p.image_url ? '<img src="'+esc(p.image_url)+'" class="product-img">' : ''}
+            ${productImageFromRow(p) ? productImageHtml(productImageFromRow(p)) : ''}
             <div><div class="card-title">${esc(p.name)}</div><div class="card-meta">${esc(p.store_name)} - ${esc(p.owner_name)} (${esc(p.owner_email)})</div></div>
           </div>
           <div class="card-meta">${new Date(p.created_at).toLocaleDateString()}</div>
@@ -1264,13 +1300,20 @@ async function saveSponsorPricing(scopeType) {
     const price = document.getElementById('spp-' + scopeType)?.value;
     const label = document.getElementById('spl-' + scopeType)?.value;
     const unit = document.getElementById('spu-' + scopeType)?.value;
-    await API.request('PUT', '/api/sponsorship/pricing/' + scopeType, {
+    const updated = await API.request('PUT', '/api/sponsorship/pricing/' + scopeType, {
       price_usd_per_day: price,
       label,
       radius_unit_km: unit != null ? unit : undefined,
     });
-    alert('Pricing updated');
-  } catch (e) { alert(e.message); }
+    // Reflect the persisted server value back into the input so the admin
+    // sees the price actually stuck (previously a silent revert on restart
+    // was the symptom — this also catches any future regressions).
+    if (updated && updated.price_usd_per_day != null) {
+      const priceInput = document.getElementById('spp-' + scopeType);
+      if (priceInput) priceInput.value = updated.price_usd_per_day;
+    }
+    alert('Saved ' + scopeType + ' → $' + (updated?.price_usd_per_day ?? price) + '/day');
+  } catch (e) { alert('Save failed: ' + e.message); }
 }
 
 async function loadSponsorPending() {
@@ -1694,49 +1737,105 @@ async function deleteSupportTicket(id) {
   } catch (e) { alert(e.message); }
 }
 
-// ─── Store Chats ─────────────────────────────────────────────────────────────
-async function renderChats(c) {
+// ─── Content Reports (user-submitted — admin reviews only) ───────────────────
+let reportsFilterStatus = 'open';
+let reportsFilterType = '';
+
+async function renderReports(c) {
   c.innerHTML = `
     <div class="page-header flex justify-between items-center">
-      <div><h2>Store Chats</h2><p>Customer ↔ store conversations — delete old chats to free space</p></div>
-      <button class="btn btn-ghost" id="chats-refresh-btn">Refresh</button>
+      <div><h2>Reports</h2><p>User-submitted reports from the app — review and resolve</p></div>
+      <button class="btn btn-ghost" id="reports-refresh-btn">Refresh</button>
     </div>
-    <div class="card">
-      <div id="chats-table-wrap">Loading...</div>
-    </div>`;
-  document.getElementById('chats-refresh-btn').addEventListener('click', loadChats);
-  await loadChats();
+    <div class="card mb-4">
+      <div class="inline-form">
+        <div class="form-group"><label>Status</label>
+          <select id="reports-status-filter" style="width:140px">
+            <option value="open">Open</option>
+            <option value="resolved">Resolved</option>
+            <option value="dismissed">Dismissed</option>
+            <option value="all">All</option>
+          </select>
+        </div>
+        <div class="form-group"><label>Type</label>
+          <select id="reports-type-filter" style="width:140px">
+            <option value="">All types</option>
+            <option value="store">Store</option>
+            <option value="product">Product</option>
+            <option value="chat">Chat</option>
+          </select>
+        </div>
+        <button class="btn btn-primary" id="reports-filter-btn">Apply</button>
+      </div>
+    </div>
+    <div class="card"><div id="reports-table-wrap">Loading...</div></div>`;
+  document.getElementById('reports-status-filter').value = reportsFilterStatus;
+  document.getElementById('reports-type-filter').value = reportsFilterType;
+  document.getElementById('reports-filter-btn').addEventListener('click', () => {
+    reportsFilterStatus = document.getElementById('reports-status-filter').value;
+    reportsFilterType = document.getElementById('reports-type-filter').value;
+    loadReports();
+  });
+  document.getElementById('reports-refresh-btn').addEventListener('click', loadReports);
+  await loadReports();
 }
 
-async function loadChats() {
-  const el = document.getElementById('chats-table-wrap');
+function reportMetadata(row) {
+  if (!row.metadata) return {};
+  if (typeof row.metadata === 'string') {
+    try { return JSON.parse(row.metadata); } catch (_) { return {}; }
+  }
+  return row.metadata;
+}
+function reportTargetLabel(row) {
+  const meta = reportMetadata(row);
+  if (row.target_type === 'store') return row.store_name || meta.store_name || ('Store #' + row.target_id);
+  if (row.target_type === 'product') return row.product_name || meta.product_name || ('Product #' + row.target_id);
+  if (row.target_type === 'chat') {
+    const store = row.chat_store_name || meta.store_name || '';
+    const customer = row.chat_customer_name || meta.customer_name || '';
+    return 'Chat #' + row.target_id + (store ? ' · ' + store : '') + (customer ? ' · ' + customer : '');
+  }
+  return '#' + row.target_id;
+}
+
+async function loadReports() {
+  const el = document.getElementById('reports-table-wrap');
   if (!el) return;
+  let url = '/api/reports?status=' + encodeURIComponent(reportsFilterStatus);
+  if (reportsFilterType) url += '&type=' + encodeURIComponent(reportsFilterType);
   try {
-    const items = await API.get('/api/chat/conversations');
+    const items = await API.get(url);
     if (!items.length) {
-      el.innerHTML = '<div class="empty-state"><p>No store chats yet</p></div>';
+      el.innerHTML = '<div class="empty-state"><p>No reports found</p></div>';
       return;
     }
-    el.innerHTML = '<table><thead><tr><th>Store</th><th>Customer</th><th>Messages</th><th>Last activity</th><th></th></tr></thead><tbody>' +
-      items.map((row) => `
-        <tr>
-          <td>${esc(row.store_name)}</td>
-          <td>${esc(row.customer_name || '')}<br><span class="card-meta">${esc(row.customer_email || '')}</span></td>
-          <td>${row.message_count || 0}</td>
-          <td>${row.last_message_at ? new Date(row.last_message_at).toLocaleString() : '—'}</td>
-          <td><button class="btn btn-danger btn-sm" onclick="deleteChatConversation(${row.id})">Delete</button></td>
-        </tr>`).join('') +
-      '</tbody></table>';
+    el.innerHTML = `<table><thead><tr>
+      <th>Type</th><th>Target</th><th>Reason</th><th>Reporter</th><th>Status</th><th>Created</th><th>Actions</th>
+    </tr></thead><tbody>${items.map((r) => `
+      <tr id="report-row-${r.id}">
+        <td><span class="badge badge-neutral">${esc(r.target_type)}</span></td>
+        <td>${esc(reportTargetLabel(r))}</td>
+        <td style="max-width:280px;white-space:normal;font-size:13px">${esc(r.reason)}</td>
+        <td>${esc(r.reporter_name || (r.reporter_role === 'user' ? 'User' : 'Reporter'))}<br><span class="card-meta">${esc(r.reporter_email || '')}</span></td>
+        <td><span class="badge ${r.status === 'open' ? 'badge-warning' : r.status === 'resolved' ? 'badge-success' : 'badge-neutral'}">${esc(r.status)}</span></td>
+        <td>${new Date(r.created_at).toLocaleString()}</td>
+        <td>${r.status === 'open'
+          ? `<button class="btn btn-success btn-sm" onclick="resolveReport(${r.id}, 'resolved')">Resolve</button>
+             <button class="btn btn-ghost btn-sm" onclick="resolveReport(${r.id}, 'dismissed')">Dismiss</button>`
+          : '<span style="color:var(--text-muted);font-size:12px">—</span>'}
+        </td>
+      </tr>`).join('')}</tbody></table>`;
   } catch (e) {
     el.innerHTML = '<p class="error-msg">' + e.message + '</p>';
   }
 }
 
-async function deleteChatConversation(id) {
-  if (!confirm('Delete this chat and all its messages? This cannot be undone.')) return;
+async function resolveReport(id, status) {
+  const note = status === 'resolved' ? prompt('Resolution note (optional):') : null;
   try {
-    await API.del('/api/chat/conversations/' + id);
-    await loadChats();
+    await API.patch('/api/reports/' + id, { status, resolution_note: note || undefined });
+    await loadReports();
   } catch (e) { alert(e.message); }
 }
 

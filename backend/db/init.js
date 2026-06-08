@@ -87,6 +87,13 @@ async function runMigrations() {
 
       -- STORES: patch all missing columns
       IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'stores') THEN
+        -- is_active: required by sponsored products / reviews / chat queries.
+        -- Without this column, every SELECT that filters on s.is_active
+        -- (e.g. /api/products/sponsored, /api/stores) throws and the route
+        -- returns 500 — the marketplace looks empty even though data exists.
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='stores' AND column_name='is_active') THEN
+          ALTER TABLE stores ADD COLUMN is_active BOOLEAN DEFAULT TRUE;
+        END IF;
         IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='stores' AND column_name='rating') THEN
           ALTER TABLE stores ADD COLUMN rating DECIMAL(2,1) DEFAULT 5.0;
         END IF;
@@ -157,6 +164,47 @@ async function runMigrations() {
         END IF;
         IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='products' AND column_name='went_online_at') THEN
           ALTER TABLE products ADD COLUMN went_online_at TIMESTAMP;
+        END IF;
+      END IF;
+
+      -- Widen money columns so high unit price × quantity cannot overflow at checkout.
+      IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'orders') THEN
+        IF EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_name = 'orders' AND column_name = 'total'
+            AND numeric_precision = 12 AND numeric_scale = 2
+        ) THEN
+          ALTER TABLE orders ALTER COLUMN subtotal TYPE DECIMAL(18,2);
+          ALTER TABLE orders ALTER COLUMN discount TYPE DECIMAL(18,2);
+          ALTER TABLE orders ALTER COLUMN tax TYPE DECIMAL(18,2);
+          ALTER TABLE orders ALTER COLUMN total TYPE DECIMAL(18,2);
+          ALTER TABLE orders ALTER COLUMN display_subtotal TYPE DECIMAL(18,2);
+          ALTER TABLE orders ALTER COLUMN display_discount TYPE DECIMAL(18,2);
+          ALTER TABLE orders ALTER COLUMN display_tax TYPE DECIMAL(18,2);
+          ALTER TABLE orders ALTER COLUMN display_total TYPE DECIMAL(18,2);
+        END IF;
+      END IF;
+
+      IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'order_items') THEN
+        IF EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_name = 'order_items' AND column_name = 'total_price'
+            AND numeric_precision = 12 AND numeric_scale = 2
+        ) THEN
+          ALTER TABLE order_items ALTER COLUMN unit_price TYPE DECIMAL(18,2);
+          ALTER TABLE order_items ALTER COLUMN total_price TYPE DECIMAL(18,2);
+          ALTER TABLE order_items ALTER COLUMN display_price TYPE DECIMAL(18,2);
+        END IF;
+      END IF;
+
+      IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'products') THEN
+        IF EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_name = 'products' AND column_name = 'price'
+            AND numeric_precision = 12 AND numeric_scale = 2
+        ) THEN
+          ALTER TABLE products ALTER COLUMN price TYPE DECIMAL(18,2);
+          ALTER TABLE products ALTER COLUMN display_price TYPE DECIMAL(18,2);
         END IF;
       END IF;
     END $$;
@@ -253,7 +301,7 @@ async function initInventoryTables() {
       id SERIAL PRIMARY KEY,
       store_id INTEGER NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
       name VARCHAR(200) NOT NULL,
-      price DECIMAL(12,2) NOT NULL DEFAULT 0,
+      price DECIMAL(18,2) NOT NULL DEFAULT 0,
       quantity INTEGER NOT NULL DEFAULT 0,
       description TEXT,
       barcode VARCHAR(50) UNIQUE,
@@ -309,14 +357,14 @@ async function initInventoryTables() {
       customer_name VARCHAR(100),
       customer_phone VARCHAR(50),
       receipt_number VARCHAR(50) NOT NULL UNIQUE,
-      subtotal DECIMAL(12,2) NOT NULL DEFAULT 0,
-      discount DECIMAL(12,2) NOT NULL DEFAULT 0,
-      tax DECIMAL(12,2) NOT NULL DEFAULT 0,
-      total DECIMAL(12,2) NOT NULL DEFAULT 0,
-      display_subtotal DECIMAL(12,2),
-      display_discount DECIMAL(12,2),
-      display_tax DECIMAL(12,2),
-      display_total DECIMAL(12,2),
+      subtotal DECIMAL(18,2) NOT NULL DEFAULT 0,
+      discount DECIMAL(18,2) NOT NULL DEFAULT 0,
+      tax DECIMAL(18,2) NOT NULL DEFAULT 0,
+      total DECIMAL(18,2) NOT NULL DEFAULT 0,
+      display_subtotal DECIMAL(18,2),
+      display_discount DECIMAL(18,2),
+      display_tax DECIMAL(18,2),
+      display_total DECIMAL(18,2),
       display_currency VARCHAR(10),
       status VARCHAR(20) DEFAULT 'completed',
       payment_method VARCHAR(20) DEFAULT 'cash',
@@ -332,11 +380,11 @@ async function initInventoryTables() {
       product_id INTEGER REFERENCES products(id) ON DELETE SET NULL,
       product_name VARCHAR(200),
       quantity INTEGER NOT NULL,
-      unit_price DECIMAL(12,2) NOT NULL,
-      total_price DECIMAL(12,2) NOT NULL,
+      unit_price DECIMAL(18,2) NOT NULL,
+      total_price DECIMAL(18,2) NOT NULL,
       barcode VARCHAR(50),
       currency VARCHAR(10),
-      display_price DECIMAL(12,2),
+      display_price DECIMAL(18,2),
       display_currency VARCHAR(10)
     );
   `);
@@ -980,13 +1028,15 @@ async function initSponsoredProductTables() {
   ];
 
   for (const p of pricing) {
+    // IMPORTANT: seed only — never overwrite admin-edited prices on restart.
+    // Previously this used DO UPDATE which silently reverted any pricing the
+    // admin changed in the dashboard back to the hard-coded defaults on the
+    // next backend boot. We still refresh sort_order so a future migration
+    // can re-order scopes without losing the saved price.
     await pool.query(
       `INSERT INTO sponsorship_pricing (scope_type, label, price_usd_per_day, radius_unit_km, sort_order)
        VALUES ($1, $2, $3, $4, $5)
        ON CONFLICT (scope_type) DO UPDATE SET
-         label = EXCLUDED.label,
-         price_usd_per_day = EXCLUDED.price_usd_per_day,
-         radius_unit_km = EXCLUDED.radius_unit_km,
          sort_order = EXCLUDED.sort_order`,
       [p.scope, p.label, p.price, p.unit, p.order]
     );
@@ -1132,6 +1182,33 @@ async function initReviewTables() {
   console.log('✅ Review tables initialized');
 }
 
+async function initReportTables() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS content_reports (
+      id SERIAL PRIMARY KEY,
+      target_type VARCHAR(20) NOT NULL,
+      target_id INTEGER NOT NULL,
+      store_id INTEGER,
+      reporter_id INTEGER NOT NULL,
+      reporter_role VARCHAR(20) NOT NULL DEFAULT 'user',
+      reason TEXT NOT NULL,
+      status VARCHAR(20) NOT NULL DEFAULT 'open',
+      metadata JSONB DEFAULT '{}',
+      created_at TIMESTAMP DEFAULT NOW(),
+      resolved_at TIMESTAMP,
+      resolved_by INTEGER,
+      resolution_note TEXT
+    );
+  `);
+  await pool.query(
+    `CREATE INDEX IF NOT EXISTS idx_content_reports_status ON content_reports(status, created_at DESC);`
+  );
+  await pool.query(
+    `CREATE INDEX IF NOT EXISTS idx_content_reports_target ON content_reports(target_type, target_id);`
+  );
+  console.log('✅ Report tables initialized');
+}
+
 module.exports = {
   initInventoryTables,
   initAuthTables,
@@ -1141,4 +1218,5 @@ module.exports = {
   initSponsoredProductTables,
   initPromoTables,
   initReviewTables,
+  initReportTables,
 };

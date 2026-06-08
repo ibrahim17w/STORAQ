@@ -205,6 +205,30 @@ async function runMigrations() {
       );
     `);
     await client.query(`
+      CREATE TABLE IF NOT EXISTS content_reports (
+        id SERIAL PRIMARY KEY,
+        target_type VARCHAR(20) NOT NULL,
+        target_id INTEGER NOT NULL,
+        store_id INTEGER,
+        reporter_id INTEGER NOT NULL,
+        reporter_role VARCHAR(20) NOT NULL DEFAULT 'admin',
+        reason TEXT NOT NULL,
+        status VARCHAR(20) NOT NULL DEFAULT 'open',
+        metadata JSONB DEFAULT '{}',
+        created_at TIMESTAMP DEFAULT NOW(),
+        resolved_at TIMESTAMP,
+        resolved_by INTEGER,
+        resolution_note TEXT
+      );
+    `);
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS idx_content_reports_status ON content_reports(status, created_at DESC);`
+    );
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS idx_content_reports_target ON content_reports(target_type, target_id);`
+    );
+
+    await client.query(`
       DO $$ BEGIN
         IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'stores') THEN
           IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='stores' AND column_name='manual_approval_mode') THEN
@@ -428,6 +452,38 @@ const uploadsDir =
   process.env.UPLOADS_DIR || path.join(__dirname, '..', 'backend', 'uploads');
 const mediaBaseUrl = (process.env.BACKEND_URL || process.env.MEDIA_BASE_URL || 'http://localhost:3000')
   .replace(/\/$/, '');
+
+function resolveMediaUrl(url) {
+  if (!url || typeof url !== 'string') return null;
+  const trimmed = url.trim();
+  if (!trimmed) return null;
+  if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+    try {
+      const u = new URL(trimmed);
+      if (u.pathname.startsWith('/uploads/')) {
+        return u.pathname;
+      }
+    } catch (_) {}
+    return trimmed;
+  }
+  return trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+}
+
+function normalizeProductMedia(row) {
+  const out = { ...row };
+  out.image_url = resolveMediaUrl(row.image_url);
+  let imgs = row.images;
+  if (typeof imgs === 'string') {
+    try { imgs = JSON.parse(imgs); } catch (_) { imgs = []; }
+  }
+  if (Array.isArray(imgs)) {
+    out.images = imgs.map(resolveMediaUrl).filter(Boolean);
+    if (!out.image_url && out.images.length > 0) {
+      out.image_url = out.images[0];
+    }
+  }
+  return out;
+}
 if (fs.existsSync(uploadsDir)) {
   app.use('/uploads', express.static(uploadsDir, { dotfiles: 'deny', maxAge: '1h' }));
   console.log('[admin] Serving uploads from', uploadsDir);
@@ -584,7 +640,7 @@ app.get('/api/auth/me', isAdmin, (req, res) => {
 // ─── Stats ───────────────────────────────────────────────────────────────────
 app.get('/api/stats', isAdmin, async (req, res) => {
   try {
-    const [products, payments, promos, flagged, stores, users, deactivated, supportOpen, sponsorPayments, activeCampaigns] = await Promise.all([
+    const [products, payments, promos, flagged, stores, users, deactivated, supportOpen, openReports, sponsorPayments, activeCampaigns] = await Promise.all([
       pool.query(`SELECT COUNT(*)::int as count FROM products WHERE pending_approval = TRUE`),
       pool.query(`SELECT COUNT(*)::int as count FROM subscription_payments WHERE status = 'pending'`),
       pool.query(`SELECT COUNT(*)::int as count FROM promo_codes WHERE is_active = TRUE`),
@@ -593,6 +649,7 @@ app.get('/api/stats', isAdmin, async (req, res) => {
       pool.query(`SELECT COUNT(*)::int as count FROM users`),
       pool.query(`SELECT COUNT(*)::int as count FROM stores WHERE is_active = FALSE`),
       pool.query(`SELECT COUNT(*)::int as count FROM support_tickets WHERE status IN ('open', 'in_progress')`),
+      pool.query(`SELECT COUNT(*)::int as count FROM content_reports WHERE status = 'open'`).catch(() => ({ rows: [{ count: 0 }] })),
       pool.query(`SELECT COUNT(*)::int as count FROM sponsored_product_payments WHERE status = 'pending'`).catch(() => ({ rows: [{ count: 0 }] })),
       pool.query(`SELECT COUNT(*)::int as count FROM sponsored_product_campaigns WHERE status = 'active' AND expires_at > NOW()`).catch(() => ({ rows: [{ count: 0 }] })),
     ]);
@@ -607,6 +664,7 @@ app.get('/api/stats', isAdmin, async (req, res) => {
       total_users: users.rows[0].count,
       deactivated_stores: deactivated.rows[0].count,
       open_support_tickets: supportOpen.rows[0].count,
+      open_reports: openReports.rows[0].count,
     });
   } catch (err) {
     console.error('Stats error:', err.message);
@@ -846,7 +904,7 @@ app.get('/api/products/pending', isAdmin, async (req, res) => {
        FROM products p JOIN stores s ON s.id = p.store_id JOIN users u ON u.id = s.owner_id
        WHERE p.pending_approval = TRUE ORDER BY p.created_at DESC`
     );
-    res.json(result.rows);
+    res.json(result.rows.map(normalizeProductMedia));
   } catch (err) { res.status(500).json({ error: 'Failed to fetch' }); }
 });
 
@@ -1269,11 +1327,11 @@ app.get('/api/stores/:id/products', isAdmin, async (req, res) => {
   try {
     const id = parseInt(req.params.id);
     const result = await pool.query(
-      `SELECT id, name, price, currency, quantity, is_online, image_url, created_at
+      `SELECT id, name, price, currency, quantity, is_online, image_url, images, created_at
        FROM products WHERE store_id = $1 ORDER BY created_at DESC`,
       [id]
     );
-    res.json(result.rows);
+    res.json(result.rows.map(normalizeProductMedia));
   } catch (err) {
     console.error('Store products error:', err.message);
     res.status(500).json({ error: 'Failed to fetch products' });
@@ -1700,7 +1758,89 @@ app.patch('/api/support/tickets/:id', isAdmin, async (req, res) => {
   }
 });
 
-// ─── Store Chats ────────────────────────────────────────────────────────────
+// ─── Content Reports ─────────────────────────────────────────────────────────
+const VALID_REPORT_TARGETS = new Set(['store', 'product', 'chat']);
+const VALID_REPORT_STATUSES = new Set(['open', 'resolved', 'dismissed']);
+
+app.get('/api/reports', isAdmin, async (req, res) => {
+  try {
+    const status = typeof req.query.status === 'string' ? req.query.status : 'open';
+    const targetType = typeof req.query.type === 'string' ? req.query.type : '';
+    const values = [];
+    const conditions = [];
+    let idx = 1;
+
+    if (status !== 'all') {
+      conditions.push(`r.status = $${idx++}`);
+      values.push(status);
+    }
+    if (targetType && VALID_REPORT_TARGETS.has(targetType)) {
+      conditions.push(`r.target_type = $${idx++}`);
+      values.push(targetType);
+    }
+
+    let query = `
+      SELECT r.*,
+             u.full_name AS reporter_name,
+             u.email AS reporter_email,
+             s.name AS store_name,
+             p.name AS product_name,
+             c.store_id AS chat_store_id,
+             cs.name AS chat_store_name,
+             cu.full_name AS chat_customer_name
+      FROM content_reports r
+      LEFT JOIN users u ON u.id = r.reporter_id
+      LEFT JOIN stores s ON s.id = r.store_id
+      LEFT JOIN products p ON r.target_type = 'product' AND p.id = r.target_id
+      LEFT JOIN chat_conversations c ON r.target_type = 'chat' AND c.id = r.target_id
+      LEFT JOIN stores cs ON c.store_id = cs.id
+      LEFT JOIN users cu ON c.customer_id = cu.id
+    `;
+    if (conditions.length > 0) query += ' WHERE ' + conditions.join(' AND ');
+    query += ' ORDER BY r.created_at DESC LIMIT 200';
+
+    const result = await pool.query(query, values);
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Reports list error:', err.message);
+    res.status(500).json({ error: 'Failed to load reports' });
+  }
+});
+
+app.patch('/api/reports/:id', isAdmin, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    const status = typeof req.body.status === 'string' ? req.body.status.trim() : '';
+    const resolutionNote = typeof req.body.resolution_note === 'string'
+      ? req.body.resolution_note.trim().substring(0, 500)
+      : null;
+
+    if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid id' });
+    if (!VALID_REPORT_STATUSES.has(status) || status === 'open') {
+      return res.status(400).json({ error: 'Invalid status' });
+    }
+
+    const result = await pool.query(
+      `UPDATE content_reports
+         SET status = $2,
+             resolved_at = NOW(),
+             resolved_by = $3,
+             resolution_note = COALESCE($4, resolution_note)
+       WHERE id = $1
+       RETURNING *`,
+      [id, status, req.admin.userId, resolutionNote]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Report not found' });
+
+    auditAdmin(req, 'report.update', { type: 'content_report', id }, { status });
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('Update report error:', err.message);
+    res.status(500).json({ error: 'Failed to update report' });
+  }
+});
+
+// ─── Store Chats (API retained; UI removed from dashboard) ───────────────────
 app.get('/api/chat/conversations', isAdmin, async (req, res) => {
   try {
     const result = await pool.query(
@@ -1764,7 +1904,7 @@ app.get('/api/sponsorship/pricing', isAdmin, async (req, res) => {
 // an admin typo silently no-ops (UPDATE … WHERE scope_type = '…' matches
 // no rows → 404) and a price intended for "city" gets stored under a
 // garbage key with no effect.
-const ALLOWED_SPONSORSHIP_SCOPES = new Set(['radius', 'village', 'city', 'country']);
+const ALLOWED_SPONSORSHIP_SCOPES = new Set(['radius', 'village', 'city', 'country', 'world']);
 
 app.put('/api/sponsorship/pricing/:scopeType', isAdmin, async (req, res) => {
   try {
@@ -1796,7 +1936,8 @@ app.put('/api/sponsorship/pricing/:scopeType', isAdmin, async (req, res) => {
       { price_usd_per_day: price, radius_unit_km });
     res.json(result.rows[0]);
   } catch (err) {
-    res.status(500).json({ error: 'Failed to update pricing' });
+    console.error('[admin] sponsorship pricing update failed:', err);
+    res.status(500).json({ error: err.message || 'Failed to update pricing' });
   }
 });
 

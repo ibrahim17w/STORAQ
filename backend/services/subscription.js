@@ -144,9 +144,73 @@ async function withStoreLock(storeId, fn) {
   }
 }
 
+async function getPendingSubscriptionPayment(storeId) {
+  const result = await pool.query(
+    `SELECT sp.id, sp.tier_id, sp.reference_code, sp.created_at, sp.status,
+            st.name AS tier_name, st.online_slots
+     FROM subscription_payments sp
+     JOIN subscription_tiers st ON sp.tier_id = st.id
+     WHERE sp.store_id = $1 AND sp.status = 'pending'
+     ORDER BY sp.created_at DESC
+     LIMIT 1`,
+    [storeId]
+  );
+  return result.rows[0] || null;
+}
+
+async function validateSubscriptionTierRequest(storeId, tierId) {
+  const pending = await getPendingSubscriptionPayment(storeId);
+  if (pending) {
+    const err = new Error(
+      'You already have a pending subscription payment. Wait until it is verified before requesting another plan.'
+    );
+    err.code = 'subscription_pending_payment';
+    err.status = 409;
+    err.pending_payment = pending;
+    throw err;
+  }
+
+  await expireStaleSubscriptions(storeId);
+  const sub = await getActiveSubscription(storeId);
+  const currentSlots = sub ? sub.online_slots : FREE_ONLINE_SLOTS;
+
+  const tierResult = await pool.query(
+    `SELECT * FROM subscription_tiers WHERE id = $1 AND slug != 'free'`,
+    [tierId]
+  );
+  if (tierResult.rows.length === 0) {
+    const err = new Error('Invalid subscription tier');
+    err.code = 'invalid_tier';
+    err.status = 400;
+    throw err;
+  }
+  const tier = tierResult.rows[0];
+
+  if (sub && tier.online_slots <= currentSlots) {
+    const sameTier = sub.tier_id === tier.id;
+    const err = new Error(
+      sameTier
+        ? 'Your current plan is still active. Renew after it expires or upgrade to a higher plan.'
+        : 'Downgrading is not allowed while your current plan is active. Wait until it expires or choose a higher plan.'
+    );
+    err.code = sameTier ? 'subscription_same_tier' : 'subscription_downgrade_not_allowed';
+    err.status = 403;
+    err.current_tier = {
+      id: sub.tier_id,
+      name: sub.tier_name,
+      online_slots: currentSlots,
+      expires_at: sub.expires_at,
+    };
+    throw err;
+  }
+
+  return tier;
+}
+
 async function getSubscriptionStatus(storeId) {
   await expireStaleSubscriptions(storeId);
   const sub = await getActiveSubscription(storeId);
+  const pendingPayment = await getPendingSubscriptionPayment(storeId);
   const onlineCount = await getOnlineCount(storeId);
   const onlineLimit = sub ? sub.online_slots : FREE_ONLINE_SLOTS;
   const createdToday = await getDailyCreationCount(storeId);
@@ -158,6 +222,7 @@ async function getSubscriptionStatus(storeId) {
   return {
     online_count: onlineCount,
     online_limit: onlineLimit,
+    current_tier_slots: onlineLimit,
     free_slots: FREE_ONLINE_SLOTS,
     daily_creation_limit: DAILY_CREATION_LIMIT,
     created_today: createdToday,
@@ -169,6 +234,16 @@ async function getSubscriptionStatus(storeId) {
       expires_at: sub.expires_at,
     } : null,
     is_subscribed: !!sub,
+    pending_payment: pendingPayment
+      ? {
+          id: pendingPayment.id,
+          tier_id: pendingPayment.tier_id,
+          tier_name: pendingPayment.tier_name,
+          online_slots: pendingPayment.online_slots,
+          reference_code: pendingPayment.reference_code,
+          created_at: pendingPayment.created_at,
+        }
+      : null,
     tiers,
     payment_rates: paymentRates,
   };
@@ -289,6 +364,8 @@ module.exports = {
   canAddOnlineProduct,
   withStoreLock,
   getSubscriptionStatus,
+  getPendingSubscriptionPayment,
+  validateSubscriptionTierRequest,
   enforceFreeTierLimit,
   generateReferenceCode,
   getTiers,

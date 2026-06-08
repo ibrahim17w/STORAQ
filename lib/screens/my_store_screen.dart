@@ -59,6 +59,7 @@ class _MyStoreScreenState extends ConsumerState<MyStoreScreen>
   bool _canManageInventory = false;
 
   int _pendingCount = 0;
+  final Map<int, Map<String, dynamic>> _sponsorshipByProduct = {};
 
   // Currency display settings (defaults: no conversion until loaded)
   Map<String, dynamic> _currencySettings = {
@@ -155,6 +156,21 @@ class _MyStoreScreenState extends ConsumerState<MyStoreScreen>
     unawaited(_loadCurrencySettings());
     if (isOwner) {
       await _loadSubscriptionStatus();
+      try {
+        final onlineData = await SubscriptionService.getOnlineProducts();
+        final products = (onlineData['products'] as List<dynamic>? ?? []);
+        _sponsorshipByProduct.clear();
+        for (final raw in products) {
+          if (raw is! Map<String, dynamic>) continue;
+          final id = raw['id'];
+          if (id is int && id > 0) {
+            _sponsorshipByProduct[id] = raw;
+          }
+        }
+      } catch (_) {
+        _sponsorshipByProduct.clear();
+      }
+      if (mounted) setState(() {});
     }
   }
 
@@ -395,19 +411,23 @@ class _MyStoreScreenState extends ConsumerState<MyStoreScreen>
                 ),
               ),
               const SizedBox(height: 12),
-              CheckboxListTile(
-                value: canManageInventory,
-                onChanged: (v) =>
-                    setDlgState(() => canManageInventory = v ?? false),
-                title: Text(
-                  t('can_manage_inventory') ?? 'Can manage inventory',
+              Material(
+                color: Theme.of(ctx).colorScheme.surface,
+                borderRadius: BorderRadius.circular(8),
+                child: CheckboxListTile(
+                  value: canManageInventory,
+                  onChanged: (v) =>
+                      setDlgState(() => canManageInventory = v ?? false),
+                  title: Text(
+                    t('can_manage_inventory') ?? 'Can manage inventory',
+                  ),
+                  subtitle: Text(
+                    t('can_manage_inventory_desc') ??
+                        'Allow adding, editing, and deleting products',
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                  controlAffinity: ListTileControlAffinity.leading,
                 ),
-                subtitle: Text(
-                  t('can_manage_inventory_desc') ??
-                      'Allow adding, editing, and deleting products',
-                  style: const TextStyle(fontSize: 12),
-                ),
-                controlAffinity: ListTileControlAffinity.leading,
               ),
             ],
           ),
@@ -990,9 +1010,9 @@ class _MyStoreScreenState extends ConsumerState<MyStoreScreen>
                                 'Unknown';
                             final canManage = s['can_manage_inventory'] == true;
                             return Material(
-                              color: Colors.transparent,
+                              color: _storeCardSurface(theme),
                               child: ListTile(
-                              tileColor: _storeCardSurface(theme),
+                              tileColor: theme.colorScheme.surfaceContainerLow,
                               leading: CircleAvatar(
                                 backgroundColor:
                                     theme.colorScheme.primaryContainer,
@@ -1108,8 +1128,14 @@ class _MyStoreScreenState extends ConsumerState<MyStoreScreen>
                 sliver: SliverList(
                   delegate: SliverChildBuilderDelegate((context, index) {
                     final product = products[index];
+                    final productId =
+                        int.tryParse(product['id']?.toString() ?? '');
+                    final sponsorshipMeta = productId != null
+                        ? _sponsorshipByProduct[productId]
+                        : null;
                     return _ProductCard(
                       product: product,
+                      sponsorshipMeta: sponsorshipMeta,
                       currencySettings: _currencySettings,
                       onEdit: _canManageInventory
                           ? () => _navigateToEditProduct(product)
@@ -1768,15 +1794,20 @@ class _CurrencySettingsSheetState extends State<_CurrencySettingsSheet> {
                     onChanged: (_) => setState(() {}),
                   ),
                   const SizedBox(height: 12),
-                  SwitchListTile(
-                    contentPadding: EdgeInsets.zero,
-                    value: _showBothPrices,
-                    onChanged: (v) => setState(() => _showBothPrices = v),
-                    title: Text(t('show_both_prices') ?? 'Show both prices'),
-                    subtitle: Text(
-                      t('show_both_prices_desc') ??
-                          'Show the original price next to the converted price',
-                      style: const TextStyle(fontSize: 12),
+                  Material(
+                    color: theme.colorScheme.surface,
+                    borderRadius: BorderRadius.circular(8),
+                    child: SwitchListTile(
+                      tileColor: theme.colorScheme.surfaceContainerLow,
+                      contentPadding: EdgeInsets.zero,
+                      value: _showBothPrices,
+                      onChanged: (v) => setState(() => _showBothPrices = v),
+                      title: Text(t('show_both_prices') ?? 'Show both prices'),
+                      subtitle: Text(
+                        t('show_both_prices_desc') ??
+                            'Show the original price next to the converted price',
+                        style: const TextStyle(fontSize: 12),
+                      ),
                     ),
                   ),
                   const SizedBox(height: 8),
@@ -2008,12 +2039,14 @@ class _CurrencySettingsSheetState extends State<_CurrencySettingsSheet> {
 
 class _ProductCard extends StatelessWidget {
   final Map<String, dynamic> product;
+  final Map<String, dynamic>? sponsorshipMeta;
   final VoidCallback? onEdit;
   final VoidCallback? onDelete;
   final Map<String, dynamic>? currencySettings;
 
   const _ProductCard({
     required this.product,
+    this.sponsorshipMeta,
     this.onEdit,
     this.onDelete,
     this.currencySettings,
@@ -2058,6 +2091,10 @@ class _ProductCard extends StatelessWidget {
     final isPendingCreate = product['_pendingCreate'] == true;
     final isPendingUpdate = product['_pendingUpdate'] == true;
     final isStoreOnly = product['is_online'] == false && !isPendingCreate;
+    final bool isSponsored = sponsorshipMeta?['is_sponsored'] == true;
+    final bool hasPendingSponsorship =
+        sponsorshipMeta?['has_pending_sponsorship'] == true ||
+            sponsorshipMeta?['sponsorship_state'] == 'pending';
 
     final info = CurrencyService.getProductDisplayInfo(product, currencySettings);
     final originalPrice = info['original_price'];
@@ -2116,6 +2153,16 @@ class _ProductCard extends StatelessWidget {
                             _PendingBadge(
                               label: t('store_only') ?? 'Store only',
                               color: Colors.grey,
+                            )
+                          else if (isSponsored)
+                            _PendingBadge(
+                              label: t('sponsored'),
+                              color: Colors.amber.shade800,
+                            )
+                          else if (hasPendingSponsorship)
+                            _PendingBadge(
+                              label: t('sponsorship_pending_short'),
+                              color: Colors.orange.shade700,
                             ),
                         ],
                       ),

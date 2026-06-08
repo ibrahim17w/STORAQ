@@ -2,6 +2,7 @@
 import 'package:flutter/material.dart';
 import '../lang/translations.dart';
 import '../utils/tr.dart';
+import '../utils/location_display_helper.dart';
 import 'common/price_input_field.dart';
 import 'common/price_preset_chip.dart';
 
@@ -135,6 +136,18 @@ class _HomeFilterSheetState extends State<HomeFilterSheet> {
     final cityId = widget.userCityId;
     final country = widget.userCountry;
     final countryCode = widget.userCountryCode;
+    final localizedVillage = LocationDisplayHelper.localizedVillageLabel(
+      village,
+      villageId: villageId,
+    );
+    final localizedCity = LocationDisplayHelper.localizedCityLabel(
+      city: city,
+      cityId: cityId,
+    );
+    final localizedCountry = LocationDisplayHelper.localizedCountryLabel(
+      country: country,
+      countryCode: countryCode,
+    );
 
     return Container(
       constraints: BoxConstraints(
@@ -211,7 +224,9 @@ class _HomeFilterSheetState extends State<HomeFilterSheet> {
                             if (villageId != null || village != null)
                               ChoiceChip(
                                 label: Text(
-                                  village ?? villageId ?? t('nearby'),
+                                  localizedVillage.isNotEmpty
+                                      ? localizedVillage
+                                      : t('nearby'),
                                 ),
                                 selected: _locationFilterMode == 'village',
                                 onSelected: (_) => setState(
@@ -221,11 +236,9 @@ class _HomeFilterSheetState extends State<HomeFilterSheet> {
                             if (cityId != null || city != null)
                               ChoiceChip(
                                 label: Text(
-                                  city != null &&
-                                          city.isNotEmpty &&
-                                          city.toLowerCase() != 'null'
-                                      ? city
-                                      : (cityId ?? t('nearby')),
+                                  localizedCity.isNotEmpty
+                                      ? localizedCity
+                                      : t('nearby'),
                                 ),
                                 selected: _locationFilterMode == 'city',
                                 onSelected: (_) => setState(
@@ -235,10 +248,9 @@ class _HomeFilterSheetState extends State<HomeFilterSheet> {
                             if (countryCode != null || country != null)
                               ChoiceChip(
                                 label: Text(
-                                  country != null && country.isNotEmpty
-                                      ? country
-                                      : (countryCode?.toUpperCase() ??
-                                            t('unknown_country')),
+                                  localizedCountry.isNotEmpty
+                                      ? localizedCountry
+                                      : t('unknown_country'),
                                 ),
                                 selected: _locationFilterMode == 'country',
                                 onSelected: (_) => setState(
@@ -255,7 +267,11 @@ class _HomeFilterSheetState extends State<HomeFilterSheet> {
                             country != null ||
                             countryCode != null)
                           Text(
-                            '${t('location')}: ${[village ?? villageId, city ?? cityId, country ?? countryCode?.toUpperCase()].where((e) => e != null).join(', ')}',
+                            '${t('location')}: ${[
+                              localizedVillage,
+                              localizedCity,
+                              localizedCountry,
+                            ].where((e) => e.isNotEmpty).join(', ')}',
                             style: TextStyle(
                               fontSize: 12,
                               color: Theme.of(

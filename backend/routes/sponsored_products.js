@@ -227,6 +227,36 @@ router.post(
       const scopeErr = validateScopeTargets(loaded.store, scope_type, req.validatedBody);
       if (scopeErr) return res.status(400).json({ error: scopeErr });
 
+      // Avoid duplicate requests for the same product.
+      const [activeCampaign, pendingPayment] = await Promise.all([
+        pool.query(
+          `SELECT id
+             FROM sponsored_product_campaigns
+            WHERE product_id = $1
+              AND status = 'active'
+              AND expires_at > NOW()
+            LIMIT 1`,
+          [productId]
+        ),
+        pool.query(
+          `SELECT id, reference_code
+             FROM sponsored_product_payments
+            WHERE product_id = $1
+              AND status = 'pending'
+            ORDER BY created_at DESC
+            LIMIT 1`,
+          [productId]
+        ),
+      ]);
+      if (activeCampaign.rows.length > 0) {
+        return res.status(409).json({ error: 'This product already has an active sponsorship campaign' });
+      }
+      if (pendingPayment.rows.length > 0) {
+        return res.status(409).json({
+          error: `Sponsorship request already pending${pendingPayment.rows[0].reference_code ? ` (${pendingPayment.rows[0].reference_code})` : ''}`,
+        });
+      }
+
       const quote = await calculatePrice(scope_type, radius_km, duration_days);
       const geo = buildGeoTargets(loaded.store, scope_type, {
         ...req.validatedBody,

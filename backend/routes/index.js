@@ -17,6 +17,7 @@ const supportRoutes = require('./support');
 const sponsoredProductRoutes = require('./sponsored_products');
 const platformRatesRoutes = require('./platform_rates');
 const reviewRoutes = require('./reviews');
+const reportRoutes = require('./reports');
 const { authLimiter } = require('../middleware/auth');
 
 function mountRoutes(app) {
@@ -27,6 +28,10 @@ function mountRoutes(app) {
   app.use('/api', searchRoutes);
   app.use('/api', categoryRoutes);
   app.use('/api', barcodeRoutes);
+  // Sponsored product routes must register before productRoutes because
+  // productRoutes defines GET /products/:storeId which would otherwise
+  // swallow GET /products/sponsored (storeId = "sponsored" → 400).
+  app.use('/api', sponsoredProductRoutes);
   app.use('/api', productRoutes);
   app.use('/api', storeRoutes);
   app.use('/api', orderRoutes);
@@ -34,9 +39,9 @@ function mountRoutes(app) {
   app.use('/api', analyticsRoutes);
   app.use('/api', chatRoutes);
   app.use('/api', supportRoutes);
-  app.use('/api', sponsoredProductRoutes);
   app.use('/api', platformRatesRoutes);
   app.use('/api', reviewRoutes);
+  app.use('/api', reportRoutes);
   // marketplaceRoutes MUST come LAST because it likely has catch-all or broad matchers
   app.use('/api', marketplaceRoutes);
 }

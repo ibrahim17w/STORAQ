@@ -22,6 +22,7 @@ import 'chat_screen.dart';
 import 'shopping_cart_screen.dart';
 import '../widgets/reviews_section.dart';
 import '../services/review_service.dart';
+import '../widgets/report_dialog.dart';
 
 class ProductDetailScreen extends ConsumerStatefulWidget {
   final dynamic product;
@@ -225,6 +226,22 @@ class _ProductDetailScreenState extends ConsumerState<ProductDetailScreen> {
           storeName: _storeData?.name ?? _product['shop_name']?.toString(),
         ),
       ),
+    );
+  }
+
+  Future<void> _reportProduct() async {
+    final productId = _product['id'];
+    final pid = productId is int
+        ? productId
+        : int.tryParse(productId?.toString() ?? '');
+    if (pid == null || pid <= 0) return;
+
+    await showContentReportDialog(
+      context,
+      targetType: 'product',
+      targetId: pid,
+      storeId: _storeId,
+      title: t('report_product') ?? 'Report product',
     );
   }
 
@@ -699,6 +716,11 @@ class _ProductDetailScreenState extends ConsumerState<ProductDetailScreen> {
               ),
             ),
             actions: [
+              IconButton(
+                icon: const Icon(Icons.flag_outlined),
+                tooltip: t('report') ?? 'Report',
+                onPressed: _reportProduct,
+              ),
               IconButton(
                 icon: Icon(
                   _isFavorite ? Icons.favorite_rounded : Icons.favorite_border_rounded,

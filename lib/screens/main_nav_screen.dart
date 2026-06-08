@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../lang/translations.dart';
 import '../services/api_service.dart';
+import '../services/auth_service.dart';
+import '../widgets/cached_image.dart';
 import 'home_screen.dart';
 import 'explore_screen.dart';
 import 'map_screen.dart';
@@ -22,6 +24,7 @@ class MainNavScreen extends ConsumerStatefulWidget {
 class _MainNavScreenState extends ConsumerState<MainNavScreen> {
   int _currentIndex = 0;
   bool _isStoreOwner = false;
+  String? _userAvatarUrl;
 
   /// Only tabs the user has opened are built — avoids launching 5–6 screens at once.
   final Map<int, Widget> _tabCache = {
@@ -33,7 +36,19 @@ class _MainNavScreenState extends ConsumerState<MainNavScreen> {
     super.initState();
     DeepLinkService.pendingStoreIdNotifier.addListener(_onDeepLinkEvent);
     Future.microtask(_checkStoreOwner);
+    Future.microtask(_loadCurrentUserAvatar);
     WidgetsBinding.instance.addPostFrameCallback((_) => _handlePendingDeepLink());
+  }
+
+  Future<void> _loadCurrentUserAvatar() async {
+    try {
+      if (!await ApiService.isLoggedIn()) return;
+      final user = await AuthService.getCurrentUser();
+      if (!mounted) return;
+      setState(() => _userAvatarUrl = user.avatarUrl);
+    } catch (_) {
+      // Silent — falls back to default profile icon
+    }
   }
 
   @override
@@ -70,7 +85,8 @@ class _MainNavScreenState extends ConsumerState<MainNavScreen> {
   }
 
   void _onTabSelected(int index) {
-    if (index == _currentIndex) {
+    final previous = _currentIndex;
+    if (index == previous) {
       if (index == 0) homeSponsoredRefreshTick.value++;
       return;
     }
@@ -79,6 +95,13 @@ class _MainNavScreenState extends ConsumerState<MainNavScreen> {
       _tabCache.putIfAbsent(index, () => _buildScreen(index));
     });
     if (index == 0) homeSponsoredRefreshTick.value++;
+    // When leaving the profile tab, pull the latest avatar in case it was
+    // changed inside the profile screen.
+    final leavingProfile = previous < _tabs.length &&
+        _tabs[previous].labelKey == 'profile';
+    if (leavingProfile) {
+      Future.microtask(_loadCurrentUserAvatar);
+    }
   }
 
   Widget _buildScreen(int index) {
@@ -174,12 +197,16 @@ class _MainNavScreenState extends ConsumerState<MainNavScreen> {
         ),
         child: SafeArea(
           top: false,
+          minimum: const EdgeInsets.only(bottom: 4),
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
             child: Row(
               children: List.generate(_tabs.length, (index) {
                 final tab = _tabs[index];
                 final selected = _currentIndex == index;
+                final isProfileTab = tab.labelKey == 'profile';
+                final hasAvatar =
+                    isProfileTab && (_userAvatarUrl?.isNotEmpty ?? false);
                 return Expanded(
                   child: InkWell(
                     onTap: () => _onTabSelected(index),
@@ -189,11 +216,33 @@ class _MainNavScreenState extends ConsumerState<MainNavScreen> {
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Icon(
-                            selected ? tab.selectedIcon : tab.icon,
-                            size: 22,
-                            color: selected ? primary : muted,
-                          ),
+                          if (hasAvatar)
+                            Container(
+                              width: 26,
+                              height: 26,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                border: Border.all(
+                                  color: selected ? primary : Colors.transparent,
+                                  width: 2,
+                                ),
+                              ),
+                              child: ClipOval(
+                                child: CachedAppImage(
+                                  imageUrl: _userAvatarUrl!,
+                                  width: 24,
+                                  height: 24,
+                                  fit: BoxFit.cover,
+                                  memCacheWidth: 64,
+                                ),
+                              ),
+                            )
+                          else
+                            Icon(
+                              selected ? tab.selectedIcon : tab.icon,
+                              size: 22,
+                              color: selected ? primary : muted,
+                            ),
                           const SizedBox(height: 4),
                           if (selected)
                             Container(
@@ -209,11 +258,12 @@ class _MainNavScreenState extends ConsumerState<MainNavScreen> {
                           const SizedBox(height: 2),
                           Text(
                             t(tab.labelKey) ?? tab.fallback,
-                            maxLines: 1,
+                            maxLines: 2,
+                            textAlign: TextAlign.center,
                             overflow: TextOverflow.ellipsis,
                             style: TextStyle(
                               fontSize: 10,
-                              height: 1.1,
+                              height: 1.2,
                               fontWeight:
                                   selected ? FontWeight.w600 : FontWeight.w500,
                               color: selected ? primary : muted,

@@ -20,7 +20,7 @@ class ApiService {
     return 'https://storaq-baug.onrender.com';
   }
 
-  static final Map<String, dynamic> _cache = {};
+  static final Map<String, String> _cache = {};
   static final Map<String, DateTime> _cacheTime = {};
   static const Duration _cacheDuration = Duration(minutes: 2);
 
@@ -230,7 +230,11 @@ class ApiService {
       final cachedTime = _cacheTime[cacheKey];
       if (cachedTime != null &&
           DateTime.now().difference(cachedTime) < _cacheDuration) {
-        return http.Response(jsonEncode(_cache[cacheKey]), 200);
+        return http.Response(
+          _cache[cacheKey]!,
+          200,
+          headers: const {'content-type': 'application/json; charset=utf-8'},
+        );
       }
     }
 
@@ -245,11 +249,9 @@ class ApiService {
           },
         );
 
-    if (useCache && response.statusCode == 200) {
-      try {
-        _cache[cacheKey] = jsonDecode(response.body);
-        _cacheTime[cacheKey] = DateTime.now();
-      } catch (_) {}
+    if (useCache && response.statusCode == 200 && response.body.isNotEmpty) {
+      _cache[cacheKey] = response.body;
+      _cacheTime[cacheKey] = DateTime.now();
     }
 
     return response;

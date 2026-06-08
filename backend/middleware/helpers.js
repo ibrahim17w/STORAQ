@@ -107,4 +107,29 @@ function deleteUploadFiles(urls) {
   }
 }
 
-module.exports = { sanitizeString, getPagination, isValidEmail, serverNow, formatWaitTime, getBaseUrl, deleteUploadFiles };
+// Matches DECIMAL(18,2) — the widened money columns in orders/products.
+const MAX_MONEY = 9999999999999999.99;
+
+function isWithinMoneyLimit(value) {
+  if (value == null || Number.isNaN(Number(value))) return true;
+  return Math.abs(Number(value)) <= MAX_MONEY;
+}
+
+function assertMoneyLimit(value, fieldLabel = 'Amount') {
+  if (!isWithinMoneyLimit(value)) {
+    throw new Error(`${fieldLabel} is too large. Please reduce quantity or check product prices.`);
+  }
+}
+
+module.exports = {
+  sanitizeString,
+  getPagination,
+  isValidEmail,
+  serverNow,
+  formatWaitTime,
+  getBaseUrl,
+  deleteUploadFiles,
+  MAX_MONEY,
+  isWithinMoneyLimit,
+  assertMoneyLimit,
+};

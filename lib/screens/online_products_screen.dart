@@ -173,7 +173,12 @@ class _OnlineProductsScreenState extends ConsumerState<OnlineProductsScreen> {
                                   final id = p['id'] as int;
                                   final isOnline = p['is_online'] == true;
                                   final isSponsored = p['is_sponsored'] == true;
+                                  final hasPendingSponsorship =
+                                      p['has_pending_sponsorship'] == true ||
+                                      p['sponsorship_state'] == 'pending';
                                   final scope = p['sponsorship_scope']?.toString();
+                                  final pendingScope =
+                                      p['sponsorship_pending_scope']?.toString();
                                   final busy = _pending.contains(id);
                                   String _scopeLabel() {
                                     if (!isSponsored) return '';
@@ -191,6 +196,33 @@ class _OnlineProductsScreenState extends ConsumerState<OnlineProductsScreen> {
                                         return km != null ? '${km}km' : (t('radius') ?? 'Radius');
                                       default:
                                         return scope ?? '';
+                                    }
+                                  }
+
+                                  String _pendingScopeLabel() {
+                                    switch (pendingScope) {
+                                      case 'world':
+                                        return t('worldwide') ?? 'Worldwide';
+                                      case 'country':
+                                        return p['sponsorship_pending_target_country']
+                                                ?.toString() ??
+                                            (t('country') ?? 'Country');
+                                      case 'city':
+                                        return p['sponsorship_pending_target_city']
+                                                ?.toString() ??
+                                            (t('city') ?? 'City');
+                                      case 'village':
+                                        return p['sponsorship_pending_target_village']
+                                                ?.toString() ??
+                                            (t('village') ?? 'Village');
+                                      case 'radius':
+                                        final km =
+                                            p['sponsorship_pending_radius_km'];
+                                        return km != null
+                                            ? '${km}km'
+                                            : (t('radius') ?? 'Radius');
+                                      default:
+                                        return pendingScope ?? '';
                                     }
                                   }
                                   return ListTile(
@@ -229,6 +261,27 @@ class _OnlineProductsScreenState extends ConsumerState<OnlineProductsScreen> {
                                             ),
                                           ),
                                         ],
+                                        if (!isSponsored && hasPendingSponsorship) ...[
+                                          const SizedBox(width: 6),
+                                          Container(
+                                            padding: const EdgeInsets.symmetric(
+                                                horizontal: 6, vertical: 2),
+                                            decoration: BoxDecoration(
+                                              color: Colors.orange.shade700,
+                                              borderRadius:
+                                                  BorderRadius.circular(4),
+                                            ),
+                                            child: Text(
+                                              t('sponsorship_pending_short'),
+                                              style: const TextStyle(
+                                                fontSize: 9,
+                                                fontWeight: FontWeight.w800,
+                                                color: Colors.white,
+                                                letterSpacing: 0.4,
+                                              ),
+                                            ),
+                                          ),
+                                        ],
                                       ],
                                     ),
                                     subtitle: Column(
@@ -252,6 +305,16 @@ class _OnlineProductsScreenState extends ConsumerState<OnlineProductsScreen> {
                                               fontWeight: FontWeight.w600,
                                             ),
                                           ),
+                                        if (!isSponsored &&
+                                            hasPendingSponsorship)
+                                          Text(
+                                            '${t('sponsorship_pending')}: ${_pendingScopeLabel()}',
+                                            style: TextStyle(
+                                              fontSize: 11,
+                                              color: Colors.orange.shade800,
+                                              fontWeight: FontWeight.w600,
+                                            ),
+                                          ),
                                       ],
                                     ),
                                     trailing: busy
@@ -259,7 +322,9 @@ class _OnlineProductsScreenState extends ConsumerState<OnlineProductsScreen> {
                                         : Row(
                                             mainAxisSize: MainAxisSize.min,
                                             children: [
-                                              if (isOnline && !isSponsored)
+                                              if (isOnline &&
+                                                  !isSponsored &&
+                                                  !hasPendingSponsorship)
                                                 IconButton(
                                                   tooltip: t('sponsor_product') ?? 'Sponsor Product',
                                                   icon: const Icon(Icons.campaign_outlined),
@@ -272,6 +337,12 @@ class _OnlineProductsScreenState extends ConsumerState<OnlineProductsScreen> {
                                                 ),
                                               if (isOnline && isSponsored)
                                                 Icon(Icons.check_circle, color: Colors.amber.shade700, size: 22),
+                                              if (isOnline &&
+                                                  !isSponsored &&
+                                                  hasPendingSponsorship)
+                                                Icon(Icons.hourglass_top_rounded,
+                                                    color: Colors.orange.shade700,
+                                                    size: 22),
                                               Switch(
                                                 value: isOnline,
                                                 onChanged: (v) => _toggleOnline(p, v),

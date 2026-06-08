@@ -31,10 +31,10 @@ class FilterState {
   });
 
   bool get hasActiveFilters =>
-      // Treat the default geo (city + 5km) as the baseline, not an "active filter".
-      (locationMode != LocationFilterMode.none &&
-              locationMode != LocationFilterMode.city) ||
-      (maxDistance != null && maxDistance != 5.0) ||
+      // Show the chip bar whenever a geo filter is on (including the default
+      // city + 5km) so the user can SEE that location filtering is active
+      // on first launch. Without this the user assumes geo is off.
+      locationMode != LocationFilterMode.none ||
       minPrice != null ||
       maxPrice != null ||
       categoryId != null ||

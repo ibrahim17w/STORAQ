@@ -47,8 +47,13 @@ String mapBackendError(String raw) {
   }
   if (lower.contains('same as previous') ||
       lower.contains('cannot reuse') ||
-      lower.contains('same as your previous')) {
+      lower.contains('same as your previous') ||
+      lower.contains('same as your current') ||
+      lower.contains('cannot be the same')) {
     return t('password_reuse');
+  }
+  if (lower.contains('current password is incorrect')) {
+    return t('password_incorrect');
   }
   if (lower.contains('too many failed attempts') || lower.contains('locked')) {
     if (lower.contains('reset')) {

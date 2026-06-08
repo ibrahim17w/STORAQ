@@ -31,6 +31,7 @@ class _MapPickerScreenState extends ConsumerState<MapPickerScreen> {
     try {
       bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
       if (!serviceEnabled) {
+        if (!mounted) return;
         setState(() => _locating = false);
         return;
       }
@@ -39,17 +40,21 @@ class _MapPickerScreenState extends ConsumerState<MapPickerScreen> {
       if (permission == LocationPermission.denied) {
         permission = await Geolocator.requestPermission();
         if (permission == LocationPermission.denied) {
+          if (!mounted) return;
           setState(() => _locating = false);
           return;
         }
       }
 
       if (permission == LocationPermission.deniedForever) {
+        if (!mounted) return;
         setState(() => _locating = false);
         return;
       }
 
       final position = await Geolocator.getCurrentPosition();
+      if (!mounted) return;
+
       final latLng = LatLng(position.latitude, position.longitude);
 
       _mapController.move(latLng, 15);
@@ -60,18 +65,19 @@ class _MapPickerScreenState extends ConsumerState<MapPickerScreen> {
         _locating = false;
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() => _locating = false);
     }
   }
 
   Future<void> _goToUserLocation() async {
     if (_userLocation == null) {
+      if (!mounted) return;
       setState(() => _locating = true);
       await _moveToCurrentLocation();
     }
-    if (_userLocation != null) {
-      _mapController.move(_userLocation!, 16);
-    }
+    if (!mounted || _userLocation == null) return;
+    _mapController.move(_userLocation!, 16);
   }
 
   void _zoomIn() {

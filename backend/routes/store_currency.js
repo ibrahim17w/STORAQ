@@ -347,3 +347,4 @@ module.exports.recalculateProductDisplayPrices = recalculateProductDisplayPrices
 module.exports.recalculateSingleProductDisplayPrice = recalculateSingleProductDisplayPrice;
 module.exports.convertWithRates = convertWithRates;
 module.exports.findDirectRate = findDirectRate;
+module.exports.parseRates = parseRates;

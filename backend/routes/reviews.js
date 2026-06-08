@@ -35,6 +35,15 @@ async function recalcProductRating(productId, client = pool) {
   );
 }
 
+function isRealAuthenticatedUser(user) {
+  if (!user?.userId) return false;
+  if (user.role === 'guest') return false;
+  if (typeof user.userId === 'string' && user.userId.startsWith('guest_')) {
+    return false;
+  }
+  return true;
+}
+
 async function userAffiliatedWithStore(userId, storeId) {
   const result = await pool.query(
     `SELECT 1
@@ -92,7 +101,7 @@ router.get('/stores/:id/reviews', optionalAuth, async (req, res) => {
 
     let myReview = null;
     let canRequestRemoval = false;
-    if (req.user?.userId) {
+    if (isRealAuthenticatedUser(req.user)) {
       const mine = await pool.query(
         `SELECT id, store_id, user_id, rating, comment, created_at, updated_at, status
          FROM store_reviews
@@ -223,7 +232,7 @@ router.get('/products/:id/reviews', optionalAuth, async (req, res) => {
 
     let myReview = null;
     let canRequestRemoval = false;
-    if (req.user?.userId) {
+    if (isRealAuthenticatedUser(req.user)) {
       const mine = await pool.query(
         `SELECT id, product_id, user_id, rating, comment, created_at, updated_at, status
          FROM product_reviews

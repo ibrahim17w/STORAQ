@@ -15,6 +15,7 @@ const {
   initSponsoredProductTables,
   initPromoTables,
   initReviewTables,
+  initReportTables,
 } = require('./db/init');
 const { initEmbeddingTables } = require('./services/embedding');
 const { authLimiter } = require('./middleware/auth');
@@ -115,6 +116,7 @@ async function startWorker() {
   await initSponsoredProductTables();
   await initPromoTables();
   await initReviewTables();
+  await initReportTables();
   await initEmbeddingTables();
 
   process.on('SIGTERM', async () => { console.log(`[${process.pid}] SIGTERM received, closing pool...`); await pool.end(); process.exit(0); });

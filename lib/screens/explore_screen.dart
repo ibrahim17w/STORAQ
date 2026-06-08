@@ -69,6 +69,19 @@ class _ExploreScreenState extends ConsumerState<ExploreScreen> {
   Set<int> _favoriteIds = {};
   Set<int> _favoriteStoreIds = {};
 
+  /// Extra space so scrollable content clears the floating bottom nav bar.
+  double _navBarScrollInset(BuildContext context) =>
+      MediaQuery.paddingOf(context).bottom + 80;
+
+  EdgeInsets _scrollPadding(BuildContext context, {double inset = 16}) {
+    return EdgeInsets.fromLTRB(
+      inset,
+      inset,
+      inset,
+      inset + _navBarScrollInset(context),
+    );
+  }
+
   @override
   void initState() {
     super.initState();
@@ -486,6 +499,8 @@ class _ExploreScreenState extends ConsumerState<ExploreScreen> {
         await _initLocation();
       }
       if (mounted) {
+        _searchFocusNode.unfocus();
+        _searchController.clear();
         setState(() {
           _isImageSearchActive = true;
           _imageSearchResults = results;
@@ -619,6 +634,10 @@ class _ExploreScreenState extends ConsumerState<ExploreScreen> {
                       child: TextField(
                         controller: _searchController,
                         focusNode: _searchFocusNode,
+                        readOnly: _isImageSearchActive,
+                        canRequestFocus: !_isImageSearchActive,
+                        enableInteractiveSelection: !_isImageSearchActive,
+                        showCursor: !_isImageSearchActive,
                         textInputAction: TextInputAction.search,
                         onSubmitted: (_) => _searchFocusNode.unfocus(),
                         decoration: InputDecoration(
@@ -668,6 +687,7 @@ class _ExploreScreenState extends ConsumerState<ExploreScreen> {
                         child: InkWell(
                           borderRadius: BorderRadius.circular(20),
                           onTap: () {
+                            _searchFocusNode.unfocus();
                             setState(() {
                               _isImageSearchActive = false;
                               _imageSearchResults = [];
@@ -739,7 +759,11 @@ class _ExploreScreenState extends ConsumerState<ExploreScreen> {
           ),
           Expanded(
             child: ListView.builder(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
+              padding: EdgeInsets.only(
+                left: 16,
+                right: 16,
+                bottom: _navBarScrollInset(context),
+              ),
               itemCount: _searchHistory.length,
               itemBuilder: (context, i) {
                 final query = _searchHistory[i];
@@ -818,7 +842,7 @@ class _ExploreScreenState extends ConsumerState<ExploreScreen> {
     }
 
     return ListView(
-      padding: const EdgeInsets.all(16),
+      padding: _scrollPadding(context),
       children: [
         if (_searchProductResults.isNotEmpty) ...[
           Row(
@@ -1160,12 +1184,12 @@ class _ExploreScreenState extends ConsumerState<ExploreScreen> {
     }
 
     if (_isGridView) {
-      final cardWidth = (MediaQuery.of(context).size.width - 44) / 2;
       return SingleChildScrollView(
-        padding: const EdgeInsets.all(16),
+        padding: _scrollPadding(context),
         child: Wrap(
-          spacing: 12,
-          runSpacing: 12,
+          spacing: 10,
+          runSpacing: 10,
+          alignment: WrapAlignment.start,
           children: results.map((product) {
             final similarity =
                 (product['similarity_score'] as num? ?? 0).toDouble();
@@ -1173,7 +1197,6 @@ class _ExploreScreenState extends ConsumerState<ExploreScreen> {
             final pid = _productId(product);
             return ProductCard(
               product: product,
-              width: cardWidth,
               onTap: () => _onProductTap(product),
               showFavorite: pid != null,
               isFavorite: pid != null && _favoriteIds.contains(pid),
@@ -1192,7 +1215,7 @@ class _ExploreScreenState extends ConsumerState<ExploreScreen> {
     }
 
     return ListView.builder(
-      padding: const EdgeInsets.all(16),
+      padding: _scrollPadding(context),
       itemCount: results.length,
       itemBuilder: (context, i) {
         final product = results[i];
@@ -1218,9 +1241,9 @@ class _ExploreScreenState extends ConsumerState<ExploreScreen> {
                   currencySettings: ref.watch(viewerCurrencyProvider).currencySettings,
                 ),
                 if (_imageSearchSort != 'closest')
-                  Positioned(
+                  PositionedDirectional(
                     top: 8,
-                    right: 8,
+                    end: 8,
                     child: Container(
                       padding: const EdgeInsets.symmetric(
                         horizontal: 8,
@@ -1240,29 +1263,6 @@ class _ExploreScreenState extends ConsumerState<ExploreScreen> {
                       ),
                     ),
                   ),
-                if (product['shop_name'] != null)
-                  Positioned(
-                    top: 8,
-                    left: 8,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 4,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Colors.black.withOpacity(0.7),
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      child: Text(
-                        product['shop_name'].toString(),
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 10,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                    ),
-                  ),
               ],
             ),
           ),
@@ -1274,7 +1274,7 @@ class _ExploreScreenState extends ConsumerState<ExploreScreen> {
   Widget _buildStoreGrid() {
     final stores = _sortStoresByDistance(_filtered);
     return SingleChildScrollView(
-      padding: const EdgeInsets.all(12),
+      padding: _scrollPadding(context, inset: 12),
       child: Wrap(
         spacing: 10,
         runSpacing: 10,
@@ -1307,7 +1307,7 @@ class _ExploreScreenState extends ConsumerState<ExploreScreen> {
   Widget _buildStoreList() {
     final stores = _sortStoresByDistance(_filtered);
     return ListView.builder(
-      padding: const EdgeInsets.all(12),
+      padding: _scrollPadding(context, inset: 12),
       itemCount: stores.length,
       itemBuilder: (context, i) {
         final store = stores[i];

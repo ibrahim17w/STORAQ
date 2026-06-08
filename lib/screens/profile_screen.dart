@@ -23,6 +23,10 @@ import '../models/models.dart';
 import 'admin_subscription_payments_screen.dart';
 import '../services/offline_service.dart';
 import '../widgets/cached_image.dart';
+import '../widgets/phone_text_field.dart';
+import '../utils/phone_helper.dart';
+import '../utils/error_mapper.dart';
+import '../widgets/app_notification.dart';
 import 'chat_conversations_screen.dart';
 import 'support_tickets_screen.dart';
 import '../providers/cart_provider.dart';
@@ -40,6 +44,383 @@ class ProfileScreen extends ConsumerWidget {
         (route) => false,
       );
     }
+  }
+
+  Future<void> _showEditProfileDialog(
+    BuildContext context,
+    WidgetRef ref,
+    User user,
+    VoidCallback onUpdated,
+  ) async {
+    final nameCtrl = TextEditingController(text: user.fullName ?? '');
+    final phoneCtrl = TextEditingController(
+      text: PhoneHelper.digitsFromStored(user.phone),
+    );
+    final formKey = GlobalKey<FormState>();
+    var saving = false;
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
+              title: Text(t('edit_profile') ?? 'Edit Profile'),
+              content: Form(
+                key: formKey,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TextFormField(
+                      controller: nameCtrl,
+                      textInputAction: TextInputAction.next,
+                      decoration: InputDecoration(
+                        labelText: t('full_name') ?? 'Full name',
+                        prefixIcon: const Icon(Icons.person_outline),
+                        border: const OutlineInputBorder(),
+                      ),
+                      validator: (v) => v == null || v.trim().isEmpty
+                          ? (t('required') ?? 'Required')
+                          : null,
+                    ),
+                    const SizedBox(height: 16),
+                    PhoneTextField(
+                      controller: phoneCtrl,
+                      labelText: t('phone') ?? 'Phone',
+                      textInputAction: TextInputAction.done,
+                    ),
+                    const SizedBox(height: 8),
+                    Align(
+                      alignment: AlignmentDirectional.centerStart,
+                      child: TextButton.icon(
+                        onPressed: saving
+                            ? null
+                            : () => _showChangePasswordDialog(context, ref),
+                        icon: const Icon(Icons.lock_outline, size: 18),
+                        label: Text(t('change_password') ?? 'Change Password'),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: saving ? null : () => Navigator.pop(dialogContext),
+                  child: Text(t('cancel') ?? 'Cancel'),
+                ),
+                FilledButton(
+                  onPressed: saving
+                      ? null
+                      : () async {
+                          if (!formKey.currentState!.validate()) return;
+                          setDialogState(() => saving = true);
+                          try {
+                            await ref.read(authProvider.notifier).updateProfile(
+                                  fullName: nameCtrl.text.trim(),
+                                  phone: PhoneHelper.toStored(phoneCtrl.text),
+                                );
+                            await OfflineService.cacheUser({
+                              ...user.toJson(),
+                              'full_name': nameCtrl.text.trim(),
+                              'phone': PhoneHelper.toStored(phoneCtrl.text),
+                            });
+                            if (dialogContext.mounted) {
+                              Navigator.pop(dialogContext);
+                            }
+                            onUpdated();
+                            if (context.mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text(
+                                    t('profile_updated') ?? 'Profile updated',
+                                  ),
+                                ),
+                              );
+                            }
+                          } catch (e) {
+                            setDialogState(() => saving = false);
+                            if (context.mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text(e.toString()),
+                                  backgroundColor: Colors.red,
+                                ),
+                              );
+                            }
+                          }
+                        },
+                  child: saving
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : Text(t('save') ?? 'Save'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    nameCtrl.dispose();
+    phoneCtrl.dispose();
+  }
+
+  Future<void> _showChangePasswordDialog(
+    BuildContext context,
+    WidgetRef ref,
+  ) async {
+    final currentPassCtrl = TextEditingController();
+    final newPassCtrl = TextEditingController();
+    final confirmPassCtrl = TextEditingController();
+    final formKey = GlobalKey<FormState>();
+    var saving = false;
+    var obscureCurrent = true;
+    var obscureNew = true;
+    var obscureConfirm = true;
+
+    Widget buildPasswordChecklist(String pwd) {
+      final requirements = [
+        (t('pwd_req_min_length'), pwd.length >= 8),
+        (t('pwd_req_uppercase'), pwd.contains(RegExp(r'[A-Z]'))),
+        (t('pwd_req_lowercase'), pwd.contains(RegExp(r'[a-z]'))),
+        (t('pwd_req_number'), pwd.contains(RegExp(r'[0-9]'))),
+        (t('pwd_req_special'), pwd.contains(RegExp(r'[^A-Za-z0-9]'))),
+      ];
+
+      return Padding(
+        padding: const EdgeInsets.only(top: 8, bottom: 4),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: requirements.map((req) {
+            final met = req.$2;
+            return Padding(
+              padding: const EdgeInsets.symmetric(vertical: 2),
+              child: Row(
+                children: [
+                  Icon(
+                    met ? Icons.check_circle : Icons.cancel,
+                    size: 14,
+                    color: met ? Colors.green.shade600 : Colors.red.shade300,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      req.$1,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: met ? Colors.green.shade700 : Colors.grey.shade600,
+                        fontWeight: met ? FontWeight.w600 : FontWeight.normal,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          }).toList(),
+        ),
+      );
+    }
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
+              title: Text(t('change_password') ?? 'Change Password'),
+              content: Form(
+                key: formKey,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TextFormField(
+                      controller: currentPassCtrl,
+                      obscureText: obscureCurrent,
+                      textInputAction: TextInputAction.next,
+                      decoration: InputDecoration(
+                        labelText: t('current_password') ?? 'Current Password',
+                        prefixIcon: const Icon(Icons.lock_outline),
+                        suffixIcon: IconButton(
+                          icon: Icon(
+                            obscureCurrent
+                                ? Icons.visibility_off
+                                : Icons.visibility,
+                          ),
+                          onPressed: () => setDialogState(
+                            () => obscureCurrent = !obscureCurrent,
+                          ),
+                        ),
+                        border: const OutlineInputBorder(),
+                      ),
+                      validator: (v) => v == null || v.isEmpty
+                          ? (t('enter_password') ?? 'Enter password')
+                          : null,
+                    ),
+                    const SizedBox(height: 16),
+                    TextFormField(
+                      controller: newPassCtrl,
+                      obscureText: obscureNew,
+                      textInputAction: TextInputAction.next,
+                      onChanged: (_) => setDialogState(() {}),
+                      decoration: InputDecoration(
+                        labelText: t('new_password') ?? 'New Password',
+                        prefixIcon: const Icon(Icons.lock),
+                        suffixIcon: IconButton(
+                          icon: Icon(
+                            obscureNew ? Icons.visibility_off : Icons.visibility,
+                          ),
+                          onPressed: () => setDialogState(
+                            () => obscureNew = !obscureNew,
+                          ),
+                        ),
+                        border: const OutlineInputBorder(),
+                      ),
+                      validator: (v) {
+                        if (v == null || v.isEmpty) {
+                          return t('enter_password') ?? 'Enter password';
+                        }
+                        if (v.length < 8) {
+                          return t('password_not_strong') ??
+                              'Password must be strong';
+                        }
+                        if (v == currentPassCtrl.text) {
+                          return t('password_reuse') ??
+                              'New password cannot be the same as your current password';
+                        }
+                        return null;
+                      },
+                    ),
+                    buildPasswordChecklist(newPassCtrl.text),
+                    const SizedBox(height: 16),
+                    TextFormField(
+                      controller: confirmPassCtrl,
+                      obscureText: obscureConfirm,
+                      textInputAction: TextInputAction.done,
+                      decoration: InputDecoration(
+                        labelText: t('confirm_password') ?? 'Confirm Password',
+                        prefixIcon: const Icon(Icons.lock_outline),
+                        suffixIcon: IconButton(
+                          icon: Icon(
+                            obscureConfirm
+                                ? Icons.visibility_off
+                                : Icons.visibility,
+                          ),
+                          onPressed: () => setDialogState(
+                            () => obscureConfirm = !obscureConfirm,
+                          ),
+                        ),
+                        border: const OutlineInputBorder(),
+                      ),
+                      validator: (v) {
+                        if (v == null || v.isEmpty) {
+                          return t('enter_password') ?? 'Enter password';
+                        }
+                        if (v != newPassCtrl.text) {
+                          return t('passwords_no_match') ??
+                              'Passwords do not match';
+                        }
+                        return null;
+                      },
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: saving ? null : () => Navigator.pop(dialogContext),
+                  child: Text(t('cancel') ?? 'Cancel'),
+                ),
+                FilledButton(
+                  onPressed: saving
+                      ? null
+                      : () async {
+                          if (!formKey.currentState!.validate()) return;
+                          if (newPassCtrl.text != confirmPassCtrl.text) {
+                            showAppNotification(
+                              dialogContext,
+                              message: t('passwords_no_match') ??
+                                  'Passwords do not match',
+                              isError: true,
+                            );
+                            return;
+                          }
+                          if (newPassCtrl.text == currentPassCtrl.text) {
+                            showAppNotification(
+                              dialogContext,
+                              message: t('password_reuse') ??
+                                  'New password cannot be the same as your current password',
+                              isError: true,
+                            );
+                            return;
+                          }
+                          setDialogState(() => saving = true);
+                          try {
+                            await AuthService.changePassword(
+                              currentPassword: currentPassCtrl.text,
+                              newPassword: newPassCtrl.text,
+                            );
+                            if (dialogContext.mounted) {
+                              Navigator.pop(dialogContext);
+                            }
+                            if (context.mounted) {
+                              Navigator.pop(context);
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text(
+                                    t('password_changed') ??
+                                        'Password changed successfully',
+                                  ),
+                                ),
+                              );
+                              await ref.read(authProvider.notifier).logout();
+                              if (context.mounted) {
+                                Navigator.pushAndRemoveUntil(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) => const MainNavScreen(),
+                                  ),
+                                  (route) => false,
+                                );
+                              }
+                            }
+                          } catch (e) {
+                            setDialogState(() => saving = false);
+                            if (dialogContext.mounted) {
+                              showAppNotification(
+                                dialogContext,
+                                message: mapBackendError(e.toString()),
+                                isError: true,
+                              );
+                            }
+                          }
+                        },
+                  child: saving
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : Text(t('save') ?? 'Save'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    currentPassCtrl.dispose();
+    newPassCtrl.dispose();
+    confirmPassCtrl.dispose();
   }
 
   Future<void> _confirmDeleteAccount(BuildContext context, WidgetRef ref) async {
@@ -299,6 +680,19 @@ class ProfileScreen extends ConsumerWidget {
                               ),
                               _ProfileMenuCard(
                                 children: [
+                                  if (user != null)
+                                    _ProfileListTile(
+                                      icon: Icons.edit_outlined,
+                                      title: t('edit_profile') ?? 'Edit Profile',
+                                      onTap: () => _showEditProfileDialog(
+                                        context,
+                                        ref,
+                                        user,
+                                        () {
+                                          (context as Element).markNeedsBuild();
+                                        },
+                                      ),
+                                    ),
                                   _ProfileListTile(
                                     icon: Icons.shopping_cart_outlined,
                                     title: t('cart') ?? 'Cart',
@@ -1134,6 +1528,20 @@ class _ProfileAvatarHeaderState extends State<_ProfileAvatarHeader> {
               color: theme.colorScheme.onSurfaceVariant,
             ),
           ),
+          if (widget.user.phone?.trim().isNotEmpty == true) ...[
+            const SizedBox(height: 4),
+            Directionality(
+              textDirection: TextDirection.ltr,
+              child: Text(
+                widget.user.phone!.trim(),
+                textDirection: TextDirection.ltr,
+                textAlign: TextAlign.center,
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ),
+          ],
         ],
       ),
     );

@@ -11,6 +11,8 @@ import '../services/offline_service.dart';
 import '../services/auth_service.dart';
 import '../providers/auth_provider.dart';
 import '../widgets/cached_image.dart';
+import '../widgets/phone_text_field.dart';
+import '../utils/phone_helper.dart';
 import 'map_picker_screen.dart';
 import 'main_nav_screen.dart';
 
@@ -75,7 +77,7 @@ class _StoreSettingsScreenState extends ConsumerState<StoreSettingsScreen> {
       setState(() {
         _isOwner = true;
         _nameCtrl.text = store.name ?? '';
-        _phoneCtrl.text = store.phone ?? '';
+        _phoneCtrl.text = PhoneHelper.digitsFromStored(store.phone);
         _cityCtrl.text = store.city ?? '';
         _descriptionCtrl.text =
             cached?['location_description']?.toString() ??
@@ -129,7 +131,9 @@ class _StoreSettingsScreenState extends ConsumerState<StoreSettingsScreen> {
     try {
       await StoreService.updateMyStore(
         name: _nameCtrl.text.trim(),
-        phone: _phoneCtrl.text.trim(),
+        phone: _phoneCtrl.text.trim().isEmpty
+            ? null
+            : PhoneHelper.toStored(_phoneCtrl.text),
         city: _cityCtrl.text.trim(),
         locationDescription: _descriptionCtrl.text.trim().isEmpty
             ? null
@@ -259,14 +263,11 @@ class _StoreSettingsScreenState extends ConsumerState<StoreSettingsScreen> {
                   v == null || v.trim().isEmpty ? t('required') ?? 'Required' : null,
             ),
             const SizedBox(height: 16),
-            TextFormField(
+            PhoneTextField(
               controller: _phoneCtrl,
-              keyboardType: TextInputType.phone,
-              decoration: InputDecoration(
-                labelText: t('store_phone') ?? 'Store phone',
-                prefixIcon: const Icon(Icons.phone),
-                border: const OutlineInputBorder(),
-              ),
+              labelText: t('store_phone') ?? 'Store phone',
+              prefixIcon: Icons.phone,
+              required: false,
             ),
             const SizedBox(height: 16),
             TextFormField(

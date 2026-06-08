@@ -157,11 +157,34 @@ async function reverseGeocodeLogic(lat, lng, lang) {
   let canonical = await findCanonicalCityByCoords(lat, lng, 2);
   if (!canonical) {
     canonical = await createCanonicalCity(data, lang);
+  } else {
+    const freshName = data.display_name || data.name;
+    if (freshName) {
+      let names = canonical.display_names;
+      if (typeof names === 'string') {
+        try { names = JSON.parse(names); } catch (_) { names = {}; }
+      }
+      if (!names || typeof names !== 'object') names = {};
+      if (!names[lang]) {
+        const merged = { ...names, [lang]: freshName };
+        try {
+          await pool.query(
+            `UPDATE canonical_cities
+             SET display_names = COALESCE(display_names, '{}'::jsonb) || $1::jsonb
+             WHERE canonical_id = $2`,
+            [JSON.stringify({ [lang]: freshName }), canonical.canonical_id]
+          );
+        } catch (mergeErr) {
+          console.log('Display name merge skipped:', mergeErr.message);
+        }
+        canonical.display_names = merged;
+      }
+    }
   }
 
   const result = {
     canonical_id: canonical.canonical_id,
-    display_name: canonical.display_names?.[lang] || canonical.display_names?.en || data.display_name,
+    display_name: canonical.display_names?.[lang] || data.display_name || canonical.display_names?.en,
     lat,
     lng,
     country_code: canonical.country_code,

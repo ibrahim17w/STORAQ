@@ -5,6 +5,8 @@ import '../providers/cart_provider.dart';
 import '../utils/product_store_helper.dart';
 import '../widgets/cached_image.dart';
 import '../services/currency_service.dart';
+import '../utils/cart_qr_helper.dart';
+import '../widgets/cart_qr_dialog.dart';
 import 'product_detail_screen.dart';
 import 'store_products_screen.dart';
 
@@ -107,6 +109,50 @@ class _StoreCartSection extends ConsumerWidget {
   String? _groupCurrency() {
     if (group.items.isEmpty) return null;
     return CurrencyService.resolvedProductCurrency(group.items.first.product.toJson());
+  }
+
+  void _showCartQr(BuildContext context) {
+    final storeId = group.storeId;
+    if (storeId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            t('cart_qr_store_required') ??
+                'Cart QR is only available for items from a known store.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    final lines = <CartQrLine>[];
+    for (final item in group.items) {
+      final productId = CartQrHelper.parseProductId(item.product.id);
+      if (productId == null) continue;
+      lines.add(CartQrLine(productId: productId, quantity: item.quantity));
+    }
+
+    if (lines.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            t('cart_qr_no_items') ??
+                'No scannable items in this cart group yet.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    final payload = CartQrHelper.encode(storeId: storeId, items: lines);
+    final itemCount = lines.fold<int>(0, (sum, line) => sum + line.quantity);
+
+    CartQrDialog.show(
+      context,
+      storeName: group.storeName,
+      qrPayload: payload,
+      itemCount: itemCount,
+    );
   }
 
   @override
@@ -238,13 +284,24 @@ class _StoreCartSection extends ConsumerWidget {
           }),
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
-            child: Text(
-              '${t('subtotal') ?? 'Subtotal'}: ${CurrencyService.formatPrice(subtotal, subtotalCurrency)}',
-              style: TextStyle(
-                fontSize: 13,
-                color: theme.colorScheme.onSurfaceVariant,
-                fontWeight: FontWeight.w600,
-              ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  '${t('subtotal') ?? 'Subtotal'}: ${CurrencyService.formatPrice(subtotal, subtotalCurrency)}',
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: theme.colorScheme.onSurfaceVariant,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                OutlinedButton.icon(
+                  onPressed: () => _showCartQr(context),
+                  icon: const Icon(Icons.qr_code_2_outlined, size: 18),
+                  label: Text(t('show_cart_qr') ?? 'Show cart QR'),
+                ),
+              ],
             ),
           ),
         ],

@@ -2,6 +2,7 @@
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'api_service.dart';
+import '../providers/locale_provider.dart';
 
 class AnalyticsService {
   static const _cacheKey = 'analytics_dashboard_cache';
@@ -9,7 +10,10 @@ class AnalyticsService {
 
   static Future<Map<String, dynamic>> fetchDashboard({int days = 7}) async {
     try {
-      final response = await ApiService.authGet('/analytics/dashboard?days=$days');
+      final lang = localeNotifier.value.languageCode;
+      final response = await ApiService.authGet(
+        '/analytics/dashboard?days=$days&lang=$lang',
+      );
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body) as Map<String, dynamic>;
         await _cacheData(data);

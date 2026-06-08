@@ -3,6 +3,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../services/analytics_service.dart';
 import '../lang/translations.dart';
 import '../widgets/cached_image.dart';
@@ -16,6 +17,7 @@ import '../providers/viewer_currency_provider.dart';
 import '../models/models.dart';
 import '../widgets/reviews_section.dart';
 import '../services/review_service.dart';
+import '../widgets/report_dialog.dart';
 
 class StoreProductsScreen extends ConsumerStatefulWidget {
   final int storeId;
@@ -79,6 +81,16 @@ class _StoreProductsScreenState extends ConsumerState<StoreProductsScreen> {
     }
   }
 
+  Future<void> _reportStore() async {
+    await showContentReportDialog(
+      context,
+      targetType: 'store',
+      targetId: widget.storeId,
+      storeId: widget.storeId,
+      title: t('report_store') ?? 'Report store',
+    );
+  }
+
   void _openProduct(Product product) {
     Navigator.push(
       context,
@@ -88,6 +100,19 @@ class _StoreProductsScreenState extends ConsumerState<StoreProductsScreen> {
         ),
       ),
     );
+  }
+
+  Future<void> _callStore(String phone) async {
+    final cleaned = phone.replaceAll(RegExp(r'\s+'), '');
+    if (cleaned.isEmpty) return;
+    final uri = Uri.parse('tel:$cleaned');
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri);
+    } else if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(t('error') ?? 'Error')),
+      );
+    }
   }
 
   void _openOnMap() {
@@ -124,6 +149,7 @@ class _StoreProductsScreenState extends ConsumerState<StoreProductsScreen> {
         .where((part) => part.trim().isNotEmpty)
         .join(', ');
     final hasLocation = store.lat != null && store.lng != null;
+    final phone = store.phone?.trim() ?? '';
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
@@ -157,6 +183,47 @@ class _StoreProductsScreenState extends ConsumerState<StoreProductsScreen> {
                     overflow: TextOverflow.ellipsis,
                     style: theme.textTheme.bodySmall?.copyWith(
                       color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                if (phone.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 2),
+                    child: Align(
+                      alignment: AlignmentDirectional.centerStart,
+                      child: Directionality(
+                        textDirection: TextDirection.ltr,
+                        child: InkWell(
+                          onTap: () => _callStore(phone),
+                          borderRadius: BorderRadius.circular(4),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 1),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  Icons.phone_outlined,
+                                  size: 14,
+                                  color: theme.colorScheme.primary,
+                                ),
+                                const SizedBox(width: 4),
+                                Flexible(
+                                  child: Text(
+                                    phone,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    textDirection: TextDirection.ltr,
+                                    textAlign: TextAlign.start,
+                                    style: theme.textTheme.bodySmall?.copyWith(
+                                      color: theme.colorScheme.primary,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
                     ),
                   ),
                 Text(
@@ -205,6 +272,13 @@ class _StoreProductsScreenState extends ConsumerState<StoreProductsScreen> {
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
         ),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.flag_outlined),
+            tooltip: t('report') ?? 'Report',
+            onPressed: _reportStore,
+          ),
+        ],
       ),
       body: isLoading
           ? const Center(child: CircularProgressIndicator())

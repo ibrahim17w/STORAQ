@@ -57,7 +57,7 @@ router.post('/search/image-similarity', imageSearchLimiter, upload.single('image
 
     const productMap = new Map(productsResult.rows.map(p => [p.id, p]));
 
-    // Build results with similarity scores - NO DEDUPLICATION, show ALL matching products
+    // Build results with similarity scores; keep only the best match per product.
     let results = similar
       .map(s => {
         const product = productMap.get(s.product_id);
@@ -70,10 +70,17 @@ router.post('/search/image-similarity', imageSearchLimiter, upload.single('image
       })
       .filter(Boolean);
 
-    // Sort by similarity (highest first) - keep ALL results
-    results.sort((a, b) => b.similarity_score - a.similarity_score);
+    const bestPerProduct = new Map();
+    for (const item of results) {
+      const productId = item.id;
+      const existing = bestPerProduct.get(productId);
+      if (!existing || item.similarity_score > existing.similarity_score) {
+        bestPerProduct.set(productId, item);
+      }
+    }
+    results = Array.from(bestPerProduct.values());
 
-    // Limit to top 50 results (increased from 20)
+    results.sort((a, b) => b.similarity_score - a.similarity_score);
     results = results.slice(0, 50);
 
     if (results.length === 0) {

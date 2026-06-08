@@ -53,7 +53,64 @@ class _SubscriptionUpgradeScreenState extends ConsumerState<SubscriptionUpgradeS
     }
   }
 
+  int _currentTierSlots() {
+    final fromStatus = _status?['current_tier_slots'];
+    if (fromStatus is int) return fromStatus;
+    if (fromStatus is num) return fromStatus.toInt();
+    final tier = _status?['tier'] as Map<String, dynamic>?;
+    final slots = tier?['online_slots'];
+    if (slots is int) return slots;
+    if (slots is num) return slots.toInt();
+    return 5;
+  }
+
+  bool _hasActiveSubscription() => _status?['is_subscribed'] == true;
+
+  bool _hasPendingPayment() => _status?['pending_payment'] != null;
+
+  bool _canSelectTier(Map<String, dynamic> tier) {
+    if (_hasPendingPayment()) return false;
+    final slots = tier['online_slots'];
+    final tierSlots = slots is int
+        ? slots
+        : slots is num
+            ? slots.toInt()
+            : int.tryParse(slots?.toString() ?? '') ?? 0;
+    if (!_hasActiveSubscription()) return true;
+    return tierSlots > _currentTierSlots();
+  }
+
+  String? _tierDisabledReason(Map<String, dynamic> tier) {
+    if (_hasPendingPayment()) {
+      return t('subscription_pending_payment_note') ??
+          'You already have a pending payment. Wait until it is verified.';
+    }
+    if (!_hasActiveSubscription()) return null;
+    final slots = tier['online_slots'];
+    final tierSlots = slots is int
+        ? slots
+        : slots is num
+            ? slots.toInt()
+            : int.tryParse(slots?.toString() ?? '') ?? 0;
+    if (tierSlots > _currentTierSlots()) return null;
+    if (tierSlots == _currentTierSlots()) {
+      return t('subscription_same_tier_note') ??
+          'Your current plan is still active. Renew after it expires.';
+    }
+    return t('subscription_downgrade_note') ??
+        'Downgrading is not allowed while your current plan is active.';
+  }
+
   Future<void> _requestTier(Map<String, dynamic> tier, String track) async {
+    if (!_canSelectTier(tier)) {
+      final reason = _tierDisabledReason(tier);
+      if (reason != null && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(reason)),
+        );
+      }
+      return;
+    }
     setState(() => _requesting = true);
     try {
       final result = await SubscriptionService.requestSubscription(
@@ -217,6 +274,40 @@ class _SubscriptionUpgradeScreenState extends ConsumerState<SubscriptionUpgradeS
                             ),
                           ),
                         ),
+                        const SizedBox(height: 12),
+                        Card(
+                          color: theme.colorScheme.primaryContainer.withValues(alpha: 0.35),
+                          child: Padding(
+                            padding: const EdgeInsets.all(14),
+                            child: Text(
+                              t('subscription_upgrade_only_note') ??
+                                  'While your plan is active you can only upgrade to a higher plan. Renew or switch plans after it expires.',
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: theme.colorScheme.onSurfaceVariant,
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                      ],
+                      if (_status?['pending_payment'] != null) ...[
+                        Card(
+                          color: theme.colorScheme.tertiaryContainer.withValues(alpha: 0.45),
+                          child: ListTile(
+                            leading: Icon(
+                              Icons.hourglass_top_rounded,
+                              color: theme.colorScheme.tertiary,
+                            ),
+                            title: Text(
+                              t('subscription_pending_payment_title') ??
+                                  'Pending subscription payment',
+                            ),
+                            subtitle: Text(
+                              '${(_status!['pending_payment'] as Map)['tier_name']} · ${(_status!['pending_payment'] as Map)['reference_code']}',
+                            ),
+                          ),
+                        ),
                         const SizedBox(height: 16),
                       ],
                       Text(
@@ -255,6 +346,13 @@ class _SubscriptionUpgradeScreenState extends ConsumerState<SubscriptionUpgradeS
                         final slots = tMap['online_slots'] ?? 0;
                         final usdPrice = PaymentPriceHelper.tierUsdPrice(tMap);
                         final prices = PaymentPriceHelper.paymentPricesForTier(tMap);
+                        final canSelect = _canSelectTier(tMap);
+                        final disabledReason = _tierDisabledReason(tMap);
+                        final isCurrentPlan = _hasActiveSubscription() &&
+                            (tMap['online_slots'] is num
+                                ? (tMap['online_slots'] as num).toInt()
+                                : int.tryParse(tMap['online_slots']?.toString() ?? '')) ==
+                                _currentTierSlots();
                         return Card(
                           margin: const EdgeInsets.only(bottom: 12),
                           child: Padding(
@@ -262,11 +360,26 @@ class _SubscriptionUpgradeScreenState extends ConsumerState<SubscriptionUpgradeS
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Text(
-                                  tMap['name']?.toString() ?? '',
-                                  style: theme.textTheme.titleLarge?.copyWith(
-                                    fontWeight: FontWeight.bold,
-                                  ),
+                                Row(
+                                  children: [
+                                    Expanded(
+                                      child: Text(
+                                        tMap['name']?.toString() ?? '',
+                                        style: theme.textTheme.titleLarge?.copyWith(
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                    ),
+                                    if (isCurrentPlan)
+                                      Chip(
+                                        label: Text(
+                                          t('current_plan') ?? 'Current plan',
+                                          style: const TextStyle(fontSize: 11),
+                                        ),
+                                        visualDensity: VisualDensity.compact,
+                                        padding: EdgeInsets.zero,
+                                      ),
+                                  ],
                                 ),
                                 const SizedBox(height: 8),
                                 GeoPaymentPrice(
@@ -281,14 +394,33 @@ class _SubscriptionUpgradeScreenState extends ConsumerState<SubscriptionUpgradeS
                                   style: TextStyle(color: theme.colorScheme.onSurfaceVariant),
                                 ),
                                 const SizedBox(height: 12),
+                                if (!canSelect && disabledReason != null) ...[
+                                  Text(
+                                    disabledReason,
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: theme.colorScheme.onSurfaceVariant,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 12),
+                                ],
                                 SizedBox(
                                   width: double.infinity,
                                   child: FilledButton.icon(
-                                    onPressed: _requesting
+                                    onPressed: _requesting || !canSelect
                                         ? null
                                         : () => _requestTier(tMap, 'syria_agent'),
-                                    icon: const Icon(Icons.payments_outlined, size: 18),
-                                    label: Text(t('pay_via_agent') ?? 'Pay via Agent'),
+                                    icon: Icon(
+                                      canSelect
+                                          ? Icons.payments_outlined
+                                          : Icons.lock_outline,
+                                      size: 18,
+                                    ),
+                                    label: Text(
+                                      canSelect
+                                          ? (t('pay_via_agent') ?? 'Pay via Agent')
+                                          : (t('not_available') ?? 'Not available'),
+                                    ),
                                   ),
                                 ),
                               ],

@@ -51,7 +51,11 @@ class SubscriptionService {
     });
     final data = jsonDecode(response.body) as Map<String, dynamic>;
     if (response.statusCode == 201) return data;
-    throw Exception(data['error']?.toString() ?? 'Failed to request subscription');
+    throw Exception(
+      data['message']?.toString() ??
+          data['error']?.toString() ??
+          'Failed to request subscription',
+    );
   }
 
   static Future<Map<String, dynamic>> getOnlineProducts() async {

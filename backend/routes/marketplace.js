@@ -6,7 +6,7 @@ const { pool } = require('../config/database');
 const { authenticateToken, optionalAuth, requireRealUser, genericIpRateLimit } = require('../middleware/auth');
 const JWT_VERIFY_OPTS = { algorithms: ['HS256'] };
 const { schemas, validate, validateQuery } = require('../middleware/validation');
-const { sanitizeString, getPagination, serverNow } = require('../middleware/helpers');
+const { sanitizeString, getPagination, serverNow, assertMoneyLimit } = require('../middleware/helpers');
 const jwt = require('jsonwebtoken');
 
 // MARKETPLACE FEED
@@ -213,11 +213,10 @@ router.post('/marketplace/checkout', authenticateToken, requireRealUser, async (
     }
 
     const buyer = await pool.query(
-      'SELECT full_name, phone FROM users WHERE id = $1',
+      'SELECT full_name FROM users WHERE id = $1',
       [userId]
     );
     const buyerName = buyer.rows[0]?.full_name || 'Customer';
-    const buyerPhone = buyer.rows[0]?.phone || null;
 
     await client.query('BEGIN');
 
@@ -252,12 +251,15 @@ router.post('/marketplace/checkout', authenticateToken, requireRealUser, async (
       }
 
       const unitPrice = parseFloat(row.price);
+      const lineTotal = unitPrice * quantity;
+      assertMoneyLimit(unitPrice, 'Product price');
+      assertMoneyLimit(lineTotal, 'Line total');
       validatedItems.push({
         product_id: row.id,
         product_name: row.name,
         quantity,
         unit_price: unitPrice,
-        total_price: unitPrice * quantity,
+        total_price: lineTotal,
         currency: row.currency,
         display_price: row.display_price,
         display_currency: row.display_currency,
@@ -273,6 +275,7 @@ router.post('/marketplace/checkout', authenticateToken, requireRealUser, async (
 
     const receiptNumber = `ST-${Date.now()}-${require('crypto').randomInt(1000, 9999)}`;
     const subtotal = validatedItems.reduce((sum, i) => sum + i.total_price, 0);
+    assertMoneyLimit(subtotal, 'Order total');
 
     const orderResult = await client.query(
       `INSERT INTO orders (
@@ -284,7 +287,7 @@ router.post('/marketplace/checkout', authenticateToken, requireRealUser, async (
         storeId,
         userId,
         buyerName,
-        buyerPhone,
+        null,
         receiptNumber,
         subtotal,
         subtotal,

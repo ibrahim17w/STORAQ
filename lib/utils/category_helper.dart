@@ -29,4 +29,24 @@ class CategoryHelper {
         ? cat.localizedName(code)
         : displayNameFromMap(cat.toJson());
   }
+
+  /// Translates category labels shown on the analytics dashboard.
+  static String displayAnalyticsCategory(String raw) {
+    final name = raw.trim();
+    if (name.isEmpty || name == '—') return t('uncategorized');
+
+    switch (name.toLowerCase()) {
+      case 'subscription':
+        return t('subscription');
+      case 'sponsorship':
+        return t('sponsored_products');
+      case 'general':
+        return t('cat_general');
+    }
+
+    final key = makeTranslationKey(name);
+    final translated = t(key);
+    if (translated != key && translated.isNotEmpty) return translated;
+    return name;
+  }
 }
