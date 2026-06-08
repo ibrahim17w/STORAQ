@@ -244,7 +244,7 @@ class _ExploreScreenState extends ConsumerState<ExploreScreen> {
     final newMode = !_isGridView;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('explore_grid_view', newMode);
-    setState(() => _isGridView = newMode);
+    if (mounted) setState(() => _isGridView = newMode);
   }
 
   Future<void> _loadData() async {

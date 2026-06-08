@@ -241,18 +241,39 @@ class CurrencyService {
   // PRODUCT DISPLAY RESOLUTION
   // ============================================================
 
+  static bool isOnSale(dynamic product) {
+    if (product is! Map) return false;
+    final listPrice = _toDouble(product['price']) ?? 0;
+    final salePrice = _toDouble(product['sale_price']);
+    if (salePrice == null || salePrice <= 0) return false;
+    if (product['is_on_sale'] == true) return salePrice < listPrice;
+    return salePrice < listPrice;
+  }
+
+  static double effectiveProductPrice(dynamic product) {
+    if (product is! Map) return 0;
+    if (isOnSale(product)) {
+      return _toDouble(product['sale_price']) ?? _toDouble(product['price']) ?? 0;
+    }
+    return _toDouble(product['price']) ?? 0;
+  }
+
   /// Resolves how a product's price should be displayed given the store's
   /// currency settings. Prefers the server-precomputed `display_price` when it
   /// matches the configured display currency; otherwise converts client-side.
   ///
-  /// Returns: `{original_price, original_currency, display_price,
-  /// display_currency, show_both}`. `display_price`/`display_currency` are null
-  /// when no conversion is possible (callers should show only the original).
+  /// Returns: `{list_price, original_price, original_currency, display_price,
+  /// display_currency, show_both, is_on_sale, sale_price}`. `display_price`/
+  /// `display_currency` are null when no conversion is possible (callers should
+  /// show only the original).
   static Map<String, dynamic> getProductDisplayInfo(
     dynamic product,
     Map<String, dynamic>? currencySettings,
   ) {
-    final originalPrice = _toDouble(product is Map ? product['price'] : null) ?? 0;
+    final listPrice = _toDouble(product is Map ? product['price'] : null) ?? 0;
+    final onSale = isOnSale(product);
+    final salePrice = onSale ? _toDouble((product as Map)['sale_price']) : null;
+    final originalPrice = onSale ? (salePrice ?? listPrice) : listPrice;
     final originalCurrency =
         ((product is Map ? product['currency']?.toString() : null) ?? 'SYP')
             .trim();
@@ -266,18 +287,27 @@ class CurrencyService {
       originalPrice,
       originalCurrency,
     );
-    if (storeDisplay != null) {
-      return {
-        'original_price': originalPrice,
-        'original_currency': originalCurrency,
-        'display_price': storeDisplay['display_price'],
-        'display_currency': storeDisplay['display_currency'],
-        'show_both': showBoth,
-      };
-    }
-
     final displayCurrency = settings['display_currency']?.toString().trim();
     final rates = parseRates(settings['exchange_rates']);
+
+    if (storeDisplay != null) {
+      return _withListDisplayPrice(
+        {
+          'list_price': listPrice,
+          'sale_price': salePrice,
+          'is_on_sale': onSale,
+          'original_price': originalPrice,
+          'original_currency': originalCurrency,
+          'display_price': storeDisplay['display_price'],
+          'display_currency': storeDisplay['display_currency'],
+          'show_both': showBoth,
+        },
+        listPrice: listPrice,
+        originalCurrency: originalCurrency,
+        onSale: onSale,
+        rates: rates,
+      );
+    }
 
     double? displayPrice;
     String? resolvedDisplayCurrency;
@@ -300,12 +330,56 @@ class CurrencyService {
       }
     }
 
+    return _withListDisplayPrice(
+      {
+        'list_price': listPrice,
+        'sale_price': salePrice,
+        'is_on_sale': onSale,
+        'original_price': originalPrice,
+        'original_currency': originalCurrency,
+        'display_price': displayPrice,
+        'display_currency': resolvedDisplayCurrency,
+        'show_both': showBoth,
+      },
+      listPrice: listPrice,
+      originalCurrency: originalCurrency,
+      onSale: onSale,
+      rates: rates,
+    );
+  }
+
+  static Map<String, dynamic> _withListDisplayPrice(
+    Map<String, dynamic> info, {
+    required double listPrice,
+    required String originalCurrency,
+    required bool onSale,
+    required dynamic rates,
+  }) {
+    if (!onSale) return info;
+
+    final displayCurrency = info['display_currency']?.toString().trim();
+    if (displayCurrency == null || displayCurrency.isEmpty) return info;
+
+    if (displayCurrency.toLowerCase() == originalCurrency.toLowerCase()) {
+      return {
+        ...info,
+        'list_display_price': listPrice,
+        'list_display_currency': originalCurrency,
+      };
+    }
+
+    final converted = convertPrice(
+      listPrice,
+      originalCurrency,
+      displayCurrency,
+      rates,
+    );
+    if (converted == null) return info;
+
     return {
-      'original_price': originalPrice,
-      'original_currency': originalCurrency,
-      'display_price': displayPrice,
-      'display_currency': resolvedDisplayCurrency,
-      'show_both': showBoth,
+      ...info,
+      'list_display_price': converted,
+      'list_display_currency': displayCurrency,
     };
   }
 
@@ -334,7 +408,7 @@ class CurrencyService {
     if (displayPrice is num) return displayPrice.toDouble();
     final original = info['original_price'];
     if (original is num) return original.toDouble();
-    return 0;
+    return effectiveProductPrice(product);
   }
 
   static String? resolvedProductCurrency(
@@ -381,12 +455,7 @@ class CurrencyService {
     dynamic product,
     Map<String, dynamic>? currencySettings,
   ) {
-    final info = getProductDisplayInfo(product, currencySettings);
-    final displayPrice = info['display_price'];
-    if (displayPrice is num) return displayPrice.toDouble();
-    final originalPrice = info['original_price'];
-    if (originalPrice is num) return originalPrice.toDouble();
-    return 0;
+    return resolvedProductUnitPrice(product, currencySettings);
   }
 
   static double? _toDouble(dynamic v) {

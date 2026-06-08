@@ -307,7 +307,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     final newMode = !_isGridView;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('home_grid_view', newMode);
-    setState(() => _isGridView = newMode);
+    if (mounted) setState(() => _isGridView = newMode);
   }
 
   // ── Location ──

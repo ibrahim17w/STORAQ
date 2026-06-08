@@ -69,8 +69,6 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen>
     with WidgetsBindingObserver {
   final List<CartItem> _cart = [];
   final _searchCtrl = TextEditingController();
-  final _customerNameCtrl = TextEditingController();
-  final _customerPhoneCtrl = TextEditingController();
   final _discountCtrl = TextEditingController();
   final _taxCtrl = TextEditingController();
   final _notesCtrl = TextEditingController();
@@ -218,8 +216,6 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen>
     _catalogRefreshDebounce?.cancel();
     _catalogSub?.cancel();
     _searchCtrl.dispose();
-    _customerNameCtrl.dispose();
-    _customerPhoneCtrl.dispose();
     _discountCtrl.dispose();
     _taxCtrl.dispose();
     _notesCtrl.dispose();
@@ -764,12 +760,6 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen>
           )
           .toList(),
       'store_id': storeId,
-      'customer_name': _customerNameCtrl.text.trim().isEmpty
-          ? null
-          : _customerNameCtrl.text.trim(),
-      'customer_phone': _customerPhoneCtrl.text.trim().isEmpty
-          ? null
-          : _customerPhoneCtrl.text.trim(),
       'subtotal': _subtotal,
       'discount': _discountValue,
       'tax': _taxValue,
@@ -1011,12 +1001,6 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen>
 
       final order = await OrderService.createOrder(
         items: items,
-        customerName: _customerNameCtrl.text.trim().isEmpty
-            ? null
-            : _customerNameCtrl.text.trim(),
-        customerPhone: _customerPhoneCtrl.text.trim().isEmpty
-            ? null
-            : _customerPhoneCtrl.text.trim(),
         subtotal: _subtotal,
         discount: _discountValue,
         tax: _taxValue,
@@ -1458,42 +1442,6 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen>
                       color: theme.colorScheme.surface,
                       child: Column(
                         children: [
-                          TextField(
-                            controller: _customerNameCtrl,
-                            decoration: InputDecoration(
-                              labelText: t('customer') ?? 'Customer',
-                              prefixIcon: const Icon(Icons.person_outline),
-                              border: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                              contentPadding: const EdgeInsets.symmetric(
-                                horizontal: 12,
-                                vertical: 8,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          TextField(
-                            controller: _customerPhoneCtrl,
-                            keyboardType: TextInputType.number,
-                            textDirection: TextDirection.ltr,
-                            textAlign: TextAlign.start,
-                            inputFormatters: [
-                              FilteringTextInputFormatter.digitsOnly,
-                            ],
-                            decoration: InputDecoration(
-                              labelText: t('phone') ?? 'Phone',
-                              prefixIcon: const Icon(Icons.phone_outlined),
-                              border: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                              contentPadding: const EdgeInsets.symmetric(
-                                horizontal: 12,
-                                vertical: 8,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(height: 12),
                           if (displaySubtotal != null && displayCurrency != null)
                             Column(
                               children: [

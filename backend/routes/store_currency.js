@@ -23,6 +23,7 @@ const {
   fetchAutoRate,
   RATE_PROVIDERS,
 } = require('../services/exchange_rates');
+const { getEffectiveProductPrice } = require('../middleware/helpers');
 
 // ============================================================
 // HELPERS
@@ -100,17 +101,18 @@ async function recalculateProductDisplayPrices(storeId, displayCurrency, rates, 
   const target = normCurrency(displayCurrency);
 
   const productsResult = await db.query(
-    'SELECT id, price, currency FROM products WHERE store_id = $1',
+    'SELECT id, price, sale_price, currency FROM products WHERE store_id = $1',
     [storeId]
   );
 
   for (const product of productsResult.rows) {
     let displayPrice = null;
     let resolvedCurrency = null;
+    const sellingPrice = getEffectiveProductPrice(product);
 
     if (target) {
       const originalCurrency = normCurrency(product.currency) || 'SYP';
-      const converted = convertWithRates(product.price, originalCurrency, target, rates);
+      const converted = convertWithRates(sellingPrice, originalCurrency, target, rates);
       if (converted != null) {
         displayPrice = roundConvertedPrice(converted, target);
         resolvedCurrency = target;
@@ -136,7 +138,7 @@ async function recalculateSingleProductDisplayPrice(productId, _storeId, client)
   // owning store is always resolved from the product row itself.
   const db = client || pool;
   const productResult = await db.query(
-    'SELECT id, store_id, price, currency FROM products WHERE id = $1',
+    'SELECT id, store_id, price, sale_price, currency FROM products WHERE id = $1',
     [productId]
   );
   if (productResult.rows.length === 0) {
@@ -157,7 +159,8 @@ async function recalculateSingleProductDisplayPrice(productId, _storeId, client)
 
   if (target) {
     const originalCurrency = normCurrency(product.currency) || 'SYP';
-    const converted = convertWithRates(product.price, originalCurrency, target, rates);
+    const sellingPrice = getEffectiveProductPrice(product);
+    const converted = convertWithRates(sellingPrice, originalCurrency, target, rates);
     if (converted != null) {
       displayPrice = roundConvertedPrice(converted, target);
       resolvedCurrency = target;

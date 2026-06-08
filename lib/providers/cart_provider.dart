@@ -1,5 +1,9 @@
+import 'dart:async';
+import 'dart:convert';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/models.dart';
+import '../services/prefs_service.dart';
 
 class CartStoreGroup {
   final int? storeId;
@@ -112,10 +116,103 @@ class CartState {
       discount: discount ?? this.discount,
     );
   }
+
+  Map<String, dynamic> toJson() => {
+        'items': items
+            .map(
+              (item) => {
+                'product': item.product.toJson(),
+                'quantity': item.quantity,
+              },
+            )
+            .toList(),
+        'customer_name': customerName,
+        'customer_phone': customerPhone,
+        'payment_method': paymentMethod,
+        'notes': notes,
+        'discount': discount,
+      };
+
+  static CartState fromJson(Map<String, dynamic> json) {
+    final items = <CartItem>[];
+    for (final entry in json['items'] as List<dynamic>? ?? const []) {
+      if (entry is! Map<String, dynamic>) continue;
+      final productJson = entry['product'];
+      if (productJson is! Map<String, dynamic>) continue;
+      try {
+        items.add(
+          CartItem(
+            product: Product.fromJson(productJson),
+            quantity: (entry['quantity'] as num?)?.toInt() ?? 1,
+          ),
+        );
+      } catch (_) {}
+    }
+
+    return CartState(
+      items: items,
+      customerName: json['customer_name'] as String?,
+      customerPhone: json['customer_phone'] as String?,
+      paymentMethod: json['payment_method'] as String? ?? 'cash',
+      notes: json['notes'] as String?,
+      discount: (json['discount'] as num?)?.toDouble() ?? 0,
+    );
+  }
 }
 
 class CartNotifier extends StateNotifier<CartState> {
-  CartNotifier() : super(const CartState());
+  static const _storageKey = 'persisted_cart_v1';
+
+  bool _hasMutations = false;
+  bool _restoreComplete = false;
+
+  CartNotifier() : super(const CartState()) {
+    unawaited(_restore());
+  }
+
+  Future<void> _restore() async {
+    try {
+      final prefs = await PrefsService.instance;
+      final raw = prefs.getString(_storageKey);
+      if (raw != null && raw.isNotEmpty && !_hasMutations) {
+        final decoded = jsonDecode(raw);
+        if (decoded is Map<String, dynamic>) {
+          state = CartState.fromJson(decoded);
+        }
+      }
+    } catch (_) {
+      // Ignore corrupt saved cart data.
+    } finally {
+      _restoreComplete = true;
+      if (_hasMutations) {
+        unawaited(_persist());
+      }
+    }
+  }
+
+  Future<void> _persist() async {
+    if (!_restoreComplete) return;
+    try {
+      final prefs = await PrefsService.instance;
+      if (state.items.isEmpty &&
+          state.customerName == null &&
+          state.customerPhone == null &&
+          state.notes == null &&
+          state.discount == 0) {
+        await prefs.remove(_storageKey);
+        return;
+      }
+      await prefs.setString(_storageKey, jsonEncode(state.toJson()));
+    } catch (_) {
+      // Persistence is best-effort; cart still works in memory.
+    }
+  }
+
+  void _commit(CartState next) {
+    _hasMutations = true;
+    state = next;
+    unawaited(_persist());
+  }
 
   void addProduct(Product product, {int quantity = 1}) {
     final items = [...state.items];
@@ -127,13 +224,13 @@ class CartNotifier extends StateNotifier<CartState> {
     } else {
       items.add(CartItem(product: product, quantity: quantity));
     }
-    state = state.copyWith(items: items);
+    _commit(state.copyWith(items: items));
   }
 
   void removeProduct(dynamic productId) {
     final items =
         state.items.where((item) => item.product.id != productId).toList();
-    state = state.copyWith(items: items);
+    _commit(state.copyWith(items: items));
   }
 
   void updateQuantity(dynamic productId, int quantity) {
@@ -145,24 +242,24 @@ class CartNotifier extends StateNotifier<CartState> {
     final idx = items.indexWhere((item) => item.product.id == productId);
     if (idx >= 0) {
       items[idx].quantity = quantity;
-      state = state.copyWith(items: items);
+      _commit(state.copyWith(items: items));
     }
   }
 
   void setDiscount(double discount) {
-    state = state.copyWith(discount: discount);
+    _commit(state.copyWith(discount: discount));
   }
 
   void setPaymentMethod(String method) {
-    state = state.copyWith(paymentMethod: method);
+    _commit(state.copyWith(paymentMethod: method));
   }
 
   void setCustomerInfo({String? name, String? phone}) {
-    state = state.copyWith(customerName: name, customerPhone: phone);
+    _commit(state.copyWith(customerName: name, customerPhone: phone));
   }
 
   void setNotes(String? notes) {
-    state = state.copyWith(notes: notes);
+    _commit(state.copyWith(notes: notes));
   }
 
   List<Map<String, dynamic>> toOrderItems() {
@@ -170,7 +267,19 @@ class CartNotifier extends StateNotifier<CartState> {
   }
 
   void clear() {
+    _hasMutations = true;
     state = const CartState();
+    unawaited(_persist());
+  }
+
+  void clearStore({int? storeId, required String storeName}) {
+    final items = state.items.where((item) {
+      if (storeId != null && item.storeId != null) {
+        return item.storeId != storeId;
+      }
+      return item.storeName != storeName;
+    }).toList();
+    _commit(state.copyWith(items: items));
   }
 }
 

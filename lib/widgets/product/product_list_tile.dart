@@ -4,6 +4,9 @@ import '../../services/offline_service.dart';
 import '../../services/currency_service.dart';
 import '../../utils/location_helper.dart';
 import 'product_image_viewer.dart';
+import 'product_price_display.dart';
+import 'product_sale_ribbon.dart';
+import '../../lang/translations.dart';
 
 class ProductListTile extends StatelessWidget {
   final dynamic product;
@@ -33,19 +36,7 @@ class ProductListTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final productImages = OfflineService.getProductImagePaths(product);
-    final info = CurrencyService.getProductDisplayInfo(product, currencySettings);
-
-    final originalPrice = info['original_price'];
-    final originalCurrency = info['original_currency'] as String;
-    final displayPrice = info['display_price'];
-    final displayCurrency = info['display_currency'] as String?;
-    final showBoth = info['show_both'] == true;
-
-    final hasDisplay = displayPrice != null && displayCurrency != null;
-    final primaryText = hasDisplay
-        ? CurrencyService.formatPrice(displayPrice, displayCurrency)
-        : CurrencyService.formatPrice(originalPrice, originalCurrency);
-    final showSecondary = hasDisplay && showBoth;
+    final onSale = CurrencyService.isOnSale(product);
     final imageSize = compact ? 72.0 : 88.0;
     final qty = (product['quantity'] as num?)?.toInt() ?? 0;
     final extraImages = productImages.length > 1 ? productImages.length - 1 : 0;
@@ -69,6 +60,7 @@ class ProductListTile extends StatelessWidget {
                             )
                         : null),
                 child: Stack(
+                  clipBehavior: Clip.hardEdge,
                   children: [
                     ClipRRect(
                       borderRadius: const BorderRadius.horizontal(
@@ -107,6 +99,8 @@ class ProductListTile extends StatelessWidget {
                           ),
                         ),
                       ),
+                    if (onSale)
+                      ProductSaleRibbon(label: t('on_sale'), size: 40),
                   ],
                 ),
               ),
@@ -132,32 +126,11 @@ class ProductListTile extends StatelessWidget {
                         ),
                       ),
                       const SizedBox(height: 4),
-                      Text(
-                        primaryText,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontWeight: FontWeight.w700,
-                          fontSize: compact ? 14 : 15,
-                          color: theme.colorScheme.primary,
-                        ),
+                      ProductPriceDisplay(
+                        product: product,
+                        currencySettings: currencySettings,
+                        compact: compact,
                       ),
-                      if (showSecondary)
-                        Padding(
-                          padding: const EdgeInsets.only(top: 1),
-                          child: Text(
-                            CurrencyService.formatPrice(
-                              originalPrice,
-                              originalCurrency,
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              fontSize: 11,
-                              color: theme.colorScheme.onSurfaceVariant,
-                            ),
-                          ),
-                        ),
                       const SizedBox(height: 4),
                       Row(
                         children: [

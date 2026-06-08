@@ -10,14 +10,52 @@ import '../widgets/cart_qr_dialog.dart';
 import 'product_detail_screen.dart';
 import 'store_products_screen.dart';
 
+Future<bool> _confirmClearCart(
+  BuildContext context, {
+  required String title,
+  required String message,
+}) async {
+  final confirmed = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: Text(title),
+      content: Text(message),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(ctx, false),
+          child: Text(t('cancel') ?? 'Cancel'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(ctx, true),
+          child: Text(t('clear_cart') ?? 'Clear'),
+        ),
+      ],
+    ),
+  );
+  return confirmed == true;
+}
+
 class ShoppingCartScreen extends ConsumerWidget {
   const ShoppingCartScreen({super.key});
+
+  Future<void> _clearAllCart(BuildContext context, WidgetRef ref) async {
+    final confirmed = await _confirmClearCart(
+      context,
+      title: t('clear_cart') ?? 'Clear',
+      message:
+          t('clear_cart_confirm') ?? 'Remove all items from your cart?',
+    );
+    if (!confirmed) return;
+    ref.read(cartProvider.notifier).clear();
+  }
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
     final cart = ref.watch(cartProvider);
     final groups = cart.groupedByStore;
+    final appBarFg =
+        theme.appBarTheme.foregroundColor ?? theme.colorScheme.onPrimary;
 
     return Scaffold(
       appBar: AppBar(
@@ -25,9 +63,8 @@ class ShoppingCartScreen extends ConsumerWidget {
         actions: [
           if (cart.items.isNotEmpty)
             TextButton(
-              onPressed: () {
-                ref.read(cartProvider.notifier).clear();
-              },
+              style: TextButton.styleFrom(foregroundColor: appBarFg),
+              onPressed: () => _clearAllCart(context, ref),
               child: Text(t('clear_cart') ?? 'Clear'),
             ),
         ],
@@ -111,6 +148,20 @@ class _StoreCartSection extends ConsumerWidget {
     return CurrencyService.resolvedProductCurrency(group.items.first.product.toJson());
   }
 
+  Future<void> _clearStoreCart(BuildContext context, WidgetRef ref) async {
+    final confirmed = await _confirmClearCart(
+      context,
+      title: t('clear_store_cart') ?? 'Clear store cart',
+      message:
+          '${t('clear_store_cart_confirm') ?? 'Remove all items from this store cart?'}\n\n${group.storeName}',
+    );
+    if (!confirmed) return;
+    ref.read(cartProvider.notifier).clearStore(
+          storeId: group.storeId,
+          storeName: group.storeName,
+        );
+  }
+
   void _showCartQr(BuildContext context) {
     final storeId = group.storeId;
     if (storeId == null) {
@@ -182,6 +233,15 @@ class _StoreCartSection extends ConsumerWidget {
                         fontWeight: FontWeight.w700,
                       ),
                     ),
+                  ),
+                  TextButton(
+                    style: TextButton.styleFrom(
+                      foregroundColor: theme.colorScheme.error,
+                      visualDensity: VisualDensity.compact,
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                    ),
+                    onPressed: () => _clearStoreCart(context, ref),
+                    child: Text(t('clear_store_cart') ?? 'Clear store'),
                   ),
                   if (group.storeId != null)
                     Icon(

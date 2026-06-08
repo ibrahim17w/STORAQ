@@ -4,6 +4,11 @@ const {
   getPlatformPaymentRates,
   convertUsdToPaymentCurrencies,
 } = require('./exchange_rates');
+const {
+  getActiveDiscountPromo,
+  buildPromoPricing,
+  formatActivePromoResponse,
+} = require('./promo');
 
 const FREE_ONLINE_SLOTS = 5;
 const DAILY_CREATION_LIMIT = 50;
@@ -217,7 +222,8 @@ async function getSubscriptionStatus(storeId) {
 
   const tierRows = await _getTiersCached();
   const paymentRates = await getPlatformPaymentRates();
-  const tiers = await enrichTiersWithPaymentPrices(tierRows, paymentRates);
+  const activePromo = await getActiveDiscountPromo(storeId);
+  const tiers = await enrichTiersWithPaymentPrices(tierRows, paymentRates, activePromo);
 
   return {
     online_count: onlineCount,
@@ -246,6 +252,7 @@ async function getSubscriptionStatus(storeId) {
       : null,
     tiers,
     payment_rates: paymentRates,
+    active_promo: formatActivePromoResponse(activePromo),
   };
 }
 
@@ -300,14 +307,18 @@ function generateReferenceCode(storeId) {
   return `MB-${storeId}-${rand}`;
 }
 
-async function enrichTiersWithPaymentPrices(tiers, paymentRates) {
+async function enrichTiersWithPaymentPrices(tiers, paymentRates, activePromo) {
   const rates = paymentRates || (await getPlatformPaymentRates());
   return tiers.map((tier) => {
     const usd = parseFloat(tier.price_usd_monthly) || 0;
+    const promoPricing = buildPromoPricing(usd, activePromo, rates);
     return {
       ...tier,
       price_usd_monthly: usd,
       payment_prices: convertUsdToPaymentCurrencies(usd, rates),
+      discounted_price_usd: promoPricing.discount_usd > 0 ? promoPricing.amount_usd : undefined,
+      discounted_payment_prices: promoPricing.discount_usd > 0 ? promoPricing.payment_prices : undefined,
+      promo_discount_usd: promoPricing.discount_usd > 0 ? promoPricing.discount_usd : undefined,
     };
   });
 }

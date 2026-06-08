@@ -63,17 +63,20 @@ class _StoreProductsScreenState extends ConsumerState<StoreProductsScreen> {
   Future<void> loadData() async {
     try {
       final storeData = await StoreService.fetchStore(widget.storeId);
+      if (!mounted) return;
       _storeData = storeData;
       if (_displayName.isEmpty) {
         _displayName = storeData.name ?? t('store');
       }
 
       final data = await ProductService.fetchProducts(widget.storeId);
+      if (!mounted) return;
       setState(() {
         products = data;
         isLoading = false;
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         error = e.toString();
         isLoading = false;

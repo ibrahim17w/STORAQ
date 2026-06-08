@@ -11,6 +11,10 @@ class Product {
   final String? name;
   @JsonKey(fromJson: parseJsonDouble)
   final double? price;
+  @JsonKey(name: 'sale_price', fromJson: parseJsonDouble)
+  final double? salePrice;
+  @JsonKey(name: 'is_on_sale')
+  final bool? isOnSale;
   @JsonKey(fromJson: parseJsonInt)
   final int? quantity;
   final String? description;
@@ -81,6 +85,8 @@ class Product {
     this.id,
     this.name,
     this.price,
+    this.salePrice,
+    this.isOnSale,
     this.quantity,
     this.description,
     this.barcode,
@@ -134,6 +140,8 @@ class Product {
     dynamic id,
     String? name,
     double? price,
+    double? salePrice,
+    bool? isOnSale,
     int? quantity,
     String? description,
     String? barcode,
@@ -156,6 +164,8 @@ class Product {
       id: id ?? this.id,
       name: name ?? this.name,
       price: price ?? this.price,
+      salePrice: salePrice ?? this.salePrice,
+      isOnSale: isOnSale ?? this.isOnSale,
       quantity: quantity ?? this.quantity,
       description: description ?? this.description,
       barcode: barcode ?? this.barcode,

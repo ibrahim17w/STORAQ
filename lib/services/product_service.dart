@@ -924,6 +924,22 @@ class ProductService {
     throw Exception(data['error']?.toString() ?? data['message']?.toString() ?? 'Failed');
   }
 
+  static Future<Map<String, dynamic>> setProductSale(int id, {double? salePrice}) async {
+    final body = <String, dynamic>{};
+    if (salePrice != null) {
+      body['sale_price'] = salePrice;
+    } else {
+      body['sale_price'] = null;
+    }
+    final response = await ApiService.authPut('/products/$id/sale', body);
+    final data = jsonDecode(response.body) as Map<String, dynamic>;
+    if (response.statusCode == 200) {
+      await OfflineService.updateCachedProduct(data);
+      return data;
+    }
+    throw Exception(data['error']?.toString() ?? 'Failed to update sale');
+  }
+
   static Future<void> deleteProduct(int id) async {
     final response = await http
         .delete(

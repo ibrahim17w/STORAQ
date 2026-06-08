@@ -6,7 +6,7 @@ const { pool } = require('../config/database');
 const { upload, productUpload, cleanupUploadedFiles } = require('../config/upload');
 const { authenticateToken, optionalAuth, requireRealUser, attachStoreContext, requireStoreOwner, requireInventoryAccess } = require('../middleware/auth');
 const { schemas, validate, validateQuery } = require('../middleware/validation');
-const { sanitizeString, getPagination, getBaseUrl, deleteUploadFiles } = require('../middleware/helpers');
+const { sanitizeString, getPagination, getBaseUrl, deleteUploadFiles, getEffectiveProductPrice, isProductOnSale } = require('../middleware/helpers');
 const { processProductEmbeddings } = require('../services/embedding');
 const { recalculateSingleProductDisplayPrice } = require('./store_currency');
 const {
@@ -227,6 +227,13 @@ router.put('/products/:id', authenticateToken, requireRealUser, attachStoreConte
     const old = existing.rows[0];
     const name = req.body.name !== undefined ? sanitizeString(req.body.name, 200) : old.name;
     const price = req.body.price !== undefined ? parseFloat(req.body.price) : old.price;
+    let salePrice = old.sale_price;
+    if (price !== parseFloat(old.price) && salePrice != null) {
+      const parsedSale = parseFloat(salePrice);
+      if (!Number.isFinite(parsedSale) || parsedSale <= 0 || parsedSale >= price) {
+        salePrice = null;
+      }
+    }
     const quantity = req.body.quantity !== undefined ? parseInt(req.body.quantity) : old.quantity;
     const description = req.body.description !== undefined ? (req.body.description ? sanitizeString(req.body.description, 1000) : null) : old.description;
     const barcode = req.body.barcode !== undefined ? (req.body.barcode ? sanitizeString(req.body.barcode, 50) : null) : old.barcode;
@@ -271,11 +278,11 @@ router.put('/products/:id', authenticateToken, requireRealUser, attachStoreConte
     }
 
     const UPDATE_SQL = `UPDATE products SET name=$1, price=$2, quantity=$3, description=$4, barcode=$5, category_id=$6, low_stock_threshold=$7, image_url=$8, images=$9, currency=$10,
-       is_online=$11, went_online_at=CASE WHEN $11 THEN COALESCE(went_online_at, NOW()) ELSE NULL END, updated_at=NOW()
-       WHERE id=$12 RETURNING *`;
+       sale_price=$11, is_online=$12, went_online_at=CASE WHEN $12 THEN COALESCE(went_online_at, NOW()) ELSE NULL END, updated_at=NOW()
+       WHERE id=$13 RETURNING *`;
     const updateParams = (isOnlineFinal) => [
       name, price, quantity, description, barcode, category_id, low_stock_threshold,
-      imageUrl, JSON.stringify(allImages), currency, isOnlineFinal, req.params.id
+      imageUrl, JSON.stringify(allImages), currency, salePrice, isOnlineFinal, req.params.id
     ];
 
     let result;
@@ -326,6 +333,62 @@ router.put('/products/:id', authenticateToken, requireRealUser, attachStoreConte
     if (!res.headersSent) {
       res.status(500).json({ error: 'Something went wrong. Please try again later.' });
     }
+  }
+});
+
+// Set or clear a sale price on an existing product (owner/worker with inventory access)
+router.put('/products/:id/sale', authenticateToken, requireRealUser, attachStoreContext, requireInventoryAccess, validate(schemas.setProductSale), async (req, res) => {
+  try {
+    const storeId = req.storeContext.store_id;
+    const productId = parseInt(req.params.id, 10);
+    if (!Number.isInteger(productId) || productId <= 0) {
+      return res.status(400).json({ error: 'Invalid product id' });
+    }
+
+    const existing = await pool.query(
+      'SELECT id, price, sale_price FROM products WHERE id = $1 AND store_id = $2',
+      [productId, storeId]
+    );
+    if (existing.rows.length === 0) {
+      return res.status(404).json({ error: 'Product not found' });
+    }
+
+    const product = existing.rows[0];
+    const listPrice = parseFloat(product.price) || 0;
+    const { sale_price: requestedSalePrice } = req.validatedBody;
+
+    let newSalePrice = null;
+    if (requestedSalePrice != null) {
+      const sale = parseFloat(requestedSalePrice);
+      if (!Number.isFinite(sale) || sale <= 0) {
+        return res.status(400).json({ error: 'Sale price must be greater than 0' });
+      }
+      if (sale >= listPrice) {
+        return res.status(400).json({ error: 'Sale price must be lower than the regular price' });
+      }
+      newSalePrice = sale;
+    }
+
+    await pool.query(
+      'UPDATE products SET sale_price = $1, updated_at = NOW() WHERE id = $2 AND store_id = $3',
+      [newSalePrice, productId, storeId]
+    );
+
+    try {
+      await recalculateSingleProductDisplayPrice(productId, storeId);
+    } catch (e) {
+      console.error('Display price recalc (sale) failed:', e.message);
+    }
+
+    const refreshed = await pool.query('SELECT * FROM products WHERE id = $1', [productId]);
+    const row = refreshed.rows[0] || {};
+    res.json({
+      ...row,
+      is_on_sale: isProductOnSale(row),
+    });
+  } catch (err) {
+    console.error('Set product sale error:', err);
+    res.status(500).json({ error: 'Failed to update sale price' });
   }
 });
 

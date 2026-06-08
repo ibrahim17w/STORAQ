@@ -672,13 +672,19 @@ BoxDecoration compactListCardDecoration(BuildContext context) {
 Widget stockBadge(BuildContext context, int quantity, {String? label}) {
   final inStock = quantity > 0;
   final theme = Theme.of(context);
+  final isDark = theme.brightness == Brightness.dark;
+  final bg = inStock
+      ? (isDark ? const Color(0xFF1B4332) : const Color(0xFFD8F3DC))
+      : theme.colorScheme.errorContainer;
+  final fg = inStock
+      ? (isDark ? const Color(0xFF95D5B2) : const Color(0xFF1B4332))
+      : theme.colorScheme.onErrorContainer;
   return Container(
     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
     decoration: BoxDecoration(
-      color: inStock
-          ? theme.colorScheme.primaryContainer.withValues(alpha: 0.45)
-          : theme.colorScheme.errorContainer.withValues(alpha: 0.45),
+      color: bg,
       borderRadius: BorderRadius.circular(8),
+      border: Border.all(color: fg.withValues(alpha: 0.35)),
     ),
     child: Row(
       mainAxisSize: MainAxisSize.min,
@@ -686,7 +692,7 @@ Widget stockBadge(BuildContext context, int quantity, {String? label}) {
         Icon(
           inStock ? Icons.check_circle_outline : Icons.cancel_outlined,
           size: 14,
-          color: inStock ? theme.colorScheme.primary : theme.colorScheme.error,
+          color: fg,
         ),
         const SizedBox(width: 4),
         Text(
@@ -694,9 +700,7 @@ Widget stockBadge(BuildContext context, int quantity, {String? label}) {
           style: TextStyle(
             fontSize: 12,
             fontWeight: FontWeight.w600,
-            color: inStock
-                ? theme.colorScheme.primary
-                : theme.colorScheme.error,
+            color: fg,
           ),
         ),
       ],

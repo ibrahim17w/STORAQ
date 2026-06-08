@@ -133,6 +133,12 @@ const schemas = {
     list_online: z.preprocess(v => v === 'true' || v === true || v === 'false' || v === false ? (v === 'true' || v === true) : undefined, z.boolean().optional()),
     is_online: z.preprocess(v => v === 'true' || v === true || v === 'false' || v === false ? (v === 'true' || v === true) : undefined, z.boolean().optional()),
   }),
+  setProductSale: z.object({
+    sale_price: z.preprocess(
+      (v) => (v === '' || v === 'null' ? null : v),
+      z.union([z.null(), numField().refine(n => n > 0, { message: 'sale_price must be greater than 0' })]).optional()
+    ),
+  }),
   subscriptionRequest: z.object({
     tier_id: numField().refine(n => Number.isInteger(n) && n > 0, { message: 'tier_id must be a positive integer' }),
     payment_track: z.enum(['syria_agent', 'stripe']),

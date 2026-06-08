@@ -14,6 +14,8 @@ import '../services/api_service.dart';
 import '../services/offline_service.dart';
 import '../lang/translations.dart';
 import '../widgets/cached_image.dart';
+import '../widgets/product/product_price_display.dart';
+import '../widgets/product/product_sale_ribbon.dart';
 import 'store_qr_screen.dart';
 import 'add_product_screen.dart';
 import 'product_detail_screen.dart';
@@ -320,6 +322,110 @@ class _MyStoreScreenState extends ConsumerState<MyStoreScreen>
     }
   }
 
+  Future<void> _manageProductSale(Map<String, dynamic> product) async {
+    final productId = int.tryParse(product['id']?.toString() ?? '');
+    if (productId == null || productId <= 0) return;
+
+    final listPrice = double.tryParse(product['price']?.toString() ?? '') ?? 0;
+    if (listPrice <= 0) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(t('set_price_first') ?? 'Set a regular price first')),
+        );
+      }
+      return;
+    }
+
+    final onSale = CurrencyService.isOnSale(product);
+    final currentSale = onSale
+        ? double.tryParse(product['sale_price']?.toString() ?? '')
+        : null;
+    final controller = TextEditingController(
+      text: currentSale != null ? currentSale.toString() : '',
+    );
+
+    final action = await showDialog<String>(
+      context: context,
+      builder: (_) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text(onSale ? (t('edit_sale') ?? 'Edit sale') : (t('put_on_sale') ?? 'Put on sale')),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '${t('regular_price') ?? 'Regular price'}: ${CurrencyService.formatPrice(listPrice, product['currency']?.toString() ?? 'SYP')}',
+              style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: controller,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              decoration: InputDecoration(
+                labelText: t('sale_price') ?? 'Sale price',
+                border: const OutlineInputBorder(),
+                prefixIcon: const Icon(Icons.local_offer_outlined),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          if (onSale)
+            TextButton(
+              onPressed: () => Navigator.pop(context, 'clear'),
+              child: Text(t('remove_sale') ?? 'Remove sale'),
+            ),
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text(t('cancel') ?? 'Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, 'save'),
+            child: Text(t('save') ?? 'Save'),
+          ),
+        ],
+      ),
+    );
+
+    if (action == null) return;
+
+    try {
+      if (action == 'clear') {
+        await ProductService.setProductSale(productId, salePrice: null);
+      } else {
+        final sale = double.tryParse(controller.text.trim());
+        if (sale == null || sale <= 0) {
+          throw Exception(t('invalid_sale_price') ?? 'Enter a valid sale price');
+        }
+        if (sale >= listPrice) {
+          throw Exception(t('sale_must_be_lower') ?? 'Sale price must be lower than regular price');
+        }
+        await ProductService.setProductSale(productId, salePrice: sale);
+      }
+      await _loadData();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              action == 'clear'
+                  ? (t('sale_removed') ?? 'Sale removed')
+                  : (t('sale_applied') ?? 'Sale price applied'),
+            ),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(e.toString()), backgroundColor: Colors.red),
+        );
+      }
+    } finally {
+      controller.dispose();
+    }
+  }
+
   Future<void> _deleteProduct(dynamic id) async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -535,6 +641,7 @@ class _MyStoreScreenState extends ConsumerState<MyStoreScreen>
   // ============================================================
 
   Future<void> _openCurrencySettings() async {
+    FocusScope.of(context).unfocus();
     final saved = await showModalBottomSheet<Map<String, dynamic>>(
       context: context,
       isScrollControlled: true,
@@ -543,7 +650,9 @@ class _MyStoreScreenState extends ConsumerState<MyStoreScreen>
         initialSettings: _currencySettings,
       ),
     );
-    if (saved != null && mounted) {
+    if (!mounted) return;
+    FocusManager.instance.primaryFocus?.unfocus();
+    if (saved != null) {
       setState(() => _currencySettings = saved);
       // Refresh products so precomputed display prices are reflected.
       await _loadData();
@@ -1140,6 +1249,10 @@ class _MyStoreScreenState extends ConsumerState<MyStoreScreen>
                       onEdit: _canManageInventory
                           ? () => _navigateToEditProduct(product)
                           : null,
+                      onManageSale: _canManageInventory &&
+                              product['_pendingCreate'] != true
+                          ? () => _manageProductSale(product)
+                          : null,
                       onDelete: _canManageInventory
                           ? () => _deleteProduct(product['id'])
                           : null,
@@ -1516,20 +1629,6 @@ class _CurrencySettingsSheetState extends State<_CurrencySettingsSheet> {
         .toList();
   }
 
-  List<DropdownMenuItem<String>> _providerItems() {
-    return _availableProviderIds
-        .map(
-          (id) => DropdownMenuItem<String>(
-            value: id,
-            child: Text(
-              _providerLabel(id),
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-        )
-        .toList();
-  }
-
   @override
   void initState() {
     super.initState();
@@ -1571,6 +1670,43 @@ class _CurrencySettingsSheetState extends State<_CurrencySettingsSheet> {
       _rows[index].dispose();
       _rows.removeAt(index);
     });
+  }
+
+  Future<void> _pickRateProvider(_RateRow row) async {
+    FocusScope.of(context).unfocus();
+    final selected = await showDialog<String?>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(t('rate_source') ?? 'Rate source'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                title: Text(t('auto_best') ?? 'Best available'),
+                selected: row.provider == null,
+                onTap: () => Navigator.pop(ctx, ''),
+              ),
+              ..._availableProviderIds.map(
+                (id) => ListTile(
+                  title: Text(_providerLabel(id)),
+                  selected: row.provider == id,
+                  onTap: () => Navigator.pop(ctx, id),
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text(t('cancel') ?? 'Cancel'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || selected == null) return;
+    setState(() => row.provider = selected.isEmpty ? null : selected);
   }
 
   bool get _anyAuto => _rows.any((r) => r.isAuto);
@@ -1731,21 +1867,27 @@ class _CurrencySettingsSheetState extends State<_CurrencySettingsSheet> {
         ? (t('display') ?? 'Display')
         : displayCurrency;
 
-    return Padding(
-      padding: EdgeInsets.only(
-        bottom: MediaQuery.of(context).viewInsets.bottom,
-      ),
-      child: Material(
-        color: theme.scaffoldBackgroundColor,
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-        clipBehavior: Clip.antiAlias,
-        child: Container(
-          constraints: BoxConstraints(
-            maxHeight: MediaQuery.of(context).size.height * 0.9,
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
+    return PopScope(
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) {
+          FocusManager.instance.primaryFocus?.unfocus();
+        }
+      },
+      child: Padding(
+        padding: EdgeInsets.only(
+          bottom: MediaQuery.of(context).viewInsets.bottom,
+        ),
+        child: Material(
+          color: theme.scaffoldBackgroundColor,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+          clipBehavior: Clip.antiAlias,
+          child: Container(
+            constraints: BoxConstraints(
+              maxHeight: MediaQuery.of(context).size.height * 0.9,
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
             const SizedBox(height: 12),
             Container(
               width: 40,
@@ -1777,9 +1919,14 @@ class _CurrencySettingsSheetState extends State<_CurrencySettingsSheet> {
               ),
             ),
             Flexible(
-              child: ListView(
-                padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-                children: [
+              child: GestureDetector(
+                onTap: () => FocusScope.of(context).unfocus(),
+                behavior: HitTestBehavior.deferToChild,
+                child: ListView(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                  keyboardDismissBehavior:
+                      ScrollViewKeyboardDismissBehavior.onDrag,
+                  children: [
                   TextField(
                     controller: _displayCurrencyCtrl,
                     textCapitalization: TextCapitalization.characters,
@@ -1961,22 +2108,27 @@ class _CurrencySettingsSheetState extends State<_CurrencySettingsSheet> {
                           ),
                           if (row.isAuto) ...[
                             const SizedBox(height: 8),
-                            DropdownButtonFormField<String>(
-                              value: _availableProviderIds.contains(row.provider)
-                                  ? row.provider
-                                  : null,
-                              isExpanded: true,
-                              decoration: InputDecoration(
-                                labelText: t('rate_source') ?? 'Rate source',
-                                isDense: true,
-                                border: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(10),
+                            InkWell(
+                              onTap: () => _pickRateProvider(row),
+                              borderRadius: BorderRadius.circular(10),
+                              child: InputDecorator(
+                                decoration: InputDecoration(
+                                  labelText: t('rate_source') ?? 'Rate source',
+                                  isDense: true,
+                                  border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                  suffixIcon: const Icon(Icons.arrow_drop_down),
+                                ),
+                                child: Text(
+                                  row.provider != null &&
+                                          _availableProviderIds
+                                              .contains(row.provider)
+                                      ? _providerLabel(row.provider!)
+                                      : (t('auto_best') ?? 'Best available'),
+                                  overflow: TextOverflow.ellipsis,
                                 ),
                               ),
-                              hint: Text(t('auto_best') ?? 'Best available'),
-                              items: _providerItems(),
-                              onChanged: (v) =>
-                                  setState(() => row.provider = v),
                             ),
                           ],
                           const Divider(height: 12),
@@ -2026,10 +2178,12 @@ class _CurrencySettingsSheetState extends State<_CurrencySettingsSheet> {
                           : Text(t('save_settings') ?? 'Save Settings'),
                     ),
                   ),
-                ],
+                  ],
+                ),
               ),
             ),
-          ],
+              ],
+            ),
           ),
         ),
       ),
@@ -2041,6 +2195,7 @@ class _ProductCard extends StatelessWidget {
   final Map<String, dynamic> product;
   final Map<String, dynamic>? sponsorshipMeta;
   final VoidCallback? onEdit;
+  final VoidCallback? onManageSale;
   final VoidCallback? onDelete;
   final Map<String, dynamic>? currencySettings;
 
@@ -2048,6 +2203,7 @@ class _ProductCard extends StatelessWidget {
     required this.product,
     this.sponsorshipMeta,
     this.onEdit,
+    this.onManageSale,
     this.onDelete,
     this.currencySettings,
   });
@@ -2057,26 +2213,36 @@ class _ProductCard extends StatelessWidget {
   Widget _buildProductImage(BuildContext context) {
     final imagePaths = OfflineService.getProductImagePaths(product);
     final firstPath = imagePaths.isNotEmpty ? imagePaths.first : null;
+    final onSale = CurrencyService.isOnSale(product);
 
-    return Container(
-      width: 72,
-      height: 72,
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: _storeCardBorder(Theme.of(context)),
-        ),
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(12),
-        child: CachedAppImage(
-          imageUrl: firstPath,
-          width: 72,
-          height: 72,
-          fit: BoxFit.contain,
-          memCacheWidth: 220,
-          placeholder: const Icon(Icons.inventory_2_outlined),
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(12),
+      child: SizedBox(
+        width: 72,
+        height: 72,
+        child: Stack(
+          children: [
+            Container(
+              width: 72,
+              height: 72,
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                border: Border.all(
+                  color: _storeCardBorder(Theme.of(context)),
+                ),
+              ),
+              child: CachedAppImage(
+                imageUrl: firstPath,
+                width: 72,
+                height: 72,
+                fit: BoxFit.contain,
+                memCacheWidth: 220,
+                placeholder: const Icon(Icons.inventory_2_outlined),
+              ),
+            ),
+            if (onSale)
+              ProductSaleRibbon(label: t('on_sale'), size: 36),
+          ],
         ),
       ),
     );
@@ -2097,17 +2263,7 @@ class _ProductCard extends StatelessWidget {
             sponsorshipMeta?['sponsorship_state'] == 'pending';
 
     final info = CurrencyService.getProductDisplayInfo(product, currencySettings);
-    final originalPrice = info['original_price'];
-    final originalCurrency = info['original_currency'] as String;
-    final displayPrice = info['display_price'];
-    final displayCurrency = info['display_currency'] as String?;
-    final showBoth = info['show_both'] == true;
-    final hasDisplay = displayPrice != null && displayCurrency != null;
-
-    final primaryPriceText = hasDisplay
-        ? CurrencyService.formatPrice(displayPrice, displayCurrency)
-        : CurrencyService.formatPrice(originalPrice, originalCurrency);
-    final showSecondary = hasDisplay && showBoth;
+    final onSale = info['is_on_sale'] == true;
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
@@ -2153,8 +2309,8 @@ class _ProductCard extends StatelessWidget {
                             _PendingBadge(
                               label: t('store_only') ?? 'Store only',
                               color: Colors.grey,
-                            )
-                          else if (isSponsored)
+                            ),
+                          if (isSponsored)
                             _PendingBadge(
                               label: t('sponsored'),
                               color: Colors.amber.shade800,
@@ -2164,23 +2320,22 @@ class _ProductCard extends StatelessWidget {
                               label: t('sponsorship_pending_short'),
                               color: Colors.orange.shade700,
                             ),
+                          if (onSale)
+                            _PendingBadge(
+                              label: t('on_sale'),
+                              color: Colors.green.shade700,
+                            ),
                         ],
                       ),
                       const SizedBox(height: 4),
-                      Text(
-                        primaryPriceText,
-                        style: theme.textTheme.bodyMedium?.copyWith(
-                          color: theme.colorScheme.primary,
+                      ProductPriceDisplay(
+                        product: product,
+                        currencySettings: currencySettings,
+                        compact: true,
+                        priceStyle: theme.textTheme.bodyMedium?.copyWith(
                           fontWeight: FontWeight.w600,
                         ),
                       ),
-                      if (showSecondary)
-                        Text(
-                          '(${CurrencyService.formatPrice(originalPrice, originalCurrency)})',
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: theme.colorScheme.onSurfaceVariant,
-                          ),
-                        ),
                       const SizedBox(height: 4),
                       Text(
                         '$qty ${t('in_stock') ?? 'in stock'}',
@@ -2193,7 +2348,7 @@ class _ProductCard extends StatelessWidget {
                     ],
                   ),
                 ),
-                if (onEdit != null || onDelete != null)
+                if (onEdit != null || onManageSale != null || onDelete != null)
                   PopupMenuButton<String>(
                     icon: Icon(
                       Icons.more_vert_rounded,
@@ -2201,6 +2356,7 @@ class _ProductCard extends StatelessWidget {
                     ),
                     onSelected: (value) {
                       if (value == 'edit') onEdit?.call();
+                      if (value == 'sale') onManageSale?.call();
                       if (value == 'delete') onDelete?.call();
                     },
                     itemBuilder: (_) => [
@@ -2208,6 +2364,15 @@ class _ProductCard extends StatelessWidget {
                         PopupMenuItem(
                           value: 'edit',
                           child: Text(t('edit') ?? 'Edit'),
+                        ),
+                      if (onManageSale != null)
+                        PopupMenuItem(
+                          value: 'sale',
+                          child: Text(
+                            onSale
+                                ? (t('edit_sale') ?? 'Edit sale')
+                                : (t('put_on_sale') ?? 'Put on sale'),
+                          ),
                         ),
                       if (onDelete != null)
                         PopupMenuItem(

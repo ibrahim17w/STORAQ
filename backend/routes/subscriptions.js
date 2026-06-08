@@ -16,6 +16,10 @@ const {
   invalidateActiveSubscription,
   validateSubscriptionTierRequest,
 } = require('../services/subscription');
+const {
+  getActiveDiscountPromo,
+  buildPromoPricing,
+} = require('../services/promo');
 
 // GET subscription status for current store
 router.get('/my-store/subscription', authenticateToken, requireRealUser, attachStoreContext, requireStoreAccess, async (req, res) => {
@@ -59,18 +63,22 @@ router.post('/my-store/subscription/request', authenticateToken, requireRealUser
       }
       throw err;
     }
-    const [tier] = await enrichTiersWithPaymentPrices([tierRow]);
+    const activePromo = await getActiveDiscountPromo(storeId);
+    const [tier] = await enrichTiersWithPaymentPrices([tierRow], null, activePromo);
+    const promoPricing = buildPromoPricing(tier.price_usd_monthly, activePromo);
+    const amountDue = promoPricing.amount_usd;
 
     if (payment_track === 'syria_agent') {
       const referenceCode = generateReferenceCode(storeId);
       const result = await pool.query(
         `INSERT INTO subscription_payments (store_id, tier_id, payment_track, reference_code, amount_usd, status)
          VALUES ($1, $2, 'syria_agent', $3, $4, 'pending') RETURNING *`,
-        [storeId, tier.id, referenceCode, tier.price_usd_monthly]
+        [storeId, tier.id, referenceCode, amountDue]
       );
       return res.status(201).json({
         payment: result.rows[0],
         tier,
+        promo_pricing: promoPricing.discount_usd > 0 ? promoPricing : undefined,
         instructions: 'Pay cash to an authorized agent and provide this reference code.',
       });
     }
@@ -79,7 +87,7 @@ router.post('/my-store/subscription/request', authenticateToken, requireRealUser
       const result = await pool.query(
         `INSERT INTO subscription_payments (store_id, tier_id, payment_track, amount_usd, status, stripe_session_id)
          VALUES ($1, $2, 'stripe', $3, 'pending', $4) RETURNING *`,
-        [storeId, tier.id, tier.price_usd_monthly, `stripe_placeholder_${Date.now()}`]
+        [storeId, tier.id, amountDue, `stripe_placeholder_${Date.now()}`]
       );
       return res.status(201).json({
         payment: result.rows[0],
@@ -116,7 +124,7 @@ router.get('/my-store/products/online-status', authenticateToken, requireRealUse
     const storeId = req.storeContext.store_id;
     const status = await getSubscriptionStatus(storeId);
     const products = await pool.query(
-      `SELECT p.id, p.name, p.price, p.quantity, p.image_url, p.is_online, p.went_online_at, p.created_at,
+      `SELECT p.id, p.name, p.price, p.sale_price, p.quantity, p.image_url, p.is_online, p.went_online_at, p.created_at,
               c.id AS sponsorship_id,
               c.scope_type AS sponsorship_scope,
               c.expires_at AS sponsorship_expires_at,
@@ -531,6 +539,15 @@ router.post('/my-store/redeem-promo', authenticateToken, requireRealUser, attach
       });
     }
 
+    if (promo.type === 'discount') {
+      const percent = parseInt(promo.discount_percent, 10) || 0;
+      const fixed = parseFloat(promo.discount_fixed) || 0;
+      if (percent <= 0 && fixed <= 0) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ error: 'This promo code has no discount configured' });
+      }
+    }
+
     // Regular discount promo (just record it, no subscription change)
     await client.query(
       `INSERT INTO promo_redemptions (promo_id, store_id, user_id, status)
@@ -542,7 +559,16 @@ router.post('/my-store/redeem-promo', authenticateToken, requireRealUser, attach
     );
     await client.query('COMMIT');
 
-    res.json({ message: 'Promo code applied!', discount_percent: promo.discount_percent, discount_fixed: promo.discount_fixed });
+    res.json({
+      message: `Promo code applied! ${promo.discount_percent > 0 ? `${promo.discount_percent}% off` : ''}${promo.discount_percent > 0 && promo.discount_fixed > 0 ? ' + ' : ''}${promo.discount_fixed > 0 ? `$${parseFloat(promo.discount_fixed).toFixed(2)} off` : ''} platform fees (subscriptions & sponsorship).`.replace(/\s+/g, ' ').trim(),
+      discount_percent: promo.discount_percent,
+      discount_fixed: promo.discount_fixed,
+      active_promo: {
+        code: promo.code,
+        discount_percent: parseInt(promo.discount_percent, 10) || 0,
+        discount_fixed: parseFloat(promo.discount_fixed) || 0,
+      },
+    });
   } catch (err) {
     await client.query('ROLLBACK');
     console.error('Redeem promo error:', err);

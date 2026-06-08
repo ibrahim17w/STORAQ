@@ -8,6 +8,7 @@ import '../services/product_service.dart';
 import '../lang/translations.dart';
 import '../widgets/cached_image.dart';
 import '../widgets/product/product_image_viewer.dart';
+import '../widgets/product/product_price_display.dart';
 import '../utils/json_parsers.dart';
 import '../utils/product_store_helper.dart';
 import 'store_map_screen.dart';
@@ -270,7 +271,7 @@ class _ProductDetailScreenState extends ConsumerState<ProductDetailScreen> {
 
   Future<void> _addToCart() async {
     final canProceed = await guest.requireAuth(context);
-    if (!canProceed) return;
+    if (!canProceed || !mounted) return;
 
     final qty = (_product['quantity'] as num?)?.toInt() ?? 0;
     if (qty <= 0) {
@@ -284,14 +285,16 @@ class _ProductDetailScreenState extends ConsumerState<ProductDetailScreen> {
     ref.read(cartProvider.notifier).addProduct(product);
 
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
+    final messenger = ScaffoldMessenger.of(context);
+    final navigator = Navigator.of(context);
+    messenger.hideCurrentSnackBar();
+    messenger.showSnackBar(
       SnackBar(
         content: Text(t('added_to_cart') ?? 'Added to cart'),
         action: SnackBarAction(
           label: t('view_cart') ?? 'View cart',
           onPressed: () {
-            Navigator.push(
-              context,
+            navigator.push(
               MaterialPageRoute(builder: (_) => const ShoppingCartScreen()),
             );
           },
@@ -321,41 +324,37 @@ class _ProductDetailScreenState extends ConsumerState<ProductDetailScreen> {
   }
 
   Widget _buildPriceSection(BuildContext context) {
-    final info =
-        CurrencyService.getProductDisplayInfo(_product, _currencySettings);
-    final originalPrice = info['original_price'];
-    final originalCurrency = info['original_currency'] as String;
-    final displayPrice = info['display_price'];
-    final displayCurrency = info['display_currency'] as String?;
-    final showBoth = info['show_both'] == true;
-    final hasDisplay = displayPrice != null && displayCurrency != null;
-    final primaryText = hasDisplay
-        ? CurrencyService.formatPrice(displayPrice, displayCurrency)
-        : CurrencyService.formatPrice(originalPrice, originalCurrency);
     final theme = Theme.of(context);
+    final onSale = CurrencyService.isOnSale(_product);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          primaryText,
-          style: theme.textTheme.headlineMedium?.copyWith(
+        ProductPriceDisplay(
+          product: _product,
+          currencySettings: _currencySettings,
+          priceStyle: theme.textTheme.headlineMedium?.copyWith(
             fontWeight: FontWeight.w700,
-            color: theme.colorScheme.primary,
+            color: onSale ? theme.colorScheme.error : theme.colorScheme.primary,
             letterSpacing: -0.03,
             height: 1.05,
           ),
         ),
-        if (hasDisplay && showBoth)
+        if (onSale)
           Padding(
-            padding: const EdgeInsets.only(top: 6),
-            child: Text(
-              CurrencyService.formatPrice(originalPrice, originalCurrency),
-              style: theme.textTheme.bodyMedium?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-                decoration: TextDecoration.lineThrough,
-                decorationColor:
-                    theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.6),
+            padding: const EdgeInsets.only(top: 8),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(
+                color: theme.colorScheme.error.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(
+                t('on_sale'),
+                style: theme.textTheme.labelMedium?.copyWith(
+                  color: theme.colorScheme.error,
+                  fontWeight: FontWeight.w700,
+                ),
               ),
             ),
           ),
@@ -365,13 +364,19 @@ class _ProductDetailScreenState extends ConsumerState<ProductDetailScreen> {
 
   Widget _inventoryPill(BuildContext context, int qty, bool inStock) {
     final theme = Theme.of(context);
-    final fg = inStock ? const Color(0xFF2D6A4F) : theme.colorScheme.error;
+    final isDark = theme.brightness == Brightness.dark;
+    final fg = inStock
+        ? (isDark ? const Color(0xFF95D5B2) : const Color(0xFF1B4332))
+        : theme.colorScheme.onErrorContainer;
+    final bg = inStock
+        ? (isDark ? const Color(0xFF1B4332) : const Color(0xFFD8F3DC))
+        : theme.colorScheme.errorContainer;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: fg.withValues(alpha: 0.35)),
-        color: fg.withValues(alpha: 0.08),
+        border: Border.all(color: fg.withValues(alpha: 0.45)),
+        color: bg,
       ),
       child: Text(
         inStock ? '$qty ${t('in_stock')}' : t('out_of_stock'),
@@ -574,7 +579,13 @@ class _ProductDetailScreenState extends ConsumerState<ProductDetailScreen> {
     );
   }
 
-  Widget _infoRow(ThemeData theme, String label, String value) {
+  Widget _infoRow(
+    ThemeData theme,
+    String label,
+    String value, {
+    bool strikethrough = false,
+    Color? valueColor,
+  }) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 6),
       child: Row(
@@ -594,6 +605,10 @@ class _ProductDetailScreenState extends ConsumerState<ProductDetailScreen> {
               value,
               style: theme.textTheme.bodyMedium?.copyWith(
                 fontWeight: FontWeight.w500,
+                color: valueColor,
+                decoration:
+                    strikethrough ? TextDecoration.lineThrough : null,
+                decorationColor: theme.colorScheme.onSurfaceVariant,
               ),
             ),
           ),
@@ -613,6 +628,12 @@ class _ProductDetailScreenState extends ConsumerState<ProductDetailScreen> {
     final displayPrice = info['display_price'];
     final displayCurrency = info['display_currency'] as String?;
     final showBoth = info['show_both'] == true;
+    final onSale = info['is_on_sale'] == true;
+    final listPrice = info['list_price'];
+    final listCurrency = info['original_currency'] as String;
+    final strikePrice = info['list_display_price'] ?? listPrice;
+    final strikeCurrency =
+        (info['list_display_currency'] ?? listCurrency) as String;
     final hasDisplay = displayPrice != null && displayCurrency != null;
     final primaryText = hasDisplay
         ? CurrencyService.formatPrice(displayPrice, displayCurrency)
@@ -621,8 +642,20 @@ class _ProductDetailScreenState extends ConsumerState<ProductDetailScreen> {
 
     final rows = <Widget>[
       if (name.isNotEmpty) _infoRow(theme, t('name'), name),
-      _infoRow(theme, t('price'), primaryText),
-      if (hasDisplay && showBoth)
+      if (onSale)
+        _infoRow(
+          theme,
+          t('original_price') ?? 'Original',
+          CurrencyService.formatPrice(strikePrice, strikeCurrency),
+          strikethrough: true,
+        ),
+      _infoRow(
+        theme,
+        t('price'),
+        primaryText,
+        valueColor: onSale ? theme.colorScheme.error : null,
+      ),
+      if (!onSale && hasDisplay && showBoth)
         _infoRow(
           theme,
           t('original_price') ?? 'Original',
@@ -674,10 +707,34 @@ class _ProductDetailScreenState extends ConsumerState<ProductDetailScreen> {
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(8, 4, 8, 0),
-      child: ProductImageViewer(
-        images: _images,
-        height: imageHeight,
-        displayStyle: ProductImageDisplayStyle.cardCarousel,
+      child: Stack(
+        children: [
+          ProductImageViewer(
+            images: _images,
+            height: imageHeight,
+            displayStyle: ProductImageDisplayStyle.cardCarousel,
+          ),
+          if (CurrencyService.isOnSale(_product))
+            PositionedDirectional(
+              top: 12,
+              start: 12,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.error,
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(
+                  t('on_sale'),
+                  style: TextStyle(
+                    color: theme.colorScheme.onError,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }

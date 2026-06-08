@@ -165,6 +165,9 @@ async function runMigrations() {
         IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='products' AND column_name='went_online_at') THEN
           ALTER TABLE products ADD COLUMN went_online_at TIMESTAMP;
         END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='products' AND column_name='sale_price') THEN
+          ALTER TABLE products ADD COLUMN sale_price DECIMAL(18,2);
+        END IF;
       END IF;
 
       -- Widen money columns so high unit price × quantity cannot overflow at checkout.

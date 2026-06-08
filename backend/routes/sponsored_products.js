@@ -27,6 +27,10 @@ const {
   buildGeoTargets,
   expireCampaigns,
 } = require('../services/sponsored_products');
+const {
+  getActiveDiscountPromo,
+  buildPromoPricing,
+} = require('../services/promo');
 
 async function loadStoreAndProduct(storeId, productId) {
   const storeResult = await pool.query(`SELECT * FROM stores WHERE id = $1`, [storeId]);
@@ -116,7 +120,7 @@ router.get('/products/sponsored', async (req, res) => {
     };
 
     const campaigns = await pool.query(
-      `SELECT c.*, p.name, p.price, p.quantity, p.description, p.image_url, p.images, p.currency,
+      `SELECT c.*, p.name, p.price, p.sale_price, p.quantity, p.description, p.image_url, p.images, p.currency,
               p.display_price, p.display_currency,
               s.id AS shop_id, s.name AS shop_name, s.city AS store_city, s.country AS store_country,
               s.lat AS store_lat, s.lng AS store_lng
@@ -142,6 +146,7 @@ router.get('/products/sponsored', async (req, res) => {
         id: row.product_id,
         name: row.name,
         price: row.price,
+        sale_price: row.sale_price,
         quantity: row.quantity,
         description: row.description,
         image_url: row.image_url,
@@ -192,13 +197,28 @@ router.post(
       const geo = buildGeoTargets(loaded.store, scope_type, req.validatedBody);
 
       const paymentRates = await getPlatformPaymentRates();
+      const activePromo = await getActiveDiscountPromo(storeId);
+      const promoPricing = buildPromoPricing(quote.amount_usd, activePromo, paymentRates);
+
       res.json({
         product_id: productId,
         scope_type,
         ...geo,
         ...quote,
+        amount_usd: promoPricing.amount_usd,
+        original_amount_usd: promoPricing.original_amount_usd,
+        discount_usd: promoPricing.discount_usd,
         currency: 'USD',
-        payment_prices: convertUsdToPaymentCurrencies(quote.amount_usd, paymentRates),
+        payment_prices: promoPricing.payment_prices,
+        original_payment_prices: promoPricing.original_payment_prices,
+        promo: promoPricing.discount_usd > 0
+          ? {
+              code: promoPricing.promo_code,
+              discount_usd: promoPricing.discount_usd,
+              discount_percent: promoPricing.discount_percent,
+              discount_fixed: promoPricing.discount_fixed,
+            }
+          : undefined,
         payment_rates: paymentRates,
       });
     } catch (err) {
@@ -263,6 +283,10 @@ router.post(
         radius_km: quote.radius_km ?? radius_km,
       });
 
+      const activePromo = await getActiveDiscountPromo(storeId);
+      const promoPricing = buildPromoPricing(quote.amount_usd, activePromo);
+      const amountDue = promoPricing.amount_usd;
+
       if (payment_track !== 'syria_agent') {
         return res.status(400).json({ error: 'Only syria_agent payment is available for sponsorship' });
       }
@@ -288,7 +312,7 @@ router.post(
           geo.target_city_id,
           geo.center_lat,
           geo.center_lng,
-          quote.amount_usd,
+          amountDue,
           payment_track,
           referenceCode,
         ]
@@ -296,7 +320,13 @@ router.post(
 
       res.status(201).json({
         payment: result.rows[0],
-        quote,
+        quote: {
+          ...quote,
+          amount_usd: amountDue,
+          original_amount_usd: promoPricing.original_amount_usd,
+          discount_usd: promoPricing.discount_usd,
+        },
+        promo_pricing: promoPricing.discount_usd > 0 ? promoPricing : undefined,
         product: { id: loaded.product.id, name: loaded.product.name },
         instructions: 'Pay cash to an authorized agent and provide this reference code.',
       });

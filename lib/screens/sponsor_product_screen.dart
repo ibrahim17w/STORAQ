@@ -177,7 +177,14 @@ class _SponsorProductScreenState extends ConsumerState<SponsorProductScreen> {
     final usd = quote?['amount_usd'] is num
         ? (quote!['amount_usd'] as num).toDouble()
         : double.tryParse(quote?['amount_usd']?.toString() ?? '');
+    final originalUsd = quote?['original_amount_usd'] is num
+        ? (quote!['original_amount_usd'] as num).toDouble()
+        : null;
+    final hasDiscount = quote?['discount_usd'] is num &&
+        (quote!['discount_usd'] as num) > 0;
     final prices = quote?['payment_prices'] as Map<String, dynamic>?;
+    final originalPrices =
+        quote?['original_payment_prices'] as Map<String, dynamic>?;
     showDialog(
       context: context,
       builder: (_) => AlertDialog(
@@ -189,7 +196,9 @@ class _SponsorProductScreenState extends ConsumerState<SponsorProductScreen> {
             if (usd != null) ...[
               GeoPaymentPrice(
                 usdAmount: usd,
+                originalUsdAmount: hasDiscount ? originalUsd : null,
                 paymentPrices: prices,
+                originalPaymentPrices: originalPrices,
                 paymentRates: _paymentRates,
                 label: t('amount_due') ?? 'Amount due',
               ),
@@ -333,6 +342,9 @@ class _SponsorProductScreenState extends ConsumerState<SponsorProductScreen> {
     final productName = widget.product['name']?.toString() ?? '';
     final pricing = (_pricingData?['pricing'] as List<dynamic>?) ?? [];
     final amount = _quote?['amount_usd'];
+    final originalAmount = _quote?['original_amount_usd'];
+    final hasDiscount = _quote?['discount_usd'] is num &&
+        (_quote!['discount_usd'] as num) > 0;
     final hasActive = _sponsorshipStatus?['active'] != null;
     final hasPending = _sponsorshipStatus?['pending'] != null;
 
@@ -491,8 +503,13 @@ class _SponsorProductScreenState extends ConsumerState<SponsorProductScreen> {
                                 usdAmount: amount is num
                                     ? amount.toDouble()
                                     : double.tryParse('$amount'),
+                                originalUsdAmount: hasDiscount && originalAmount is num
+                                    ? originalAmount.toDouble()
+                                    : null,
                                 paymentPrices:
                                     _quote?['payment_prices'] as Map<String, dynamic>?,
+                                originalPaymentPrices:
+                                    _quote?['original_payment_prices'] as Map<String, dynamic>?,
                                 paymentRates: _paymentRates,
                                 style: theme.textTheme.headlineSmall?.copyWith(
                                   fontWeight: FontWeight.bold,

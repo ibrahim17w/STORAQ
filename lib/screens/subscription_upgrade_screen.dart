@@ -162,13 +162,22 @@ class _SubscriptionUpgradeScreenState extends ConsumerState<SubscriptionUpgradeS
   void _showSyriaPaymentDialog(Map<String, dynamic> result) {
     final payment = result['payment'] as Map<String, dynamic>? ?? {};
     final tier = result['tier'] as Map<String, dynamic>? ?? {};
+    final promoPricing = result['promo_pricing'] as Map<String, dynamic>?;
     final ref = payment['reference_code']?.toString() ?? '';
-    final usd = PaymentPriceHelper.tierUsdPrice(tier) ??
-        (payment['amount_usd'] is num
-            ? (payment['amount_usd'] as num).toDouble()
-            : double.tryParse(payment['amount_usd']?.toString() ?? ''));
+    final usd = payment['amount_usd'] is num
+        ? (payment['amount_usd'] as num).toDouble()
+        : PaymentPriceHelper.tierUsdPrice(tier) ??
+            (payment['amount_usd'] is num
+                ? (payment['amount_usd'] as num).toDouble()
+                : double.tryParse(payment['amount_usd']?.toString() ?? ''));
+    final originalUsd = promoPricing?['original_amount_usd'] is num
+        ? (promoPricing!['original_amount_usd'] as num).toDouble()
+        : PaymentPriceHelper.tierUsdPrice(tier);
     final paymentRates = _status?['payment_rates'] as Map<String, dynamic>?;
-    final prices = PaymentPriceHelper.paymentPricesForTier(tier);
+    final prices = promoPricing?['payment_prices'] as Map<String, dynamic>? ??
+        PaymentPriceHelper.paymentPricesForTier(tier);
+    final originalPrices =
+        promoPricing?['original_payment_prices'] as Map<String, dynamic>?;
     showDialog(
       context: context,
       builder: (_) => AlertDialog(
@@ -180,7 +189,9 @@ class _SubscriptionUpgradeScreenState extends ConsumerState<SubscriptionUpgradeS
             if (usd != null) ...[
               GeoPaymentPrice(
                 usdAmount: usd,
+                originalUsdAmount: originalUsd,
                 paymentPrices: prices.isNotEmpty ? prices : null,
+                originalPaymentPrices: originalPrices,
                 paymentRates: paymentRates,
                 label: t('amount_due') ?? 'Amount due',
               ),
@@ -239,6 +250,7 @@ class _SubscriptionUpgradeScreenState extends ConsumerState<SubscriptionUpgradeS
     final theme = Theme.of(context);
     final tiers = (_status?['tiers'] as List<dynamic>?) ?? [];
     final paymentRates = _status?['payment_rates'] as Map<String, dynamic>?;
+    final activePromo = _status?['active_promo'] as Map<String, dynamic>?;
 
     return Scaffold(
       appBar: AppBar(
@@ -330,6 +342,19 @@ class _SubscriptionUpgradeScreenState extends ConsumerState<SubscriptionUpgradeS
                         ),
                       ),
                       const SizedBox(height: 20),
+                      if (activePromo != null) ...[
+                        Card(
+                          color: Colors.green.withValues(alpha: 0.1),
+                          child: ListTile(
+                            leading: const Icon(Icons.local_offer_outlined, color: Colors.green),
+                            title: Text(t('promo_active') ?? 'Promo active'),
+                            subtitle: Text(
+                              '${activePromo['code']} · ${activePromo['discount_percent'] != null && (activePromo['discount_percent'] as num) > 0 ? '${activePromo['discount_percent']}% off' : ''}${activePromo['discount_fixed'] != null && (activePromo['discount_fixed'] as num) > 0 ? '\$${(activePromo['discount_fixed'] as num).toStringAsFixed(2)} off' : ''} ${t('platform_fees') ?? 'platform fees'}',
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                      ],
                       if (tiers.isEmpty)
                         Card(
                           child: Padding(
@@ -344,8 +369,18 @@ class _SubscriptionUpgradeScreenState extends ConsumerState<SubscriptionUpgradeS
                       ...tiers.map((tier) {
                         final tMap = tier as Map<String, dynamic>;
                         final slots = tMap['online_slots'] ?? 0;
-                        final usdPrice = PaymentPriceHelper.tierUsdPrice(tMap);
-                        final prices = PaymentPriceHelper.paymentPricesForTier(tMap);
+                        final originalUsd = PaymentPriceHelper.tierUsdPrice(tMap);
+                        final discountedUsd = tMap['discounted_price_usd'];
+                        final usdPrice = discountedUsd is num
+                            ? discountedUsd.toDouble()
+                            : originalUsd;
+                        final prices = discountedUsd != null
+                            ? (tMap['discounted_payment_prices'] as Map<String, dynamic>? ??
+                                PaymentPriceHelper.paymentPricesForTier(tMap))
+                            : PaymentPriceHelper.paymentPricesForTier(tMap);
+                        final originalPrices = discountedUsd != null
+                            ? PaymentPriceHelper.paymentPricesForTier(tMap)
+                            : null;
                         final canSelect = _canSelectTier(tMap);
                         final disabledReason = _tierDisabledReason(tMap);
                         final isCurrentPlan = _hasActiveSubscription() &&
@@ -384,7 +419,9 @@ class _SubscriptionUpgradeScreenState extends ConsumerState<SubscriptionUpgradeS
                                 const SizedBox(height: 8),
                                 GeoPaymentPrice(
                                   usdAmount: usdPrice,
+                                  originalUsdAmount: discountedUsd != null ? originalUsd : null,
                                   paymentPrices: prices.isNotEmpty ? prices : null,
+                                  originalPaymentPrices: originalPrices,
                                   paymentRates: paymentRates,
                                   label: '${t('per_month') ?? 'Per month'}:',
                                 ),

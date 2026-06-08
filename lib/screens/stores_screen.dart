@@ -39,12 +39,14 @@ class _StoresScreenState extends ConsumerState<StoresScreen> {
       // FIXED: Check store context (owner or accepted worker) instead of just role
       final hasAccess =
           await ApiService.isStoreOwner() || await ApiService.isStoreWorker();
+      if (!mounted) return;
       setState(() {
         stores = data;
         _hasStoreAccess = hasAccess;
         isLoading = false;
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         error = e.toString();
         isLoading = false;

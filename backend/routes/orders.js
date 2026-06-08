@@ -5,7 +5,7 @@ const router = express.Router();
 const { pool } = require('../config/database');
 const { authenticateToken, optionalAuth, requireRealUser, attachStoreContext, requireStoreAccess, requireStoreOwner } = require('../middleware/auth');
 const { schemas, validate, validateQuery } = require('../middleware/validation');
-const { sanitizeString, getPagination, getBaseUrl, assertMoneyLimit } = require('../middleware/helpers');
+const { sanitizeString, getPagination, getBaseUrl, assertMoneyLimit, getEffectiveProductPrice } = require('../middleware/helpers');
 
 function redactOrderForStore(order) {
   if (!order) return order;
@@ -54,7 +54,7 @@ router.post('/checkout', authenticateToken, requireRealUser, attachStoreContext,
 
     for (const item of items) {
       const product = await client.query(
-        'SELECT id, name, price, quantity FROM products WHERE id=$1 AND store_id=$2 FOR UPDATE',
+        'SELECT id, name, price, sale_price, quantity FROM products WHERE id=$1 AND store_id=$2 FOR UPDATE',
         [item.product_id, store.id]
       );
       if (product.rows.length === 0) throw new Error(`Product not found`);
@@ -62,7 +62,7 @@ router.post('/checkout', authenticateToken, requireRealUser, attachStoreContext,
         throw new Error(`Insufficient stock for "${product.rows[0].name}". Available: ${product.rows[0].quantity}, Requested: ${item.quantity}`);
       }
 
-      const unitPrice = parseFloat(product.rows[0].price);
+      const unitPrice = getEffectiveProductPrice(product.rows[0]);
       const itemTotal = unitPrice * item.quantity;
       assertMoneyLimit(unitPrice, 'Product price');
       assertMoneyLimit(itemTotal, 'Line total');
@@ -261,7 +261,7 @@ router.post('/orders', authenticateToken, requireRealUser, attachStoreContext, r
       }
 
       const stockCheck = await client.query(
-        'SELECT id, name, price, quantity, barcode, currency FROM products WHERE id = $1 AND store_id = $2 FOR UPDATE',
+        'SELECT id, name, price, sale_price, quantity, barcode, currency FROM products WHERE id = $1 AND store_id = $2 FOR UPDATE',
         [productId, storeId]
       );
       if (stockCheck.rows.length === 0) {
@@ -277,7 +277,7 @@ router.post('/orders', authenticateToken, requireRealUser, attachStoreContext, r
         });
       }
 
-      const unitPrice = parseFloat(row.price) || 0;
+      const unitPrice = getEffectiveProductPrice(row);
       const lineTotal = unitPrice * qty;
       assertMoneyLimit(unitPrice, 'Product price');
       assertMoneyLimit(lineTotal, 'Line total');

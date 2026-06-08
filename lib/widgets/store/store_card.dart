@@ -56,147 +56,150 @@ class StoreCard extends StatelessWidget {
         '';
     final imageHeight = isCompact ? 82.0 : 90.0;
 
-    return Container(
-      width: width,
-      margin: isSponsored ? const EdgeInsets.symmetric(horizontal: 4) : null,
-      decoration: compactListCardDecoration(context),
-      clipBehavior: Clip.antiAlias,
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: onTap,
-          borderRadius: BorderRadius.circular(14),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              ClipRRect(
-                borderRadius: const BorderRadius.vertical(
-                  top: Radius.circular(14),
-                ),
-                child: Stack(
-                  children: [
-                    CachedAppImage(
-                      imageUrl: store['image_url'],
-                      height: imageHeight,
-                      width: double.infinity,
-                      fit: BoxFit.cover,
-                      memCacheWidth: isCompact ? 280 : 360,
-                    ),
-                    if (showFavorite)
-                      Positioned(
-                        top: 4,
-                        right: 4,
-                        child: Material(
-                          color: Colors.black.withValues(alpha: 0.4),
-                          borderRadius: BorderRadius.circular(8),
-                          child: InkWell(
+    return Padding(
+      padding: const EdgeInsetsDirectional.only(end: 12),
+      child: Container(
+        width: width,
+        decoration: compactListCardDecoration(context),
+        clipBehavior: Clip.antiAlias,
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: onTap,
+            borderRadius: BorderRadius.circular(14),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ClipRRect(
+                  borderRadius: const BorderRadius.vertical(
+                    top: Radius.circular(14),
+                  ),
+                  child: Stack(
+                    children: [
+                      CachedAppImage(
+                        imageUrl: store['image_url'],
+                        height: imageHeight,
+                        width: double.infinity,
+                        fit: BoxFit.cover,
+                        memCacheWidth: isCompact ? 280 : 360,
+                      ),
+                      if (showFavorite)
+                        Positioned(
+                          top: 4,
+                          right: 4,
+                          child: Material(
+                            color: Colors.black.withValues(alpha: 0.4),
                             borderRadius: BorderRadius.circular(8),
-                            onTap: onFavoriteToggle,
-                            child: Padding(
-                              padding: const EdgeInsets.all(4),
-                              child: Icon(
-                                isFavorite
-                                    ? Icons.favorite
-                                    : Icons.favorite_border,
-                                size: 16,
-                                color:
-                                    isFavorite ? Colors.red : Colors.white,
+                            child: InkWell(
+                              borderRadius: BorderRadius.circular(8),
+                              onTap: onFavoriteToggle,
+                              child: Padding(
+                                padding: const EdgeInsets.all(4),
+                                child: Icon(
+                                  isFavorite
+                                      ? Icons.favorite
+                                      : Icons.favorite_border,
+                                  size: 16,
+                                  color: isFavorite ? Colors.red : Colors.white,
+                                ),
                               ),
                             ),
                           ),
                         ),
-                      ),
-                  ],
+                    ],
+                  ),
                 ),
-              ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(8, 7, 8, 8),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      store['name'] ?? '',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontWeight: FontWeight.w600,
-                        fontSize: isCompact ? 11 : 12,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      _shortLocation(store),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: isCompact ? 9 : 10,
-                        color: theme.colorScheme.onSurfaceVariant,
-                      ),
-                    ),
-                    if (description.isNotEmpty && !isSponsored) ...[
-                      const SizedBox(height: 2),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(8, 7, 8, 8),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
                       Text(
-                        description,
+                        store['name'] ?? '',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
-                          fontSize: isCompact ? 8 : 9,
+                          fontWeight: FontWeight.w600,
+                          fontSize: isCompact ? 11 : 12,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        _shortLocation(store),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: isCompact ? 9 : 10,
                           color: theme.colorScheme.onSurfaceVariant,
                         ),
                       ),
-                    ],
-                    if (isSponsored) ...[
-                      const SizedBox(height: 4),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 6,
-                          vertical: 2,
-                        ),
-                        decoration: BoxDecoration(
-                          color: theme.colorScheme.tertiaryContainer,
-                          borderRadius: BorderRadius.circular(4),
-                          border: Border.all(
-                            color: theme.colorScheme.tertiary
-                                .withValues(alpha: 0.3),
-                          ),
-                        ),
-                        child: Text(
-                          sponsoredLabel ?? 'TOP',
+                      if (description.isNotEmpty && !isSponsored) ...[
+                        const SizedBox(height: 2),
+                        Text(
+                          description,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                           style: TextStyle(
-                            fontSize: 8,
-                            fontWeight: FontWeight.w700,
-                            color: theme.colorScheme.onTertiaryContainer,
+                            fontSize: isCompact ? 8 : 9,
+                            color: theme.colorScheme.onSurfaceVariant,
                           ),
                         ),
-                      ),
-                    ],
-                    if (distanceKm != null && distanceKm != double.infinity) ...[
-                      const SizedBox(height: 3),
-                      Row(
-                        children: [
-                          Icon(
-                            Icons.near_me_outlined,
-                            size: 10,
-                            color: theme.colorScheme.primary,
+                      ],
+                      if (isSponsored) ...[
+                        const SizedBox(height: 4),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 6,
+                            vertical: 2,
                           ),
-                          const SizedBox(width: 2),
-                          Text(
-                            LocationHelper.formatDistanceKm(distanceKm!),
-                            style: TextStyle(
-                              fontSize: 9,
-                              fontWeight: FontWeight.w600,
-                              color: theme.colorScheme.primary,
+                          decoration: BoxDecoration(
+                            color: theme.colorScheme.tertiaryContainer,
+                            borderRadius: BorderRadius.circular(4),
+                            border: Border.all(
+                              color: theme.colorScheme.tertiary.withValues(
+                                alpha: 0.3,
+                              ),
                             ),
                           ),
-                        ],
-                      ),
+                          child: Text(
+                            sponsoredLabel ?? 'TOP',
+                            style: TextStyle(
+                              fontSize: 8,
+                              fontWeight: FontWeight.w700,
+                              color: theme.colorScheme.onTertiaryContainer,
+                            ),
+                          ),
+                        ),
+                      ],
+                      if (distanceKm != null &&
+                          distanceKm != double.infinity) ...[
+                        const SizedBox(height: 3),
+                        Row(
+                          children: [
+                            Icon(
+                              Icons.near_me_outlined,
+                              size: 10,
+                              color: theme.colorScheme.primary,
+                            ),
+                            const SizedBox(width: 2),
+                            Text(
+                              LocationHelper.formatDistanceKm(distanceKm!),
+                              style: TextStyle(
+                                fontSize: 9,
+                                fontWeight: FontWeight.w600,
+                                color: theme.colorScheme.primary,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
                     ],
-                  ],
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),

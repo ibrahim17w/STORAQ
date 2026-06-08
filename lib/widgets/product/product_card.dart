@@ -4,6 +4,9 @@ import '../../services/offline_service.dart';
 import '../../services/currency_service.dart';
 import '../../utils/location_helper.dart';
 import 'product_image_viewer.dart';
+import 'product_price_display.dart';
+import 'product_sale_ribbon.dart';
+import '../../lang/translations.dart';
 
 class ProductCard extends StatelessWidget {
   final dynamic product;
@@ -44,20 +47,7 @@ class ProductCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final productImages = OfflineService.getProductImagePaths(product);
-    final info =
-        CurrencyService.getProductDisplayInfo(product, currencySettings);
-
-    final originalPrice = info['original_price'];
-    final originalCurrency = info['original_currency'] as String;
-    final displayPrice = info['display_price'];
-    final displayCurrency = info['display_currency'] as String?;
-    final showBoth = info['show_both'] == true;
-
-    final hasDisplay = displayPrice != null && displayCurrency != null;
-    final primaryText = hasDisplay
-        ? CurrencyService.formatPrice(displayPrice, displayCurrency)
-        : CurrencyService.formatPrice(originalPrice, originalCurrency);
-    final showSecondary = hasDisplay && showBoth;
+    final onSale = CurrencyService.isOnSale(product);
     final shopName = (product['shop_name'] ?? '').toString().trim();
 
     final cardWidth = width ?? 164;
@@ -120,6 +110,11 @@ class ProductCard extends StatelessWidget {
                                   ),
                                 ),
                               ),
+                            ),
+                          if (onSale)
+                            ProductSaleRibbon(
+                              label: t('on_sale'),
+                              size: compact ? 56 : 72,
                             ),
                           if (similarityScore != null)
                             PositionedDirectional(
@@ -212,6 +207,7 @@ class ProductCard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisAlignment:
             compact ? MainAxisAlignment.center : MainAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
         children: [
           Text(
             product['name'] ?? '',
@@ -225,34 +221,11 @@ class ProductCard extends StatelessWidget {
             ),
           ),
           SizedBox(height: compact ? 3 : 6),
-          Text(
-            primaryText,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            textAlign: TextAlign.start,
-            style: theme.textTheme.titleSmall?.copyWith(
-              fontWeight: FontWeight.w700,
-              fontSize: compact ? 13 : 15,
-              color: theme.colorScheme.primary,
-            ),
+          ProductPriceDisplay(
+            product: product,
+            currencySettings: currencySettings,
+            compact: compact,
           ),
-          if (showSecondary)
-            Padding(
-              padding: const EdgeInsets.only(top: 1),
-              child: Text(
-                CurrencyService.formatPrice(
-                  originalPrice,
-                  originalCurrency,
-                ),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                textAlign: TextAlign.start,
-                style: theme.textTheme.labelSmall?.copyWith(
-                  fontSize: compact ? 10 : null,
-                  color: theme.colorScheme.onSurfaceVariant,
-                ),
-              ),
-            ),
           if (!compact &&
               (shopName.isNotEmpty ||
                   (distanceKm != null && distanceKm != double.infinity))) ...[
@@ -300,6 +273,8 @@ class ProductCard extends StatelessWidget {
       ),
     );
 
+    const gridTextHeight = 102.0;
+
     final cardBody = Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -308,7 +283,10 @@ class ProductCard extends StatelessWidget {
           width: cardWidth,
           child: imageSection,
         ),
-        if (compact) Expanded(child: textSection) else textSection,
+        if (compact)
+          Expanded(child: textSection)
+        else
+          SizedBox(height: gridTextHeight, child: textSection),
       ],
     );
 
@@ -316,7 +294,7 @@ class ProductCard extends StatelessWidget {
       padding: const EdgeInsetsDirectional.only(end: 12),
       child: SizedBox(
         width: cardWidth,
-        height: compact ? 252 : null,
+        height: compact ? 252 : (cardWidth + gridTextHeight),
         child: DecoratedBox(
           decoration: compactListCardDecoration(context),
           child: ClipRRect(

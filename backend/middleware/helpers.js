@@ -121,6 +121,21 @@ function assertMoneyLimit(value, fieldLabel = 'Amount') {
   }
 }
 
+function getEffectiveProductPrice(product) {
+  const listPrice = parseFloat(product.price) || 0;
+  if (product.sale_price == null || product.sale_price === '') return listPrice;
+  const salePrice = parseFloat(product.sale_price);
+  if (!Number.isFinite(salePrice) || salePrice <= 0 || salePrice >= listPrice) return listPrice;
+  return salePrice;
+}
+
+function isProductOnSale(product) {
+  const listPrice = parseFloat(product.price) || 0;
+  if (product.sale_price == null || product.sale_price === '') return false;
+  const salePrice = parseFloat(product.sale_price);
+  return Number.isFinite(salePrice) && salePrice > 0 && salePrice < listPrice;
+}
+
 module.exports = {
   sanitizeString,
   getPagination,
@@ -132,4 +147,6 @@ module.exports = {
   MAX_MONEY,
   isWithinMoneyLimit,
   assertMoneyLimit,
+  getEffectiveProductPrice,
+  isProductOnSale,
 };

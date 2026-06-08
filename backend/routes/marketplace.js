@@ -6,7 +6,7 @@ const { pool } = require('../config/database');
 const { authenticateToken, optionalAuth, requireRealUser, genericIpRateLimit } = require('../middleware/auth');
 const JWT_VERIFY_OPTS = { algorithms: ['HS256'] };
 const { schemas, validate, validateQuery } = require('../middleware/validation');
-const { sanitizeString, getPagination, serverNow, assertMoneyLimit } = require('../middleware/helpers');
+const { sanitizeString, getPagination, serverNow, assertMoneyLimit, getEffectiveProductPrice } = require('../middleware/helpers');
 const jwt = require('jsonwebtoken');
 
 // MARKETPLACE FEED
@@ -22,7 +22,7 @@ router.get('/marketplace/feed', async (req, res) => {
     const total = parseInt(countResult.rows[0].total);
 
     const result = await pool.query(
-      `SELECT p.id, p.name, p.price, p.quantity, p.description, p.image_url, p.images, p.created_at,
+      `SELECT p.id, p.name, p.price, p.sale_price, p.quantity, p.description, p.image_url, p.images, p.created_at,
        p.currency, p.display_price, p.display_currency,
        s.id as shop_id, s.name as shop_name, s.city, s.country, s.lat, s.lng
        FROM products p
@@ -49,7 +49,7 @@ router.get('/marketplace/nearby', validateQuery(schemas.nearby), async (req, res
     const { lat, lng, radius: radiusKm = 15 } = req.validatedQuery;
     const result = await pool.query(
       `SELECT * FROM (
-         SELECT p.id, p.name, p.price, p.quantity, p.description, p.image_url, p.images, p.created_at,
+         SELECT p.id, p.name, p.price, p.sale_price, p.quantity, p.description, p.image_url, p.images, p.created_at,
                 p.currency, p.display_price, p.display_currency,
                 s.id as shop_id, s.name as shop_name, s.city, s.country, s.lat, s.lng,
                 (6371 * acos(
@@ -80,7 +80,7 @@ router.get('/marketplace/nearby', validateQuery(schemas.nearby), async (req, res
 router.get('/products/trending', async (req, res) => {
   try {
     const result = await pool.query(
-      `SELECT p.id, p.name, p.price, p.quantity, p.description, p.image_url, p.images, p.view_count,
+      `SELECT p.id, p.name, p.price, p.sale_price, p.quantity, p.description, p.image_url, p.images, p.view_count,
       p.currency, p.display_price, p.display_currency,
       s.id as shop_id, s.name as shop_name, s.city, s.country, s.lat, s.lng
       FROM products p
@@ -140,7 +140,7 @@ router.get('/recommendations', authenticateToken, requireRealUser, async (req, r
     );
 
     let query = `
-      SELECT p.id, p.name, p.price, p.quantity, p.description, p.image_url, p.images,
+      SELECT p.id, p.name, p.price, p.sale_price, p.quantity, p.description, p.image_url, p.images,
       p.currency, p.display_price, p.display_currency,
       s.id as shop_id, s.name as shop_name, s.city, s.country
       FROM products p
@@ -180,7 +180,7 @@ router.get('/recommendations', authenticateToken, requireRealUser, async (req, r
 
     if (result.rows.length === 0) {
       const fallback = await pool.query(
-        `SELECT p.id, p.name, p.price, p.quantity, p.description, p.image_url, p.images,
+        `SELECT p.id, p.name, p.price, p.sale_price, p.quantity, p.description, p.image_url, p.images,
         p.currency, p.display_price, p.display_currency,
         s.id as shop_id, s.name as shop_name, s.city, s.country, s.lat, s.lng
         FROM products p
@@ -232,7 +232,7 @@ router.post('/marketplace/checkout', authenticateToken, requireRealUser, async (
 
       const product = await client.query(
         `SELECT p.id, p.name, p.price, p.quantity, p.store_id, p.currency,
-                p.display_price, p.display_currency, s.name AS store_name
+                p.display_price, p.display_currency, p.sale_price, s.name AS store_name
          FROM products p
          JOIN stores s ON s.id = p.store_id
          WHERE p.id = $1 AND p.is_online = TRUE AND COALESCE(s.is_active, TRUE) = TRUE
@@ -250,7 +250,7 @@ router.post('/marketplace/checkout', authenticateToken, requireRealUser, async (
         throw new Error('Please order from one store at a time');
       }
 
-      const unitPrice = parseFloat(row.price);
+      const unitPrice = getEffectiveProductPrice(row);
       const lineTotal = unitPrice * quantity;
       assertMoneyLimit(unitPrice, 'Product price');
       assertMoneyLimit(lineTotal, 'Line total');
