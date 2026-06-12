@@ -10,6 +10,7 @@ import 'package:flutter/foundation.dart' show kDebugMode;
 class ApiService {
   static String get baseUrl {
     const envUrl = String.fromEnvironment('API_BASE_URL');
+    print('API_BASE_URL from env: "$envUrl"');
     if (envUrl.isNotEmpty) return envUrl;
 
     // TEMPORARY: Force Render URL for testing
