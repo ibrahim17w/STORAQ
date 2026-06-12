@@ -1,3 +1,4 @@
+//lib/service/chat_service
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/models.dart';
@@ -122,8 +123,10 @@ class OrderService {
     int limit = 200,
     int offset = 0,
   }) async {
-    final rawOrders =
-        await OfflineService.getCachedOrders(limit: limit, offset: offset);
+    final rawOrders = await OfflineService.getCachedOrders(
+      limit: limit,
+      offset: offset,
+    );
     return rawOrders
         .map((item) => Order.fromJson(item as Map<String, dynamic>))
         .toList();
@@ -173,7 +176,9 @@ class OrderService {
     return ReceiptSettings.defaults;
   }
 
-  static Future<void> _cacheReceiptSettings(Map<String, dynamic> settings) async {
+  static Future<void> _cacheReceiptSettings(
+    Map<String, dynamic> settings,
+  ) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('cached_receipt_settings', jsonEncode(settings));
   }
@@ -183,9 +188,7 @@ class OrderService {
     final raw = prefs.getString('cached_receipt_settings');
     if (raw == null) return ReceiptSettings.defaults;
     try {
-      return ReceiptSettings.fromJson(
-        jsonDecode(raw) as Map<String, dynamic>,
-      );
+      return ReceiptSettings.fromJson(jsonDecode(raw) as Map<String, dynamic>);
     } catch (_) {
       return ReceiptSettings.defaults;
     }
@@ -287,8 +290,8 @@ class OrderService {
               map['totalPrice'] ??
               map['line_total'] ??
               (unitPriceRaw * (quantityRaw ?? 0));
-          final barcode =
-              (map['barcode'] ?? map['product_barcode'])?.toString();
+          final barcode = (map['barcode'] ?? map['product_barcode'])
+              ?.toString();
 
           int quantity;
           if (quantityRaw is int) {
@@ -312,9 +315,7 @@ class OrderService {
           }
 
           if (quantity < 1) {
-            throw Exception(
-              'Invalid quantity for "$productName": $quantity',
-            );
+            throw Exception('Invalid quantity for "$productName": $quantity');
           }
 
           items.add({

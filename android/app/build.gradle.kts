@@ -2,6 +2,7 @@ plugins {
     id("com.android.application")
     // id("kotlin-android")  // REMOVED - Flutter uses Built-in Kotlin now
     id("dev.flutter.flutter-gradle-plugin")
+
 }
 android {
     namespace = "com.example.storaq"

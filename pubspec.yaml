@@ -37,6 +37,7 @@ dependencies:
   flutter_riverpod: ^2.6.1
   logger: ^2.5.0
   app_links: ^6.4.0
+
  
 dev_dependencies:
   flutter_test:

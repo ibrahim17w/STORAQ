@@ -1,3 +1,4 @@
+//lib/screens/store_settings_screen.dart
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -80,9 +81,7 @@ class _StoreSettingsScreenState extends ConsumerState<StoreSettingsScreen> {
         _phoneCtrl.text = PhoneHelper.digitsFromStored(store.phone);
         _cityCtrl.text = store.city ?? '';
         _descriptionCtrl.text =
-            cached?['location_description']?.toString() ??
-            store.village ??
-            '';
+            cached?['location_description']?.toString() ?? store.village ?? '';
         _countryCtrl.text = store.country ?? '';
         _lat = store.lat;
         _lng = store.lng;
@@ -259,8 +258,9 @@ class _StoreSettingsScreenState extends ConsumerState<StoreSettingsScreen> {
                 prefixIcon: const Icon(Icons.store),
                 border: const OutlineInputBorder(),
               ),
-              validator: (v) =>
-                  v == null || v.trim().isEmpty ? t('required') ?? 'Required' : null,
+              validator: (v) => v == null || v.trim().isEmpty
+                  ? t('required') ?? 'Required'
+                  : null,
             ),
             const SizedBox(height: 16),
             PhoneTextField(
@@ -277,8 +277,9 @@ class _StoreSettingsScreenState extends ConsumerState<StoreSettingsScreen> {
                 prefixIcon: const Icon(Icons.location_city),
                 border: const OutlineInputBorder(),
               ),
-              validator: (v) =>
-                  v == null || v.trim().isEmpty ? t('required') ?? 'Required' : null,
+              validator: (v) => v == null || v.trim().isEmpty
+                  ? t('required') ?? 'Required'
+                  : null,
             ),
             const SizedBox(height: 16),
             TextFormField(
@@ -302,8 +303,9 @@ class _StoreSettingsScreenState extends ConsumerState<StoreSettingsScreen> {
                 prefixIcon: const Icon(Icons.public),
                 border: const OutlineInputBorder(),
               ),
-              validator: (v) =>
-                  v == null || v.trim().isEmpty ? t('required') ?? 'Required' : null,
+              validator: (v) => v == null || v.trim().isEmpty
+                  ? t('required') ?? 'Required'
+                  : null,
             ),
             const SizedBox(height: 16),
             OutlinedButton.icon(
@@ -391,7 +393,10 @@ class _StoreSettingsScreenState extends ConsumerState<StoreSettingsScreen> {
             onPressed: () => Navigator.pop(context, true),
             child: Text(
               t('confirm') ?? 'Confirm',
-              style: const TextStyle(color: Colors.red, fontWeight: FontWeight.bold),
+              style: const TextStyle(
+                color: Colors.red,
+                fontWeight: FontWeight.bold,
+              ),
             ),
           ),
         ],
@@ -416,9 +421,9 @@ class _StoreSettingsScreenState extends ConsumerState<StoreSettingsScreen> {
       );
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.toString())),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(e.toString())));
     }
   }
 }

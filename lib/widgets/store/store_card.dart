@@ -1,3 +1,4 @@
+//lib/widgets/store/store_card.dart
 import 'package:flutter/material.dart';
 import '../cached_image.dart';
 import '../product/product_image_viewer.dart';

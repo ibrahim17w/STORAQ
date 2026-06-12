@@ -45,7 +45,9 @@ class _MapScreenState extends ConsumerState<MapScreen> {
 
     if (widget.stores != null && widget.stores!.isNotEmpty) {
       _stores = widget.stores!
-          .map((s) => s is Store ? s : Store.fromJson(s as Map<String, dynamic>))
+          .map(
+            (s) => s is Store ? s : Store.fromJson(s as Map<String, dynamic>),
+          )
           .where((s) => s.lat != null && s.lng != null)
           .toList();
     }

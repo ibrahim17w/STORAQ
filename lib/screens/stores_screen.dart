@@ -105,8 +105,7 @@ class _StoresScreenState extends ConsumerState<StoresScreen> {
 
                 final int storeId = store.intId ?? 0;
 
-                final String storeName =
-                    store.name ?? t('unknown_store');
+                final String storeName = store.name ?? t('unknown_store');
 
                 final String? storeImageUrl = store.imageUrl;
 

@@ -1,3 +1,4 @@
+//lib/service/chat_service
 import 'dart:convert';
 import 'api_service.dart';
 
@@ -31,7 +32,8 @@ class ChatService {
     int conversationId, {
     String? since,
   }) async {
-    var url = '${ApiService.baseUrl}/api/chat/conversations/$conversationId/messages';
+    var url =
+        '${ApiService.baseUrl}/api/chat/conversations/$conversationId/messages';
     if (since != null && since.isNotEmpty) {
       url += '?since=${Uri.encodeComponent(since)}';
     }
@@ -61,10 +63,13 @@ class ChatService {
   }
 
   static Future<void> deleteConversation(int conversationId) async {
-    final response =
-        await ApiService.authDelete('/chat/conversations/$conversationId');
+    final response = await ApiService.authDelete(
+      '/chat/conversations/$conversationId',
+    );
     if (response.statusCode == 200) return;
     final data = jsonDecode(response.body) as Map<String, dynamic>;
-    throw Exception(data['error']?.toString() ?? 'Failed to delete conversation');
+    throw Exception(
+      data['error']?.toString() ?? 'Failed to delete conversation',
+    );
   }
 }

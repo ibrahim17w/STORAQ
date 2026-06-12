@@ -17,7 +17,7 @@ class ApiService {
       if (Platform.isIOS) return 'http://localhost:3000';
       return 'http://localhost:3000';
     }
-    return 'https://storaq-baug.onrender.com';
+    return 'https://https://storaq.onrender.com';
   }
 
   static final Map<String, String> _cache = {};
@@ -157,9 +157,9 @@ class ApiService {
   /// True only when the device has network and the API responds (not just Wi‑Fi).
   static Future<bool> isServerReachable() async {
     try {
-      final connectivity = await Connectivity()
-          .checkConnectivity()
-          .timeout(const Duration(seconds: 1));
+      final connectivity = await Connectivity().checkConnectivity().timeout(
+        const Duration(seconds: 1),
+      );
       if (connectivity.contains(ConnectivityResult.none)) return false;
     } catch (_) {
       return false;

@@ -1,3 +1,4 @@
+//lib/providers/viewer_location_provider.dart
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../services/viewer_location_service.dart';
 import '../utils/geo_currency_helper.dart';
@@ -56,5 +57,5 @@ class ViewerLocationNotifier extends StateNotifier<ViewerLocationState> {
 
 final viewerLocationProvider =
     StateNotifierProvider<ViewerLocationNotifier, ViewerLocationState>(
-  (ref) => ViewerLocationNotifier(),
-);
+      (ref) => ViewerLocationNotifier(),
+    );
