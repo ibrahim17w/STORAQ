@@ -24,21 +24,6 @@ const { authLimiter } = require('./middleware/auth');
 const { PORT } = require('./config/constants');
 const multer = require('multer');
 
-// ==================== CLUSTERING ====================
-// Opt-in horizontal scaling across CPU cores. With the default
-// (CLUSTER_WORKERS unset OR =1) this file behaves exactly like the
-// pre-clustering version — single Node process, identical startup.
-//
-//   CLUSTER_WORKERS=auto    one worker per CPU core
-//   CLUSTER_WORKERS=N       exactly N workers (e.g. 2 for tight RAM)
-//   CLUSTER_WORKERS unset   single-process mode (default — safest for
-//                           512MB free-tier hosts because each worker
-//                           independently allocates JS heap + may load
-//                           CLIP on first image-search hit)
-//
-// Workers share the listening socket via Node's built-in round-robin.
-// Init queries use CREATE/ALTER ... IF NOT EXISTS, so concurrent runs
-// across workers are safe — Postgres serializes the DDL internally.
 function getWorkerCount() {
   const v = process.env.CLUSTER_WORKERS;
   if (!v || v === '1') return 1;
@@ -80,25 +65,16 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'Something went wrong. Please try again later.' });
 });
 
-// Critical env validation — done up front so primary can fail-fast before
-// forking workers that would also fail. Identical checks to the pre-
-// clustering version; just hoisted so both primary and single-process
-// paths share them.
+
 function validateEnvOrExit() {
   if (!process.env.JWT_SECRET) { console.error('FATAL: JWT_SECRET is not set'); process.exit(1); }
   if (!process.env.DATABASE_URL) { console.error('FATAL: DATABASE_URL is not set'); process.exit(1); }
-  // JWT_SECRET length floor — a short secret (e.g. "secret", "changeme")
-  // is brute-forceable offline once anyone captures a token, which lets
-  // an attacker mint admin/owner tokens at will. 32 bytes of entropy is
-  // the standard floor for HMAC-SHA256.
+
   if (process.env.JWT_SECRET.length < 32) {
     console.error('FATAL: JWT_SECRET must be at least 32 characters (preferably 64+ from `openssl rand -hex 32`)');
     process.exit(1);
   }
-  // In production, require BASE_URL so getBaseUrl() doesn't have to fall
-  // back to the attacker-controlled Host header for minting persisted URLs
-  // (avatar_url, image_url). Outside production we warn but allow it for
-  // local dev convenience.
+
   if (process.env.NODE_ENV === 'production' && !process.env.BASE_URL) {
     console.error('FATAL: BASE_URL must be set in production (e.g. https://api.example.com) — otherwise persisted upload URLs are derived from the Host header, which is attacker-controlled.');
     process.exit(1);
