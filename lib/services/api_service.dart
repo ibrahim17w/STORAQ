@@ -17,7 +17,7 @@ class ApiService {
       if (Platform.isIOS) return 'http://localhost:3000';
       return 'http://localhost:3000';
     }
-    return 'https://https://storaq.onrender.com';
+    return 'https://storaq.onrender.com'; // ← FIXED
   }
 
   static final Map<String, String> _cache = {};
