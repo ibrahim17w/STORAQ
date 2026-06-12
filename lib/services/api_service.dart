@@ -12,12 +12,8 @@ class ApiService {
     const envUrl = String.fromEnvironment('API_BASE_URL');
     if (envUrl.isNotEmpty) return envUrl;
 
-    if (kDebugMode) {
-      if (Platform.isAndroid) return 'http://10.0.2.2:3000';
-      if (Platform.isIOS) return 'http://localhost:3000';
-      return 'http://localhost:3000';
-    }
-    return 'https://storaq.onrender.com'; // ← FIXED
+    // TEMPORARY: Force Render URL for testing
+    return 'https://storaq.onrender.com';
   }
 
   static final Map<String, String> _cache = {};
